@@ -111,11 +111,13 @@ struct ccid5_hc_tx_sock {
 				prev_ca_state:3,     /* CA state on previous ACK */
 				packet_conservation:1,  /* use packet conservation? */
 				restore_cwnd:1,	     /* decided to revert cwnd to old value */
+				restore_ackrt:1,     /* decided to revert ack_ratio to old value */
+				restore_seqwin:1,    /* decided to revert seq_window to old value */
 				round_start:1,	     /* start of packet-timed tx->ack round? */
 				tso_segs_goal:7,     /* segments we want in each skb we send */
 				idle_restart:1,	     /* restarting after idle? */
 				probe_rtt_round_done:1,  /* a BBR_PROBE_RTT round at 4 pkts? */
-				unused:5,
+				unused:3,
 				lt_is_sampling:1,    /* taking long-term ("LT") samples now? */
 				lt_rtt_cnt:7,	     /* round trips in long-term interval */
 				lt_use_bw:1;	     /* use lt_bw as our bw estimate? */
@@ -142,8 +144,10 @@ struct ccid5_hc_tx_sock {
 	u32			curr_ca_state; 
 	bool		pr_init;
 	bool		rtprop_fix;
-	u32			lost;	
-
+	u32			lost;
+	bool			tx_extrapkt;
+	u64			prior_ackrt;
+	u64			prior_seqwin;
 };
 
 struct rate_sample_dccp {

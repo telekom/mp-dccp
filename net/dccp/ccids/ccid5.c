@@ -480,7 +480,7 @@ void dccp_rate_check_app_limited(struct sock *sk, int tsize)
 	struct dccp_sock *dp = dccp_sk(sk);
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
 	if (hc->bytes_att - hc->bytes_sent < dp->dccps_mss_cache &&
-		sk_wmem_alloc_get(sk) <= tsize &&
+		sk_wmem_alloc_get(sk) < tsize &&
 	    hc->tx_pipe < hc->tx_cwnd) 
 		hc->app_limited =
 			(hc->delivered + hc->tx_pipe) ? : 1;
@@ -645,7 +645,8 @@ static bool bbr_set_cwnd_to_recover_or_restore(
 	}
 	hc->prev_ca_state = state;
 
-	if (hc->restore_cwnd) {
+	/* Restore cwnd after seq_window */
+	if (hc->restore_cwnd && !hc->restore_seqwin) {
 		/* Restore cwnd after exiting loss recovery or PROBE_RTT. */
 		cwnd = max(cwnd, hc->prior_cwnd);
 		hc->restore_cwnd = 0;
@@ -688,13 +689,35 @@ done:
 	if (hc->mode == BBR_PROBE_RTT) {  /* drain queue, refresh min_rtt */
 		hc->tx_cwnd = min(hc->tx_cwnd, bbr_cwnd_min_target);
 		ccid5_change_l_ack_ratio(sk, 1);
+		/* Allow extra packet(s) to let ack_ratio=1 option reaching the peer */
+		if (dccp_sk(sk)->dccps_l_ack_ratio != 1U) {
+			hc->tx_extrapkt = true;
+			dccp_tasklet_schedule(sk);
+		}
 	}
-	if (r_seq_used * CCID5_WIN_CHANGE_FACTOR >= dp->dccps_r_seq_win)
-		ccid5_change_l_ack_ratio(sk, dp->dccps_l_ack_ratio * 2);
-	else if (r_seq_used * CCID5_WIN_CHANGE_FACTOR < dp->dccps_r_seq_win/2)
-		ccid5_change_l_ack_ratio(sk, dp->dccps_l_ack_ratio / 2 ? : 1U);
 
-	if (hc->tx_cwnd * CCID5_WIN_CHANGE_FACTOR >= dp->dccps_l_seq_win)
+	/* Do not adjust the ack_ratio if we are restoring it or we are in PROBE_RTT mode */
+	if (hc->restore_ackrt) {
+		ccid5_change_l_ack_ratio(sk, hc->prior_ackrt);
+		/* Restore should end when rx has sent confirmation */
+		if (hc->prior_ackrt == dp->dccps_l_ack_ratio) hc->restore_ackrt=0;
+	}
+	else if (hc->mode != BBR_PROBE_RTT) {
+		if (r_seq_used * CCID5_WIN_CHANGE_FACTOR >= dp->dccps_r_seq_win)
+			ccid5_change_l_ack_ratio(sk, dp->dccps_l_ack_ratio * 2);
+		else if (r_seq_used * CCID5_WIN_CHANGE_FACTOR < dp->dccps_r_seq_win/2)
+			ccid5_change_l_ack_ratio(sk, dp->dccps_l_ack_ratio / 2 ? : 1U);
+	}
+
+	/* Do not adjust the seq_window if we are restoring it */
+	if (hc->restore_seqwin) {
+		ccid5_change_l_seq_window(sk, hc->prior_seqwin);
+		/* HACK: force local seq_win to new value without waiting confirmation */
+		dp->dccps_l_seq_win = hc->prior_seqwin;
+		dccp_update_gss(sk, dp->dccps_gss);
+		hc->restore_seqwin=0;
+	}
+	else if (hc->tx_cwnd * CCID5_WIN_CHANGE_FACTOR >= dp->dccps_l_seq_win)
 		ccid5_change_l_seq_window(sk, dp->dccps_l_seq_win * 2);
 	else if (hc->tx_cwnd * CCID5_WIN_CHANGE_FACTOR < dp->dccps_l_seq_win/2)
 		ccid5_change_l_seq_window(sk, dp->dccps_l_seq_win / 2);
@@ -922,7 +945,9 @@ static void bbr_update_btl_bw(struct sock *sk, const struct rate_sample_dccp *rs
 
 	bw = (u64)rs->delivered * BW_UNIT;
 	do_div(bw, rs->interval_us);
-	if (!rs->is_app_limited || bw >= bbr_max_bw(sk)) {
+	/* Don't include bw samples during PROBE_RTT and cwnd/ackrt/seqwin recovery */
+	if ((!rs->is_app_limited && !hc->restore_cwnd && !hc->restore_seqwin && !hc->restore_ackrt)
+		|| bw >= bbr_max_bw(sk)) {
 		/* Incorporate new sample into our max bw filter. */
 		minmax_running_max(&hc->bw, bbr_bw_rtts, hc->rtt_cnt, bw); 
 	}
@@ -932,11 +957,16 @@ static void bbr_save_cwnd(struct sock *sk)
 {
 
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
+	struct dccp_sock *dp = dccp_sk(sk);
 
 	if (hc->prev_ca_state < DCCP_CA_Recovery && hc->mode != BBR_PROBE_RTT)
 		hc->prior_cwnd = hc->tx_cwnd;  /* this cwnd is good enough */
 	else  /* loss recovery or BBR_PROBE_RTT have temporarily cut cwnd */
 		hc->prior_cwnd = max(hc->prior_cwnd, hc->tx_cwnd);
+
+	/* Save ack_ratio and seq_window as well */
+	hc->prior_ackrt = dp->dccps_l_ack_ratio;
+	hc->prior_seqwin = dp->dccps_l_seq_win;
 }
 
 static void bbr_check_full_bw_reached(struct sock *sk,
@@ -966,7 +996,7 @@ static void bbr_check_drain(struct sock *sk, const struct rate_sample_dccp *rs)
 	if (hc->mode == BBR_STARTUP && bbr_full_bw_reached(sk)) {
 		hc->mode = BBR_DRAIN;	/* drain queue we created */
 		hc->pacing_gain = bbr_drain_gain;	/* pace slow to drain */
-		hc->cwnd_gain = bbr_high_gain;	/* maintain cwnd */
+		hc->cwnd_gain = BBR_UNIT;	/* don't increase cwnd */
 	}	/* fall through to check if in-flight is already small: */
 	if (hc->mode == BBR_DRAIN &&
 	    hc->tx_pipe <=
@@ -1034,6 +1064,8 @@ static void bbr_update_rt_prop(struct sock *sk, const struct rate_sample_dccp *r
 			    after(ccid5_jiffies32, hc->probe_rtt_done_stamp)) {
 				hc->min_rtt_stamp = ccid5_jiffies32;
 				hc->restore_cwnd = 1;  /* snap to prior_cwnd */
+				hc->restore_ackrt = 1;  /* snap to prior_ackrt */
+				hc->restore_seqwin = 1;  /* snap to prior_seqwin */
 				bbr_reset_mode(sk);
 			}
 		}
@@ -1119,6 +1151,13 @@ static int ccid5_hc_tx_send_packet(struct sock *sk, struct sk_buff *skb)
 		    hc->tx_pipe >= bbr_cwnd_min_target && !hc->rtprop_fix) {
 		hc->rtprop_fix=1;
 	}
+
+	/* Allow extra packet(s) to be sent during the drain phase */
+	if (hc->mode==BBR_PROBE_RTT && hc->tx_extrapkt) {
+		hc->tx_extrapkt = false;
+		return CCID_PACKET_SEND_AT_ONCE;
+	}
+
 	if (ccid5_cwnd_network_limited(hc))
 		return CCID_PACKET_WILL_DEQUEUE_LATER;
 	return CCID_PACKET_SEND_AT_ONCE;
@@ -1410,9 +1449,12 @@ static int ccid5_hc_tx_init(struct ccid *ccid, struct sock *sk)
 	hc->has_seen_rtt = 0;
 	hc->pr_init = 0;
 	hc->rtprop_fix=0;
+	hc->tx_extrapkt=false;
 	
 
 	hc->restore_cwnd = 0;
+	hc->restore_ackrt = 0;
+	hc->restore_seqwin = 0;
 	hc->round_start = 0;
 	hc->idle_restart = 0;
 	hc->full_bw_reached = 0;

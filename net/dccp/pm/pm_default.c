@@ -121,7 +121,7 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 
 	struct list_head *plocal_addr_list = &pm_ns->plocal_addr_list;
 
-	rcu_read_lock_bh();
+	//rcu_read_lock_bh();
 	spin_lock(&pm_ns->plocal_lock);
 
 	/* Add the address to the list of known addresses so that
@@ -137,7 +137,7 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 				ipv6_addr_equal(&local_addr->addr.in6, &addr->in6)))
 			{
 				spin_unlock(&pm_ns->plocal_lock);
-				rcu_read_unlock_bh();
+				//rcu_read_unlock_bh();
 
 				return false;
 			}
@@ -218,7 +218,7 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 		}
 	}
 	spin_unlock(&pm_ns->plocal_lock);
-	rcu_read_unlock_bh();
+	//rcu_read_unlock_bh();
 
 	return true;
 }
@@ -549,7 +549,7 @@ static int mpdccp_pm_dccp_event(struct notifier_block *this,
 					mpdccp_close_subflow(mpcb, sk, 0);
 					mpdccp_pr_debug("close dccp sk %p", sk_closed);
 					//attempt reconnect
-					if (mpcb->meta_sk->sk_state == DCCP_OPEN){
+					if (mpcb->meta_sk->sk_state == DCCP_OPEN && mpcb->role == MPDCCP_CLIENT){
 						mpdccp_pr_debug("try to reconnect sk address %pI4. if %d \n", &sk->__sk_common.skc_rcv_saddr, if_idx);
 							mpdccp_add_client_conn(mpcb, local, locaddr_len, if_idx, 
 							(struct sockaddr*)&mpcb->mpdccp_remote_addr,

@@ -141,7 +141,8 @@ void dccp_set_state(struct sock *sk, const int state)
 	sk->sk_state = state;
 	if (sk->sk_state_change)
 		sk->sk_state_change (sk);
-	if(state==DCCP_CLOSED || state==DCCP_CLOSING)
+	
+	if(oldstate == DCCP_OPEN && state==DCCP_CLOSING)
 		atomic_notifier_call_chain(&dccp_chain,
 						DCCP_EVENT_CLOSE, sk);
 }

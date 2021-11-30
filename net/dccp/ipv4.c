@@ -627,8 +627,15 @@ int dccp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 		goto drop_and_free;
 
 	if (mpdccp_isactive(sk) > 0) {
-		if (mpdccp_conn_request(sk, dreq))
+		int ret = mpdccp_conn_request(sk, dreq);
+		if (ret == 2) {
+			/* HACK: free the request but return 0 to avoid sending a reset */
+			reqsk_free(req);
+			return 0;
+		} else if (ret) {
+			/* Normal reject with reset */
 			goto drop_and_free;
+		}
 	}
 
 	if (security_inet_conn_request(sk, skb, req))

@@ -113,7 +113,6 @@ bool mpdccp_packet_fits_in_cwnd(struct sock *sk)
 }
 EXPORT_SYMBOL(mpdccp_packet_fits_in_cwnd);
 
-
 /* This function returns a pointer that is part of a RCU protected
  * structure. It must be called with the rcu_read_lock() held. */
 struct sock *mpdccp_return_single_flow(struct mpdccp_cb *mpcb)

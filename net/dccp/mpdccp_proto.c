@@ -613,7 +613,8 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 
 		if (meta_sk == NULL) {
 			mpdccp_pr_debug("no token found for join");
-			return -1;
+			/* HACK: return special code to reject request but avoid sending reset */
+			return 2;
 		}
 
 		mpcb = MPDCCP_CB(meta_sk);

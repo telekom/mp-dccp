@@ -640,6 +640,8 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 
 	/* Only the first (key exchage) socket is blocking */
 	flags = dccp_sk(sk)->is_kex_sk ? 0 : O_NONBLOCK;
+	/* HACK: reduce retry timeout to 200ms for join sessions*/
+	if (!dccp_sk(sk)->is_kex_sk) inet_csk(sk)->icsk_rto = ((unsigned int)HZ/5);
 	ret = kernel_connect(sock, remote_address, remaddr_len, flags);
 	if ((ret < 0) && (ret != -EINPROGRESS)) {
 #ifdef CONFIG_IP_MPDCCP_DEBUG
