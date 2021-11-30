@@ -5,6 +5,7 @@
  * multiple paths using the DCCP protocol.
  * 
  * Copyright (C) 2020 by Frank Reker <frank@reker.net>
+ * Copyright (C) 2021 by Romeo Cane <rmcane@tiscali.it>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -37,14 +38,19 @@ struct mpdccp_funcs {
 	/* call back functions */
 	int (*destroy_sock) (struct sock*);
 	int (*mk_meta_sk) (struct sock*);
-	int (*listen) (struct sock*, int backlog);
 	int (*connect) (struct sock*, const struct sockaddr*, int addrlen);
-	int (*bind) (struct sock*, const struct sockaddr*, int addrlen);
 	int (*write_xmit) (struct sock*);
 	int (*xmit_skb) (struct sock*, struct sk_buff*);
 	int (*set_subflow_report) (struct sock*, void (*)(int, struct sock*, struct sock*, struct mpdccp_link_info*, int));
 	int (*activate) (struct sock*, int);
-	int (*isactive) (struct sock*);
+	int (*isactive) (const struct sock*);
+	int (*conn_request) (struct sock *sk, struct dccp_request_sock *dreq);
+	int (*rcv_request_sent_state_process) (struct sock *sk, const struct sk_buff *skb);
+	int (*rcv_respond_partopen_state_process) (struct sock *sk, int type);
+	int (*rcv_established) (struct sock *sk);
+	int (*check_req) (struct sock *sk, struct sock *new, struct request_sock *req, struct sk_buff *skb, struct sock **master_sk);
+	int (*create_master) (struct sock *sk, struct sock *newsk, struct request_sock *req, struct sk_buff *skb);
+	int (*close_meta) (struct sock *sk);
 };
 extern struct mpdccp_funcs	mpdccp_funcs;
 #endif
@@ -127,31 +133,12 @@ static inline int mpdccp_mk_meta_sk (struct sock *sk)
 #endif
 }
 
-static inline int mpdccp_listen (struct sock *sk, int backlog)
-{
-#if IS_ENABLED(CONFIG_IP_MPDCCP)
-	MPDCCP_CHECK_SKFUNC (sk,listen);
-	return mpdccp_funcs.listen (sk, backlog);
-#else
-	return 0;
-#endif
-}
 
 static inline int mpdccp_connect (struct sock *sk, const struct sockaddr *addr, int addrlen)
 {
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 	MPDCCP_CHECK_SKFUNC (sk,connect);
 	return mpdccp_funcs.connect (sk, addr, addrlen);
-#else
-	return 0;
-#endif
-}
-
-static inline int mpdccp_bind (struct sock *sk, const struct sockaddr *addr, int addrlen)
-{
-#if IS_ENABLED(CONFIG_IP_MPDCCP)
-	MPDCCP_CHECK_SKFUNC(sk,bind);
-	return mpdccp_funcs.bind (sk, addr, addrlen);
 #else
 	return 0;
 #endif
@@ -198,7 +185,7 @@ static inline int mpdccp_activate (struct sock *sk, int on)
 #endif
 }
 
-static inline int mpdccp_isactive (struct sock *sk)
+static inline int mpdccp_isactive (const struct sock *sk)
 {
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 	MPDCCP_CHECK_FUNC(isactive);
@@ -209,9 +196,74 @@ static inline int mpdccp_isactive (struct sock *sk)
 }
 
 
+static inline int mpdccp_conn_request (struct sock *sk, struct dccp_request_sock *dreq)
+{
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	MPDCCP_CHECK_SKFUNC(sk, conn_request);
+	return mpdccp_funcs.conn_request (sk, dreq);
+#else
+	return 0;
+#endif
+}
 
+static inline int mpdccp_rcv_request_sent_state_process (struct sock *sk, const struct sk_buff *skb)
+{
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	MPDCCP_CHECK_SKFUNC(sk, rcv_request_sent_state_process);
+	return mpdccp_funcs.rcv_request_sent_state_process (sk, skb);
+#else
+	return 0;
+#endif
+}
 
+static inline int mpdccp_rcv_respond_partopen_state_process (struct sock *sk, int type)
+{
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	MPDCCP_CHECK_SKFUNC(sk, rcv_respond_partopen_state_process);
+	return mpdccp_funcs.rcv_respond_partopen_state_process (sk, type);
+#else
+	return 0;
+#endif
+}
 
+static inline int mpdccp_rcv_established (struct sock *sk)
+{
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	MPDCCP_CHECK_SKFUNC(sk, rcv_established);
+	return mpdccp_funcs.rcv_established (sk);
+#else
+	return 0;
+#endif
+}
 
+static inline int mpdccp_check_req (struct sock *sk, struct sock *newsk, struct request_sock *req, struct sk_buff *skb, struct sock **master_sk)
+{
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	MPDCCP_CHECK_SKFUNC(sk, check_req);
+	return mpdccp_funcs.check_req (sk, newsk, req, skb, master_sk);
+#else
+	return 0;
+#endif
+}
+
+static inline int mpdccp_create_master (struct sock *sk, struct sock *newsk, struct request_sock *req, struct sk_buff *skb)
+{
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	MPDCCP_CHECK_SKFUNC (sk,create_master);
+	return mpdccp_funcs.create_master (sk, newsk, req, skb);
+#else
+	return 0;
+#endif
+}
+
+static inline int mpdccp_close_meta (struct sock *sk)
+{
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	MPDCCP_CHECK_SKFUNC(sk, close_meta);
+	return mpdccp_funcs.close_meta (sk);
+#else
+	return 0;
+#endif
+}
 
 #endif	/* MPDCCP_UI_H */

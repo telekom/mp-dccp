@@ -350,6 +350,7 @@ int dccp_send_reset(struct sock *sk, enum dccp_reset_codes code);
 void dccp_send_close(struct sock *sk, const int active);
 int dccp_invalid_packet(struct sk_buff *skb);
 u32 dccp_sample_rtt(struct sock *sk, long delta);
+void dccp_finish_passive_close(struct sock *sk);
 
 int register_dccp_notifier(struct notifier_block *nb);
 int unregister_dccp_notifier(struct notifier_block *nb);
@@ -535,6 +536,7 @@ void dccp_feat_list_purge(struct list_head *fn_list);
 
 int dccp_insert_options(struct sock *sk, struct sk_buff *skb);
 int dccp_insert_options_rsk(struct dccp_request_sock *, struct sk_buff *);
+int dccp_insert_options_rsk_mp(const struct sock *sk, struct dccp_request_sock *dreq, struct sk_buff *skb);
 u32 dccp_timestamp(void);
 void dccp_timestamping_init(void);
 int dccp_insert_option(struct sk_buff *skb, unsigned char option,

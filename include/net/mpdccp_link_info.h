@@ -44,7 +44,14 @@ struct mpdccp_link_info {
 	u32	mpdccp_T_lpu_min;	/* threshhold for last path usage in ms */
 	u32	mpdccp_T_lpu_min_j;	/* threshhold for last path usage in jiffies */
 	u32	mpdccp_lpu_cnt;		/* max packets that can be sent between lpu_min and lpu */
+	u32	mpdccp_path_type;	/* path type (lte, wifi, ...) */
+	u32	mpdccp_match_pathtype;	/* match path type (e.g. match if path is lte */
 	int	end_config;
+
+	u64	mpdccp_rx_packets;	/* number packets received */
+	u64	mpdccp_rx_bytes;	/* number bytes received */
+	u64	mpdccp_tx_packets;	/* number packets send */
+	u64	mpdccp_tx_bytes;	/* number bytes send */
 
 #ifdef CONFIG_MPDCCP_STATS
 	/* mpdccp statistics */

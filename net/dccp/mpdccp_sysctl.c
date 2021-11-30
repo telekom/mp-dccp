@@ -178,9 +178,11 @@ static int proc_mpdccp_reordering(struct ctl_table *ctl, int write,
 		//Assign reorder to all existing connections
 		mpdccp_for_each_conn(pconnection_list, mpcb) {
 			if (!mpcb->has_own_reorder) {
+				rcu_read_unlock();
 				lock_sock (mpcb->meta_sk);
 				mpdccp_init_reordering (mpcb);
 				release_sock (mpcb->meta_sk);
+				rcu_read_lock();
 			}
 		}
 		rcu_read_unlock();

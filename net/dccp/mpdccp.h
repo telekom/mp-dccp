@@ -4,6 +4,7 @@
  * Copyright (C) 2017 by Markus Amend, Deutsche Telekom AG
  * Copyright (C) 2020 by Nathalie Romo, Deutsche Telekom AG
  * Copyright (C) 2020 by Frank Reker, Deutsche Telekom AG
+ * Copyright (C) 2021 by Romeo Cane, Deutsche Telekom AG
  *
  * MPDCCP - DCCP bundling kernel module
  *
@@ -43,6 +44,9 @@
  * TAG-0.7: Replaced by user space tool */
 #define MPDCCP_IPV4_MAX             16
 
+/* TODO: move to sysctl */
+#define MPDCCP_VERSION_NUM 1
+#define MPDCCP_SUPPKEYS  (DCCPKF_PLAIN | DCCPKF_C25519_SHA256 | DCCPKF_C25519_SHA512)
 
 /* Defines for MPDCCP options.
  * All length values account for payload ONLY. */
@@ -189,6 +193,12 @@ unset_mpdccp(struct sock *sk) {
     sk && &mpdccp_my_sock((sk))->sk_list != &((mpcb)->plisten_list);                                          \
     (sk) = mpdccp_list_next_or_null_rcu(&(mpcb)->plisten_list, &mpdccp_my_sock((sk))->sk_list, struct my_sock, sk_list)) \
 
+/* Iterate over all request sockets (client side only) */
+#define mpdccp_for_each_request_sk(mpcb, sk)                                                                   \
+    for ((sk) = mpdccp_list_first_or_null_rcu(&(mpcb)->prequest_list, struct my_sock, sk_list);                \
+    sk && &mpdccp_my_sock((sk))->sk_list != &((mpcb)->prequest_list);                                          \
+    (sk) = mpdccp_list_next_or_null_rcu(&(mpcb)->prequest_list, &mpdccp_my_sock((sk))->sk_list, struct my_sock, sk_list)) \
+
 enum mpdccp_role {
     MPDCCP_CLIENT,
     MPDCCP_SERVER,
@@ -219,6 +229,8 @@ struct mpdccp_cb
 	/* Pointer to list of listening sockets (server side) */
 	struct list_head __rcu  plisten_list;
 	spinlock_t              plisten_list_lock;
+	/* Pointer to list of request sockets (client side) */
+	struct list_head __rcu  prequest_list;
 	
 	int     multipath_active;
 	
@@ -254,7 +266,23 @@ struct mpdccp_cb
 	void *mpdccp_reorder_cb;                // pointer to cb structure specific to current reordering 
 	int			      has_own_reorder;
 	u64 glob_lfor_seqno;                    // global sequence number of last forwarded packet
-	
+	u64 mp_oall_seqno;
+
+	/* Authentication data */
+	struct mpdccp_key 	mpdccp_loc_key;
+	struct mpdccp_key 	mpdccp_rem_key;
+	u32			mpdccp_loc_token;
+	u32			mpdccp_rem_token;
+	int			kex_done;
+	u8			mpdccp_ver;
+	u8			mpdccp_suppkeys;
+
+	/* First subflow socket */
+	struct sock*		master_sk;
+
+	/* Namespace info */
+	possible_net_t		net;
+
 	/* call back functions */
 	void 		(*report_subflow) (int, struct sock*, struct sock*, struct mpdccp_link_info*, int);
 };
@@ -270,7 +298,7 @@ struct my_sock
 	struct mpdccp_cb        *mpcb;
 	
 	/* send|recv work. TODO: not sure if i need dynamic memory here to re-queue that work. */
-	struct delayed_work     work;
+	struct work_struct     close_work;
 	struct mpdccp_link_info	*link_info;
 	int				link_cnt;
 	int				link_iscpy;
@@ -286,10 +314,10 @@ struct my_sock
 	
 	/* Used to store the original, unmodified callbacks from 
 	 * struct sock. Additional function pointers available in struct sock:
-	 * void            (*sk_state_change)(struct sock *sk);
 	 * void            (*sk_write_space)(struct sock *sk);
 	 * void            (*sk_error_report)(struct sock *sk);
 	 */
+	void            (*sk_state_change)(struct sock *sk);
 	void            (*sk_data_ready)(struct sock *sk);
 	int             (*sk_backlog_rcv)(struct sock *sk, 
 	                    struct sk_buff *skb);
@@ -298,6 +326,9 @@ struct my_sock
 	
 	/* Reordering related data */
 	struct mpdccp_reorder_path_cb *pcb;
+
+	/* Close in progress flag */
+	int	closing;
 };
 
 
@@ -306,6 +337,7 @@ struct my_sock
  */
 
 int mpdccp_init_funcs (void);
+int mpdccp_deinit_funcs (void);
 
 int mpdccp_report_subflow (struct sock*, int);
 int mpdccp_report_new_subflow (struct sock*);
@@ -315,7 +347,7 @@ int mpdccp_report_destroy (struct sock*);
 
 int mpdccp_add_client_conn (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx, struct sockaddr *rem, int rlen);
 int mpdccp_add_listen_sock (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx);
-int mpdccp_close_subflow (struct mpdccp_cb*, struct sock*);
+int mpdccp_close_subflow (struct mpdccp_cb*, struct sock*, int destroy);
 void mpdccp_handle_rem_addr (u32 del_path);
 struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb);
 
@@ -342,6 +374,9 @@ void my_sock_destruct (struct sock *sk);
 /* the real xmit */
 int mpdccp_xmit_to_sk (struct sock *sk, struct sk_buff *skb);
 
+/* Functions for authentication */
+void mpdccp_key_sha1(u64 key1, u64 key2, u32 *token);
+void mpdccp_hmac_sha1(const u8 *key_1, const u8 *key_2, u32 *hash_out, int arg_num, ...);
 
 static inline struct mpdccp_cb *get_mpcb(const struct sock *sk)
 {
@@ -357,3 +392,4 @@ static inline struct sock *dccp_sk_inv(const struct dccp_sock *dp)
 
 
 #endif /* _MPDCCP_H */
+

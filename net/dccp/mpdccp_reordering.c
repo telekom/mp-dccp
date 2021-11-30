@@ -131,10 +131,10 @@ void mpdccp_init_reordering (struct mpdccp_cb *mpcb)
 /**
  * Release allocated memory.
  */
-void mpdccp_cleanup_reordering()
+void mpdccp_cleanup_reordering(struct mpdccp_cb *mpcb)
 {
-	/* destroy memory pools */
-	kmem_cache_destroy(mpdccp_reorder_path_cb_cache);
+	/* Release module */
+	module_put(mpcb->reorder_ops->owner);
 }
 
 /**
@@ -316,7 +316,8 @@ struct rcv_buff *mpdccp_init_rcv_buff(struct sock *sk, struct sk_buff *skb, stru
 	rb->sk = sk;
 	rb->skb = skb;
 	rb->mpcb = mpcb;
-	
+	rb->mpdccp_reorder_cb = mpcb->mpdccp_reorder_cb;
+
 	if(!sk) return rb;
 	
 	/* 
@@ -383,6 +384,15 @@ EXPORT_SYMBOL(mpdccp_init_reorder_path_cb);
 /**
  * Release allocated memory.
  */
+void mpdccp_free_reorder_path_cb(struct mpdccp_reorder_path_cb *pcb)
+{
+	kmem_cache_free(mpdccp_reorder_path_cb_cache, pcb);
+}
+EXPORT_SYMBOL(mpdccp_free_reorder_path_cb);
+
+/**
+ * Destroy memory pool.
+ */
 static void mpdccp_release_path_cb_cache(void)
 {
 	kmem_cache_destroy(mpdccp_reorder_path_cb_cache);
@@ -398,6 +408,7 @@ static int mpdccp_reset_path_cb(struct mpdccp_reorder_path_cb *pcb)
 
 	pcb->mrtt = 0; pcb->krtt = 0; pcb->drtt = 0;
 	pcb->oall_seqno = 0; pcb->path_seqno = 0; pcb->not_rcv = 0;
+	pcb->last_path_seqno = 0;
 
 	for(i = 0; i < DWINDOW_SIZE; i++){
 		pcb->wnd[i] = 0;
@@ -591,7 +602,10 @@ static u32 mean(u32 *arr, int size)
 			cnt++;
 		}
 	} 
-	return tmp / cnt; 
+	if(cnt)
+		return tmp / cnt;
+	else
+		return 0;
 }
 
 /**

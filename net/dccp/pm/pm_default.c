@@ -211,7 +211,7 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 					mpcb->remaddr_len);
 			break;
 		case MPDCCP_SERVER:
-			mpdccp_add_listen_sock(mpcb, local, locaddr_len, if_idx);
+			/* do nothing */
 			break;
 		default:
 			break;
@@ -302,7 +302,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 						mpdccp_pr_debug("Deleting subflow socket %p with address %pI6.\n", sk, &sk->__sk_common.skc_v6_rcv_saddr);
 					//mpdccp_my_sock(sk)->mpcb->delpath = mpdccp_my_sock(sk)->link_info->id;
 					addr_id = mpdccp_my_sock(sk)->link_info->id;
-					mpdccp_close_subflow (mpcb, sk);
+					mpdccp_close_subflow (mpcb, sk, 0);
 					mpdccp_announce_remove_path(addr_id, mpcb);
 
 				}
@@ -333,7 +333,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 					else
 						mpdccp_pr_debug("Deleting listening socket %p with address %pI6.\n", sk, &sk->__sk_common.skc_v6_rcv_saddr);
 
-					mpdccp_close_subflow (mpcb, sk);
+					mpdccp_close_subflow (mpcb, sk, 0);
 				}
 			}
 		}
@@ -472,14 +472,14 @@ static void addr4_event_handler(const struct in_ifaddr *ifa, unsigned long event
 	mpevent.if_idx  = netdev->ifindex;
 
 	if (event == NETDEV_DOWN || !netif_running(netdev) || netdev->operstate == IF_OPER_DOWN ||
-	    /*(netdev->flags & IFF_NOMULTIPATH) ||*/ !(netdev->flags & IFF_UP))
+	    !(netdev->flags & IFF_MPDCCPON)|| !(netdev->flags & IFF_UP))
 		mpevent.code = MPDCCP_EVENT_DEL;
 	else if (event == NETDEV_UP)
 		mpevent.code = MPDCCP_EVENT_ADD;
 	else if (event == NETDEV_CHANGE)
 		mpevent.code = MPDCCP_EVENT_MOD;
 
-	mpdccp_pr_debug("event %lu, running %d flags %u oper %c", event, netif_running(netdev), netdev->flags, netdev->operstate);
+	mpdccp_pr_debug("event %lu, running %d flags %u oper %x", event, netif_running(netdev), netdev->flags, netdev->operstate);
     mpdccp_pr_debug("%s created event for %pI4, code %u idx %u\n", __func__,
 		    &ifa->ifa_local, mpevent.code, mpevent.if_idx);
 	add_pm_event(net, &mpevent);
@@ -511,14 +511,52 @@ static int mpdccp_pm_dccp_event(struct notifier_block *this,
 				   unsigned long event, void *ptr)
 {
 	const struct sock *sk_closed = (struct sock *)ptr;
+
 	struct sock *sk;
 	struct mpdccp_cb *mpcb;
+	struct sockaddr 			*local;
+	struct sockaddr_in 			local_v4_address;
+	struct sockaddr_in6 		local_v6_address;
+	int	locaddr_len;
+	int	if_idx;
+
+	if (!sk_closed) return NOTIFY_DONE;
+
+	if(sk_closed->__sk_common.skc_family == AF_INET){
+			local_v4_address.sin_family		= AF_INET;
+			local_v4_address.sin_addr.s_addr = sk_closed->__sk_common.skc_rcv_saddr;
+			local_v4_address.sin_port		= 0;
+			local = (struct sockaddr *) &local_v4_address;
+			locaddr_len = sizeof (struct sockaddr_in);
+		} else {
+			local_v6_address.sin6_family		= AF_INET6;
+			local_v6_address.sin6_addr 		= sk_closed->__sk_common.skc_v6_rcv_saddr;
+			local_v6_address.sin6_port		= 0;
+			local = (struct sockaddr *) &local_v6_address;
+			locaddr_len = sizeof (struct sockaddr_in6);
+		}
+
+	if_idx = sk_closed->__sk_common.skc_bound_dev_if;
 	if (event == DCCP_EVENT_CLOSE){
 		mpdccp_for_each_conn(pconnection_list, mpcb) {
 			mpdccp_for_each_sk(mpcb, sk) {
-				if(sk == sk_closed){
-				mpdccp_close_subflow(mpcb, sk);
-				mpdccp_pr_debug("close dccp sk %p", sk_closed);
+				/* Handle close events for both the subflow and meta sockets */
+				if (mpcb->meta_sk == sk_closed) {
+					mpdccp_close_subflow(mpcb, sk, 0);
+					mpdccp_pr_debug("close dccp sk %p", sk_closed);
+				}
+				else if(sk == sk_closed) {
+					mpdccp_close_subflow(mpcb, sk, 0);
+					mpdccp_pr_debug("close dccp sk %p", sk_closed);
+					//attempt reconnect
+					if (mpcb->meta_sk->sk_state == DCCP_OPEN){
+						mpdccp_pr_debug("try to reconnect sk address %pI4. if %d \n", &sk->__sk_common.skc_rcv_saddr, if_idx);
+							mpdccp_add_client_conn(mpcb, local, locaddr_len, if_idx, 
+							(struct sockaddr*)&mpcb->mpdccp_remote_addr,
+							mpcb->remaddr_len);
+					}
+
+					break;
 				}
 			}
 		}
@@ -619,7 +657,7 @@ static void addr6_event_handler(const struct inet6_ifaddr *ifa, unsigned long ev
 	mpevent.if_idx = netdev->ifindex;
 
 	if (event == NETDEV_DOWN || !netif_running(netdev) ||
-	    /*(netdev->flags & IFF_NOMULTIPATH) ||*/ !(netdev->flags & IFF_UP))
+	    !(netdev->flags & IFF_MPDCCPON)|| !(netdev->flags & IFF_UP))
 		mpevent.code = MPDCCP_EVENT_DEL;
 	else if (event == NETDEV_UP)
 		mpevent.code = MPDCCP_EVENT_ADD;
@@ -676,8 +714,30 @@ static int mpdccp_init_net(struct net *net)
 	return 0;
 }
 
+/* Wipe the local address list */
+static void dccp_free_local_addr_list(struct mpdccp_pm_ns *pm_ns)
+{
+	struct mpdccp_local_addr *addr;
+	struct list_head *pos, *temp;
+	list_for_each_safe(pos, temp, &pm_ns->plocal_addr_list) {
+		addr = list_entry(pos, struct mpdccp_local_addr, address_list);
+		list_del(pos);
+		kfree(addr);
+	}
+}
+
 static void mpdccp_exit_net(struct net *net)
 {
+	struct mpdccp_pm_ns *pm_ns;
+
+	pm_ns = net->mpdccp.path_managers[MPDCCP_PM_FULLMESH];
+	/* Stop the worker */
+	cancel_delayed_work_sync(&pm_ns->address_worker);
+
+	/* Clean and free the list */
+	dccp_free_local_addr_list(pm_ns);
+	kfree(pm_ns);
+
 /* This is statistics stuff that is not yet supported. */
 #if 0
     remove_proc_entry("snmp", net->mpdccp.proc_net_mpdccp);
@@ -821,6 +881,8 @@ goto out;
 
 static void mpdccp_pm_exit(void)
 {
+    unregister_dccp_notifier(&mpdccp_pm_dccp_notifier);
+
     /* TODO: Tear down connections */
     unregister_netdevice_notifier(&mpdccp_pm_netdev_notifier);
 #if IS_ENABLED(CONFIG_IPV6)
@@ -854,7 +916,7 @@ add_init_client_conn (
 	int				locaddr_len;
 	int				ret=0, num=0;
 	struct mpdccp_pm_ns		*pm_ns;
-	
+	int local_if_idx;
 	
 	if (!mpcb || !remote_address) return -EINVAL;
 	if (mpcb->role != MPDCCP_CLIENT) return -EPERM;
@@ -881,17 +943,24 @@ add_init_client_conn (
 			local_address = (struct sockaddr *) &local_v6_address;
 			locaddr_len = sizeof (struct sockaddr_in6);
 		}
+		local_if_idx = local->if_idx;
+		/* unlock since mpdccp_add_client_conn() can sleep (data from the list entry are now copied locally) */
+		rcu_read_unlock_bh();
 		ret = mpdccp_add_client_conn (	mpcb, local_address, locaddr_len,
-						local->if_idx, remote_address, socklen);
-		if (ret < 0) {
+						local_if_idx, remote_address, socklen);
+		if ((ret < 0) && (ret != -EINPROGRESS) ) {
 			mpdccp_pr_debug ("error in mpdccp_add_client_conn() for "
 					"subflow %d: %d\n", num, ret);
+			goto out;
 		} else {
 			num++;
 		}
+		/* lock again to continue scanning the list */
+		rcu_read_lock_bh();
 	}
 	rcu_read_unlock_bh();
 
+out:
 	if (num == 0) {
 		mpdccp_pr_debug ("no connection could be established\n");
 		return ret == 0 ? -ENOTCONN : ret;

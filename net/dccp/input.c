@@ -15,6 +15,8 @@
 #include <linux/slab.h>
 
 #include <net/sock.h>
+#include <net/mpdccp.h>
+#include "mpdccp.h"
 
 #include "ackvec.h"
 #include "ccid.h"
@@ -296,6 +298,11 @@ static int __dccp_rcv_established(struct sock *sk, struct sk_buff *skb,
 	switch (dccp_hdr(skb)->dccph_type) {
 	case DCCP_PKT_DATAACK:
 	case DCCP_PKT_DATA:
+		/* Data packets on MP need additional checks */
+		if (is_mpdccp(sk)) {
+			if (mpdccp_rcv_established(sk))
+				goto discard;
+		}
 		/*
 		 * FIXME: schedule DATA_DROPPED (RFC 4340, 11.7.2) if and when
 		 * - sk_shutdown == RCV_SHUTDOWN, use Code 1, "Not Listening"
@@ -428,6 +435,11 @@ static int dccp_rcv_request_sent_state_process(struct sock *sk,
 		 */
 		if (dccp_parse_options(sk, NULL, skb))
 			return 1;
+
+		if (is_mpdccp(sk)) {
+			if (mpdccp_rcv_request_sent_state_process(sk, skb))
+				return 1;
+		}
 
 		/* Obtain usec RTT sample from SYN exchange (used by TFRC). */
 		if (likely(dp->dccps_options_received.dccpor_timestamp_echo))
@@ -564,6 +576,11 @@ static int dccp_rcv_respond_partopen_state_process(struct sock *sk,
 		dp->dccps_osr = DCCP_SKB_CB(skb)->dccpd_seq;
 
 		dccp_set_state(sk, DCCP_OPEN);
+
+		if (is_mpdccp(sk)) {
+			if (mpdccp_rcv_respond_partopen_state_process(sk, dh->dccph_type))
+				break;
+		}
 
 		if (dh->dccph_type == DCCP_PKT_DATAACK ||
 		    dh->dccph_type == DCCP_PKT_DATA) {

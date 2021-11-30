@@ -64,7 +64,7 @@ EXPORT_SYMBOL_GPL(mpdccp_scheduler_setup);
 /* Check if a flow is fully established, i.e. the handshake is complete. */
 bool mpdccp_sk_can_send(struct sock *sk)
 {
-	return (sk->sk_state == DCCP_OPEN || sk->sk_state == DCCP_PARTOPEN);
+	return (dccp_sk(sk)->auth_done && (sk->sk_state == DCCP_OPEN || sk->sk_state == DCCP_PARTOPEN));
 }
 EXPORT_SYMBOL(mpdccp_sk_can_send);
 

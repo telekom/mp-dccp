@@ -174,7 +174,16 @@ struct dccp_request_sock {
 	__u32			 dreq_timestamp_time;
 	struct mpdccp_link_info  *link_info;
 	int 			id_rcv;
-
+	struct mpdccp_key	mpdccp_loc_key;
+	struct mpdccp_key	mpdccp_rem_key;
+	u32			mpdccp_loc_token;
+	u32			mpdccp_rem_token;
+	u32	 		mpdccp_loc_nonce;
+	u32 			mpdccp_rem_nonce;
+	u8 			mpdccp_loc_hmac[MPDCCP_HMAC_SIZE];
+	u8 			mpdccp_rem_hmac[MPDCCP_HMAC_SIZE];
+	struct sock*		meta_sk;
+	struct list_head	dreq_featneg_mp;
 };
 
 static inline struct dccp_request_sock *dccp_rsk(const struct request_sock *req)
@@ -196,6 +205,13 @@ struct dccp_options_received {
 	u32 dccpor_delay;			/* MPDCCP delay transmission */
 	u32 dccpor_path_id;			/* MPDCCP delay transmission */
 	u32 dccpor_delpath_rcv;
+	u8 dccpor_mp_vers;			/* MPDCCP version */
+	u8 dccpor_mp_suppkeys;			/* MPDCCP supported key types */
+	u32 dccpor_mp_token;			/* MPDCCP path token */
+	u32 dccpor_mp_nonce;			/* MPDCCP path nonce */
+	u8 dccpor_mp_hmac[MPDCCP_HMAC_SIZE];	/* MPDCCP HMAC */
+	struct mpdccp_key dccpor_mp_keys[MPDCCP_MAX_KEYS];	/* MPDCCP keys */
+	int saw_mpkey;
 };
 
 struct ccid;
@@ -328,6 +344,14 @@ struct dccp_sock {
 	struct mpdccp_meta_cb		mpdccp;
 #endif
 	int                 id_rcv;
+	int 	multipath_active;
+	int 	is_kex_sk;
+	int 	auth_done;
+	u32	mpdccp_loc_nonce;
+	u32 	mpdccp_rem_nonce;
+	u8 	mpdccp_loc_hmac[MPDCCP_HMAC_SIZE];
+	u8 	mpdccp_rem_hmac[MPDCCP_HMAC_SIZE];
+	int 	need_hmac_ack;
 };
 
 static inline struct dccp_sock *dccp_sk(const struct sock *sk)

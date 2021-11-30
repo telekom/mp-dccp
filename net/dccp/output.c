@@ -19,6 +19,7 @@
 #include <net/inet_sock.h>
 #include <net/sock.h>
 #include <net/mpdccp.h>
+#include <net/mpdccp_meta.h>
 
 #include "ackvec.h"
 #include "ccid.h"
@@ -442,6 +443,15 @@ struct sk_buff *dccp_make_response(const struct sock *sk, struct dst_entry *dst,
 	if (dccp_insert_options_rsk(dreq, skb))
 		goto response_failed;
 
+	if (mpdccp_isactive(sk) > 0) {
+		if (dreq->meta_sk && dreq->meta_sk->sk_state != DCCP_OPEN) {
+			dccp_pr_debug("meta socket %p not in OPEN state during response\n", dreq->meta_sk);
+			goto response_failed;
+		}
+		if (dccp_insert_options_rsk_mp(sk, dreq, skb))
+			goto response_failed;
+	}
+
 	/* Build and checksum header */
 	dh = dccp_zeroed_hdr(skb, dccp_header_size);
 
@@ -617,8 +627,7 @@ EXPORT_SYMBOL_GPL(dccp_send_ack);
 void dccp_send_keepalive(struct sock *sk)
 {
 	struct sk_buff *skb;
-	int err, len;
-	struct dccp_sock *dp = dccp_sk(sk);
+	int err;
 
 	/* If we have been reset, we may not send again. */
 	dccp_pr_debug("enter dccp_send_keepalive %p", sk);

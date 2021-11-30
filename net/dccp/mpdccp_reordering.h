@@ -106,8 +106,10 @@ struct mpdccp_reorder_path_cb {
 	u32		wnd_raw[DWINDOW_SIZE];
 	
 	/* receive vector */
-	u64		oall_seqno:48;	// last received overall sequence number on socket sk
-	u64		path_seqno:48;	// last received path sequence number on socket sk
+	u64		oall_seqno:48;	// current received overall sequence number on socket sk
+	u64		path_seqno:48;	// current received path sequence number on socket sk
+	u64		last_path_seqno:48;	// last received path sequence number on socket sk
+	u64		last_oall_seqno:48;	// last received overall sequence number on socket sk
 	u8		not_rcv;	// counter to monitor inactivity of socket
 };
 
@@ -116,7 +118,7 @@ struct mpdccp_reorder_path_cb {
  */
 struct rcv_buff
 {
-	struct delayed_work	work;
+	struct delayed_work	dwork;
 	
 	struct sock		*sk;
 	struct sk_buff		*skb;
@@ -124,6 +126,7 @@ struct rcv_buff
 	
 	u64			oall_seqno:48;
 	u32			latency;
+	void 			*mpdccp_reorder_cb;
 };
 
 
@@ -156,7 +159,7 @@ int mpdccp_reordering_setup (void);
 void mpdccp_reordering_finish (void);
 
 void mpdccp_init_reordering(struct mpdccp_cb *mpcb);
-void mpdccp_cleanup_reordering(void);
+void mpdccp_cleanup_reordering(struct mpdccp_cb *mpcb);
 int mpdccp_register_reordering(struct mpdccp_reorder_ops *reorder);
 void mpdccp_unregister_reordering(struct mpdccp_reorder_ops *reorder);
 struct mpdccp_reorder_ops *mpdccp_reorder_find(const char *name);
@@ -172,6 +175,7 @@ struct rcv_buff *mpdccp_init_rcv_buff(struct sock *sk, struct sk_buff *skb, stru
 
 /* Reordering path cb handling */
 struct mpdccp_reorder_path_cb *mpdccp_init_reorder_path_cb(struct sock *sk);
+void mpdccp_free_reorder_path_cb(struct mpdccp_reorder_path_cb *pcb);
 int mpdccp_path_est(struct mpdccp_reorder_path_cb* pcb, u32 mrtt);
 
 

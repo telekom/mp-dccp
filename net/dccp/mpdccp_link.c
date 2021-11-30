@@ -564,6 +564,40 @@ int mpdccp_link_change_mpdccp_cgstalg(struct mpdccp_link_info *link, const char 
 EXPORT_SYMBOL(mpdccp_link_change_mpdccp_cgstalg);
 
 /**
+ *	mpdccp_link_change_mpdccp_path_type - path type (lte, wifi, ...)
+ *	@dev: device
+ *	@mpdccp_path_type: path type (lte, wifi, ...)
+ *
+ *	fw mark set in outgoing traffic
+ */
+int mpdccp_link_change_mpdccp_path_type(struct mpdccp_link_info *link, u32 mpdccp_path_type)
+{
+	if (link->mpdccp_path_type == mpdccp_path_type) return 0;
+	link->mpdccp_path_type = mpdccp_path_type;
+	link->config_cnt ++;
+	call_mpdccp_link_notifiers(MPDCCP_LINK_CHANGE_PATHTYPE, link);
+	return 0;
+}
+EXPORT_SYMBOL(mpdccp_link_change_mpdccp_path_type);
+
+/**
+ *	mpdccp_link_change_mpdccp_match_pathtype - path type (lte, wifi, ...)
+ *	@dev: device
+ *	@mpdccp_match_pathtype: path type (lte, wifi, ...)
+ *
+ *	fw mark set in outgoing traffic
+ */
+int mpdccp_link_change_mpdccp_match_pathtype(struct mpdccp_link_info *link, u32 mpdccp_match_pathtype)
+{
+	if (link->mpdccp_match_pathtype == mpdccp_match_pathtype) return 0;
+	link->mpdccp_match_pathtype = mpdccp_match_pathtype;
+	link->config_cnt ++;
+	call_mpdccp_link_notifiers(MPDCCP_LINK_CHANGE_MATCH_PATHTYPE, link);
+	return 0;
+}
+EXPORT_SYMBOL(mpdccp_link_change_mpdccp_match_pathtype);
+
+/**
  *	mpdccp_link_change_mpdccp_resetstat 
  *	@dev: device
  *	@mpdccp_newbuf: bool to set
@@ -898,6 +932,7 @@ link_net_init (
 	struct net	*net)
 {
 	struct mpdccp_link_net_data	*linkdata;
+	int									ret;
 
 	if (!net || mpdccp_link_net_id < 0) return 0;
 	mpdccp_pr_info ("mpdccp_link:: new network namespace created\n");
@@ -905,7 +940,11 @@ link_net_init (
 	*linkdata = (struct mpdccp_link_net_data) { .net = net };
 	atomic_set (&linkdata->counter, 0);
 	mpdccp_link_sysfs_netinit (linkdata);
-	return mpdccp_link_add (&linkdata->fallback, net, NULL, "fallback");
+	ret = mpdccp_link_add (&linkdata->fallback, net, NULL, "fallback");
+	if (ret < 0) {
+		printk ("mpdccp_link::net_init: error creating fallback link: %d\n", ret);
+	}
+	return 0;
 }
 
 static
@@ -990,6 +1029,7 @@ mpdccp_link_module_init (void)
 		mpdccp_pr_error ("mpdccp_link: error registering pernet subsystem: %d\n", ret);
 		return ret;
 	}
+	printk ("mpdccp_link_net_id = %d\n", mpdccp_link_net_id);
 	ret = register_netdevice_notifier (&mpdccp_link_netdev_notifier);
 	if (ret < 0) {
 		mpdccp_pr_error ("mpdccp_link: error in register_netdevice_notifier(): %d\n", ret);

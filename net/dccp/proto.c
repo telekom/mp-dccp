@@ -90,7 +90,7 @@ static const char *dccp_state_name(const int state)
 }
 #endif
 
-static BLOCKING_NOTIFIER_HEAD(dccp_chain);
+static ATOMIC_NOTIFIER_HEAD(dccp_chain);
 
 
 void dccp_set_state(struct sock *sk, const int state)
@@ -142,13 +142,13 @@ void dccp_set_state(struct sock *sk, const int state)
 	if (sk->sk_state_change)
 		sk->sk_state_change (sk);
 	if(state==DCCP_CLOSED || state==DCCP_CLOSING)
-		blocking_notifier_call_chain(&dccp_chain,
+		atomic_notifier_call_chain(&dccp_chain,
 						DCCP_EVENT_CLOSE, sk);
 }
 
 EXPORT_SYMBOL_GPL(dccp_set_state);
 
-static void dccp_finish_passive_close(struct sock *sk)
+void dccp_finish_passive_close(struct sock *sk)
 {
 	switch (sk->sk_state) {
 	case DCCP_PASSIVE_CLOSE:
@@ -165,6 +165,7 @@ static void dccp_finish_passive_close(struct sock *sk)
 		dccp_set_state(sk, DCCP_CLOSING);
 	}
 }
+EXPORT_SYMBOL(dccp_finish_passive_close);
 
 void dccp_done(struct sock *sk)
 {
@@ -309,7 +310,6 @@ int dccp_disconnect(struct sock *sk, int flags)
 
 	if (mpdccp_is_meta(sk)) {
 		/* not implemented yet */
-		return 0;
 	}
 
 	if (old_state != DCCP_CLOSED)
@@ -895,6 +895,28 @@ out_discard:
 
 EXPORT_SYMBOL_GPL(dccp_sendmsg);
 
+static inline struct sk_buff *skb_peek_safe(struct sk_buff_head *list)
+{
+	unsigned long flags;
+	struct sk_buff *skb;
+
+	spin_lock_irqsave(&list->lock, flags);
+	skb = skb_peek(list);
+	spin_unlock_irqrestore(&list->lock, flags);
+
+	return skb;
+}
+
+static inline void sk_eat_skb_safe(struct sock *sk, struct sk_buff *skb)
+{
+	unsigned long flags;
+	struct sk_buff_head *list = &sk->sk_receive_queue;
+
+	spin_lock_irqsave(&list->lock, flags);
+	sk_eat_skb(sk,skb);
+	spin_unlock_irqrestore(&list->lock, flags);
+}
+
 int dccp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
 		 int flags, int *addr_len)
 {
@@ -911,7 +933,12 @@ int dccp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
 	timeo = sock_rcvtimeo(sk, nonblock);
 
 	do {
-		struct sk_buff *skb = skb_peek(&sk->sk_receive_queue);
+		/* For meta sockets this can race with mpdccp_forward_skb(), need atomic access to rx queue */
+		struct sk_buff *skb;
+		if (mpdccp_is_meta(sk))
+			skb = skb_peek_safe(&sk->sk_receive_queue);
+		else
+			skb = skb_peek(&sk->sk_receive_queue);
 
 		if (skb == NULL)
 			goto verify_sock_status;
@@ -936,7 +963,11 @@ int dccp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
 		default:
 			dccp_pr_debug("packet_type=%s\n",
 				      dccp_packet_name(dh->dccph_type));
-			sk_eat_skb(sk, skb);
+			/* For meta sockets this can race with mpdccp_forward_skb(), need atomic access to rx queue */
+			if (mpdccp_is_meta(sk))
+				sk_eat_skb_safe(sk, skb);
+			else
+				sk_eat_skb(sk, skb);
 		}
 verify_sock_status:
 		if (sock_flag(sk, SOCK_DONE)) {
@@ -992,8 +1023,13 @@ verify_sock_status:
 		if (flags & MSG_TRUNC)
 			len = skb->len;
 	found_fin_ok:
-		if (!(flags & MSG_PEEK))
-			sk_eat_skb(sk, skb);
+		if (!(flags & MSG_PEEK)) {
+			/* For meta sockets this can race with mpdccp_forward_skb(), need atomic access to rx queue */
+			if (mpdccp_is_meta(sk))
+				sk_eat_skb_safe(sk, skb);
+			else
+				sk_eat_skb(sk, skb);
+		}
 		break;
 	} while (1);
 out:
@@ -1019,11 +1055,6 @@ int inet_dccp_listen(struct socket *sock, int backlog)
 	if (!((1 << old_state) & (DCCPF_CLOSED | DCCPF_LISTEN)))
 		goto out;
 
-	if (mpdccp_is_meta(sk)) {
-		err = mpdccp_listen (sk, backlog);
-		goto out;
-	}
-	
 	/* Really, if the socket is already in listen state
 	 * we can only allow the backlog to be adjusted.
 	 */
@@ -1060,7 +1091,10 @@ static void dccp_terminate_connection(struct sock *sk)
 		inet_csk_clear_xmit_timer(sk, ICSK_TIME_DACK);
 		/* fall through */
 	case DCCP_OPEN:
-		dccp_send_close(sk, 1);
+		/* Don't send close pkt on MP meta sockets*/
+		if (!mpdccp_is_meta(sk)) {
+			dccp_send_close(sk, 1);
+		}
 
 		if (dccp_sk(sk)->dccps_role == DCCP_ROLE_SERVER &&
 		    !dccp_sk(sk)->dccps_server_timewait)
@@ -1070,6 +1104,10 @@ static void dccp_terminate_connection(struct sock *sk)
 		/* fall through */
 	default:
 		dccp_set_state(sk, next_state);
+	}
+
+	if (mpdccp_is_meta(sk)) {
+		mpdccp_close_meta(sk);
 	}
 }
 
@@ -1185,13 +1223,13 @@ EXPORT_SYMBOL_GPL(dccp_shutdown);
 
 int register_dccp_notifier(struct notifier_block *nb)
 {
-	return blocking_notifier_chain_register(&dccp_chain, nb);
+	return atomic_notifier_chain_register(&dccp_chain, nb);
 }
 EXPORT_SYMBOL(register_dccp_notifier);
 
 int unregister_dccp_notifier(struct notifier_block *nb)
 {
-	return blocking_notifier_chain_unregister(&dccp_chain, nb);
+	return atomic_notifier_chain_unregister(&dccp_chain, nb);
 }
 EXPORT_SYMBOL(unregister_dccp_notifier);
 

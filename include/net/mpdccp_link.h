@@ -50,13 +50,15 @@ int register_mpdccp_link_notifier (struct notifier_block*);
 int unregister_mpdccp_link_notifier (struct notifier_block*);
 int call_mpdccp_link_notifiers (unsigned long, struct mpdccp_link_info*);
 
-#define MPDCCP_LINK_CHANGE_PRIO		1
-#define MPDCCP_LINK_CHANGE_MAXBUF	2
-#define MPDCCP_LINK_CHANGE_DELAY		3
-#define MPDCCP_LINK_CHANGE_LPU		4
-#define MPDCCP_LINK_CHANGE_THROTTLE	5
-#define MPDCCP_LINK_CHANGE_MARK		6
-#define MPDCCP_LINK_CHANGE_CGSTCTRL	7
+#define MPDCCP_LINK_CHANGE_PRIO				1
+#define MPDCCP_LINK_CHANGE_MAXBUF			2
+#define MPDCCP_LINK_CHANGE_DELAY				3
+#define MPDCCP_LINK_CHANGE_LPU				4
+#define MPDCCP_LINK_CHANGE_THROTTLE			5
+#define MPDCCP_LINK_CHANGE_MARK				6
+#define MPDCCP_LINK_CHANGE_CGSTCTRL			7
+#define MPDCCP_LINK_CHANGE_PATHTYPE			8
+#define MPDCCP_LINK_CHANGE_MATCH_PATHTYPE	9
 
 /*
  * change functions, prototypes and dev_change_ inline wrappers
@@ -80,6 +82,8 @@ MPDCCP_DEV_CHANGE(mpdccp_ignthrottle,unsigned int)
 MPDCCP_DEV_CHANGE(mpdccp_match_mark,u32)
 MPDCCP_DEV_CHANGE(mpdccp_match_mask,u32)
 MPDCCP_DEV_CHANGE(mpdccp_send_mark,u32)
+MPDCCP_DEV_CHANGE(mpdccp_path_type,u32)
+MPDCCP_DEV_CHANGE(mpdccp_match_pathtype,u32)
 int mpdccp_link_change_mpdccp_cgstalg(struct mpdccp_link_info *, const char *, size_t );
 static inline int dev_change_mpdccp_cgstalg(struct net_device *dev, const char *buf, size_t len)
 {

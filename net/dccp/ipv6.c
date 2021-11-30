@@ -346,6 +346,11 @@ static int dccp_v6_conn_request(struct sock *sk, struct sk_buff *skb)
 	if (dccp_parse_options(sk, dreq, skb))
 		goto drop_and_free;
 
+	if (mpdccp_isactive(sk) > 0) {
+		if (mpdccp_conn_request(sk, dreq))
+			goto drop_and_free;
+	}
+
 	if (security_inet_conn_request(sk, skb, req))
 		goto drop_and_free;
 
@@ -1027,9 +1032,6 @@ static void dccp_v6_destroy_sock(struct sock *sk)
 
 static int inet6_dccp_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 {
-	if (mpdccp_is_meta(sock->sk)) {
-		return mpdccp_bind (sock->sk, uaddr, addr_len);
-	}
 	return inet6_bind (sock, uaddr, addr_len);
 }
 

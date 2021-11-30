@@ -4,6 +4,7 @@
  * Copyright (C) 2017 by Markus Amend, Deutsche Telekom AG
  * Copyright (C) 2020 by Nathalie Romo, Deutsche Telekom AG
  * Copyright (C) 2020 by Frank Reker, Deutsche Telekom AG
+ * Copyright (C) 2021 by Romeo Cane, Deutsche Telekom AG
  *
  * MPDCCP - DCCP bundling kernel module
  *
@@ -43,6 +44,7 @@
 #include <net/tcp_states.h>
 #include <linux/inetdevice.h>
 #include <net/mpdccp_link.h>
+#include <asm/unaligned.h>
 
 #include "mpdccp.h"
 #include "mpdccp_scheduler.h"
@@ -126,29 +128,13 @@ void mpdccp_wq_flush(void)
     flush_workqueue(mpdccp_wq);
 }
 
-static int mpdccp_accept(struct sock *sk);
-
-static int mpdccp_wq_handle_listen(struct sock *sk)
-{
-    int ret;
-    mpdccp_pr_debug("in mpdccp_wq_handle_listen");
-    /* accept connection and setup state variables */
-    ret = mpdccp_accept(sk);
-    if (ret < 0) {
-	mpdccp_pr_debug("mpdccp_accept failed with exit code %d.\n", ret);
-	return ret;
-    }
-
-    return 0;
-}
-
-
 static int mpdccp_read_from_subflow (struct sock *sk)
 {
     int peeked, sz, ret, off=0;
     struct sk_buff *skb = NULL;
     struct my_sock *my_sk = mpdccp_my_sock(sk);
     struct mpdccp_cb *mpcb = my_sk->mpcb;
+    const struct dccp_hdr *dh;
 
     if(!sk)
         return -EINVAL;
@@ -158,23 +144,41 @@ static int mpdccp_read_from_subflow (struct sock *sk)
         return 0;
 
     sz = skb->len;
+    dh = dccp_hdr(skb);
 
-    /* Forward skb to reordering engine */
-    mpcb->reorder_ops->do_reorder(mpdccp_init_rcv_buff(sk, skb, mpcb));
-
-    mpdccp_pr_debug("Read %d bytes from socket 0x%p.\n", sz, sk);
-
+    switch(dh->dccph_type) {
+        case DCCP_PKT_DATA:
+        case DCCP_PKT_DATAACK:
+            if (sz > 0) {
+                /* Forward skb to reordering engine */
+                mpcb->reorder_ops->do_reorder(mpdccp_init_rcv_buff(sk, skb, mpcb));
+                mpdccp_pr_debug("Read %d bytes from socket %p.\n", sz, sk);
+            } else {
+                mpdccp_pr_debug("Read zero-length data from socket %p, discarding\n", sk);
+                __kfree_skb(skb);
+            }
+            break;
+        case DCCP_PKT_CLOSE:
+        case DCCP_PKT_CLOSEREQ:
+            mpdccp_my_sock(sk)->closing = 1;
+            schedule_work(&mpdccp_my_sock(sk)->close_work);
+	        __kfree_skb(skb);
+            break;
+        default:
+            mpdccp_pr_debug("unhandled packet type %d from socket %p", dh->dccph_type, sk);
+            sz = -1;
+    }
     return sz;
 }
 
 int mpdccp_forward_skb(struct sk_buff *skb, struct mpdccp_cb *mpcb)
 {
 	struct sock	*meta_sk;
-
+	int ret;
 	mpdccp_pr_debug("forward packet\n");
 	if (!skb) return -EINVAL;
 	if (!mpcb || !mpcb->meta_sk) {
-		kfree_skb (skb);
+		dev_kfree_skb_any(skb);
 		return -EINVAL;
 	}
 	meta_sk = mpcb->meta_sk;
@@ -184,18 +188,19 @@ int mpdccp_forward_skb(struct sk_buff *skb, struct mpdccp_cb *mpcb)
 		/* drop packet - FIXME: differ between drop oldest and drop newest */
 		//mpdccp_pr_debug ("drop packet - queue full\n");
 		printk ("mpdccp_forward_skb: drop packet - queue full\n");
-		kfree_skb (skb);
+		dev_kfree_skb_any(skb);
 		return -ENOBUFS;
 	}
 
 	mpdccp_pr_debug ("enqueue packet\n");
-	if (unlikely(sock_queue_rcv_skb(meta_sk, skb))) {
+	ret = sock_queue_rcv_skb(meta_sk, skb);
+	if (ret < 0) {
 		/*
 		 * shouldn't happen
 		 */
-		printk(KERN_ERR "%s: sock_queue_rcv_skb failed!\n",
-		       __func__);
-		kfree_skb(skb);
+		printk(KERN_ERR "%s: sock_queue_rcv_skb failed! err %d bufsize %d\n",
+		       __func__, ret, meta_sk->sk_rcvbuf);
+		dev_kfree_skb_any(skb);
 	}
 #if 0
 	__skb_queue_tail(&meta_sk->sk_receive_queue, skb);
@@ -208,23 +213,6 @@ int mpdccp_forward_skb(struct sk_buff *skb, struct mpdccp_cb *mpcb)
 EXPORT_SYMBOL(mpdccp_forward_skb);
 
 
-/* Handle LISTEN sockets on server side */
-static void mpdccp_wq_workfn(struct work_struct *work)
-{
-    int ret;
-    struct my_sock *my_sk = container_of(work, struct my_sock,
-                           work.work);
-    struct sock *sk = my_sk->my_sk_sock;
-
-    mpdccp_pr_debug("sk %p is in LISTEN state. Accepting...\n", sk);
-    ret = mpdccp_wq_handle_listen(sk);
-    if (ret < 0) {
-        mpdccp_pr_debug("mpdccp_wq_handle_listen failed with exit code %d.\n", ret);
-    }
-
-    return;
-}
-
 /* *********************************
  * mpcb related functions
  * *********************************/
@@ -235,7 +223,7 @@ struct mpdccp_cb *mpdccp_alloc_mpcb(void)
     struct mpdccp_cb *mpcb = NULL;
 
     /* Allocate memory for mpcb */
-    mpcb = kmem_cache_zalloc(mpdccp_cb_cache, GFP_KERNEL);
+    mpcb = kmem_cache_zalloc(mpdccp_cb_cache, GFP_ATOMIC);
     if (!mpcb) {
         mpdccp_pr_debug("Failed to initialize mpcb.\n");
         return NULL;
@@ -244,6 +232,7 @@ struct mpdccp_cb *mpdccp_alloc_mpcb(void)
     /* No locking needed, as nobody can access the struct yet */
     INIT_LIST_HEAD(&mpcb->psubflow_list);
     INIT_LIST_HEAD(&mpcb->plisten_list);
+    INIT_LIST_HEAD(&mpcb->prequest_list);
     spin_lock_init(&mpcb->psubflow_list_lock);
     spin_lock_init(&mpcb->plisten_list_lock);
 
@@ -252,14 +241,20 @@ struct mpdccp_cb *mpdccp_alloc_mpcb(void)
     mpcb->dsn_local  = 0;
     mpcb->dsn_remote = 0;
 
+    /* TODO: move the two settings below to sysctl controls */
+    mpcb->mpdccp_suppkeys = MPDCCP_SUPPKEYS;
+    mpcb->mpdccp_ver = MPDCCP_VERSION_NUM;
+    mpcb->glob_lfor_seqno = GLOB_SEQNO_INIT;
+    mpcb->mp_oall_seqno = GLOB_SEQNO_INIT;
+
     mpdccp_init_path_manager(mpcb);
     mpdccp_init_scheduler(mpcb);
     mpdccp_init_reordering(mpcb);
 
-    spin_lock(&pconnection_list_lock);
+    spin_lock_bh(&pconnection_list_lock);
     list_add_tail_rcu(&mpcb->connection_list, &pconnection_list);
     mpdccp_pr_debug("Added new entry to pconnection_list @ %p\n", mpcb);
-    spin_unlock(&pconnection_list_lock);
+    spin_unlock_bh(&pconnection_list_lock);
 
     mpdccp_pr_debug("Sucessfully initialized mpcb at %p.\n", mpcb);
     
@@ -270,34 +265,59 @@ int mpdccp_destroy_mpcb(struct mpdccp_cb *mpcb)
 {
 	struct sock	*sk;
 	int		ret;
-	
+	struct list_head *pos, *temp;
+	struct my_sock *mysk;
+
 	if (!mpcb) return -EINVAL;
-	
+
 	/* Delete the mpcb from the list of MPDCCP connections */
 	spin_lock(&pconnection_list_lock);
 	list_del_rcu(&mpcb->connection_list);
 	spin_unlock(&pconnection_list_lock);
 	
 	/* close all subflows */
-	while ((sk = mpdccp_list_first_or_null_rcu(&(mpcb)->psubflow_list, struct my_sock, sk_list))
-			&& &mpdccp_my_sock((sk))->sk_list != &((mpcb)->psubflow_list)) {
-		ret = mpdccp_close_subflow (mpcb, sk);
-		if (ret < 0) {
-			mpdccp_pr_debug ("error closing subflow: %d\n", ret);
-			return ret;
+	list_for_each_safe(pos, temp, &((mpcb)->psubflow_list)) {
+		mysk = list_entry(pos, struct my_sock, sk_list);
+		if (mysk) {
+			sk = mysk->my_sk_sock;
+			ret = mpdccp_close_subflow(mpcb, sk, 1);
+			if (ret < 0) {
+				mpdccp_pr_debug ("error closing subflow: %d\n", ret);
+				return ret;
+			}
 		}
-		break;
-	}
-	while ((sk = mpdccp_list_first_or_null_rcu(&(mpcb)->plisten_list, struct my_sock, sk_list))
-			&& &mpdccp_my_sock((sk))->sk_list != &((mpcb)->plisten_list)) {
-		ret = mpdccp_close_subflow (mpcb, sk);
-		if (ret < 0) {
-			mpdccp_pr_debug ("error closing listen socket: %d\n", ret);
-			return ret;
-		}
-		break;
 	}
 
+	/* close all listening sockets */
+	list_for_each_safe(pos, temp, &((mpcb)->plisten_list)) {
+		mysk = list_entry(pos, struct my_sock, sk_list);
+		if (mysk) {
+			sk = mysk->my_sk_sock;	
+			ret = mpdccp_close_subflow(mpcb, sk, 1);
+			if (ret < 0) {
+				mpdccp_pr_debug ("error closing listen socket: %d\n", ret);
+				return ret;
+			}
+		}
+	}
+
+	/* close all request sockets */
+	list_for_each_safe(pos, temp, &((mpcb)->prequest_list)) {
+		mysk = list_entry(pos, struct my_sock, sk_list);
+		if (mysk) {
+			sk = mysk->my_sk_sock;
+			ret = mpdccp_close_subflow(mpcb, sk, 1);
+			if (ret < 0) {
+				mpdccp_pr_debug ("error closing request socket: %d\n", ret);
+				return ret;
+			}
+		}
+	}
+
+	mpdccp_cleanup_reordering(mpcb);
+	mpdccp_cleanup_scheduler(mpcb);
+	mpdccp_cleanup_path_manager(mpcb);
+   
 	/* Wait for all readers to finish before removal */
 	//TAG-0.7: synchronize_rcu() is blocking. Migrate this to void call_rcu(struct rcu_head *head, rcu_callback_t func);
 	//Do not call - we are atomic!
@@ -314,6 +334,7 @@ int mpdccp_destroy_mpcb(struct mpdccp_cb *mpcb)
  ******************************************************/
 int listen_backlog_rcv (struct sock *sk, struct sk_buff *skb);
 void listen_data_ready (struct sock *sk);
+void mp_state_change (struct sock *sk);
 
 /* TODO: Differentiate between SUBFLOW and LISTEN socket list!!!
  * Free additional structures and call sk_destruct on the socket*/
@@ -325,25 +346,21 @@ void my_sock_destruct (struct sock *sk)
     mpdccp_report_destroy (sk);
 
     /* Delete this subflow from the list of mpcb subflows */
-    if (mpcb->role == MPDCCP_SERVER) {
-       spin_lock (&mpcb->plisten_list_lock);
-       list_del_rcu (&my_sk->sk_list);
-       mpcb->cnt_listensocks--;
-       spin_unlock (&mpcb->plisten_list_lock);
-    } else {
-       spin_lock(&mpcb->psubflow_list_lock);
-       list_del_rcu(&my_sk->sk_list);
-       if (my_sk->link_info) {
-           mpdccp_link_put (my_sk->link_info);
-           my_sk->link_info = NULL;
-       }
-       mpcb->cnt_subflows--;
-       spin_unlock(&mpcb->psubflow_list_lock);
+    if (!list_empty(&my_sk->sk_list)) {
+        spin_lock(&mpcb->psubflow_list_lock);
+        list_del_rcu(&my_sk->sk_list);
+        if (my_sk->link_info) {
+            mpdccp_link_put (my_sk->link_info);
+            my_sk->link_info = NULL;
+        }
+        mpcb->cnt_subflows--;
+        spin_unlock(&mpcb->psubflow_list_lock);
     }
 
     /* Wait for all readers to finish before removal */
     //TAG-0.7: synchronize_rcu() is blocking. Migrate this to void call_rcu(struct rcu_head *head, rcu_callback_t func);
-    synchronize_rcu();
+    // atomic -> don't sync
+    // synchronize_rcu();
 
     sk->sk_user_data = NULL;
 
@@ -357,17 +374,48 @@ void my_sock_destruct (struct sock *sk)
     if(my_sk->sk_destruct)
         sk->sk_destruct         = my_sk->sk_destruct;
 
+    if(my_sk->sk_state_change)
+        sk->sk_state_change     = my_sk->sk_state_change;
+
+    if (my_sk->pcb)
+        mpdccp_free_reorder_path_cb(my_sk->pcb);
+
     kmem_cache_free(mpdccp_mysock_cache, my_sk);
 
     if (sk->sk_destruct) 
         sk->sk_destruct (sk);
+
+    module_put(THIS_MODULE);
+
+    mpdccp_pr_debug ("subflow %p removed from mpcb %p, remaining subflows: %d", sk, mpcb, mpcb->cnt_subflows);
+    if ((mpcb->cnt_subflows == 0) && (mpcb->meta_sk->sk_state != DCCP_CLOSED)) {
+        mpdccp_pr_debug ("closing meta %p\n", mpcb->meta_sk);
+        dccp_done(mpcb->meta_sk);
+    }
+}
+
+static void mpdccp_close_worker(struct work_struct *work)
+{
+    struct my_sock *my_sk;
+    struct sock *sk;
+
+    my_sk = container_of(work, struct my_sock, close_work);
+    sk = my_sk->my_sk_sock;
+
+    /* Finish the passive close stuff before final closure */
+    if ((sk->sk_state == DCCP_PASSIVE_CLOSE)
+        || (sk->sk_state == DCCP_PASSIVE_CLOSEREQ)) {
+            dccp_finish_passive_close(sk);
+    }
+
+    dccp_close(sk, 0);
 }
 
 int my_sock_init (struct sock *sk, struct mpdccp_cb *mpcb, int if_idx, enum mpdccp_role role)
 {
     struct my_sock *my_sk;
     mpdccp_pr_debug("Enter my_sock_init().\n");
-    my_sk = kmem_cache_zalloc(mpdccp_mysock_cache, GFP_KERNEL);
+    my_sk = kmem_cache_zalloc(mpdccp_mysock_cache, GFP_ATOMIC);
     if (!my_sk)
         return -ENOBUFS;
 
@@ -382,32 +430,42 @@ int my_sock_init (struct sock *sk, struct mpdccp_cb *mpcb, int if_idx, enum mpdc
     memset(my_sk->sched_priv, 0, MPDCCP_SCHED_SIZE);
 
     /* Save the original socket callbacks before rewriting */
-    if(role == MPDCCP_CLIENT || role == MPDCCP_SERVER) {
-	mpdccp_pr_debug("role client or server my_sk %p", my_sk);
-        my_sk->sk_data_ready    = sk->sk_data_ready;
-        my_sk->sk_backlog_rcv   = sk->sk_backlog_rcv;
-        my_sk->sk_destruct      = sk->sk_destruct;
-    } else if(role == MPDCCP_SERVER_SUBFLOW) {
 
-        /* The cloned socket gets the original socket callbacks
-         * from the my_sk structure, as those in sk already have
-         * been modified! */
-	mpdccp_pr_debug("role server_subflow my_sk %p sk %p sk_bk %p", my_sk, sk, my_sk->sk_backlog_rcv);
-        my_sk->sk_data_ready    = mpdccp_my_sock(sk)->sk_data_ready;
-        my_sk->sk_backlog_rcv   = mpdccp_my_sock(sk)->sk_backlog_rcv;
-        my_sk->sk_destruct      = mpdccp_my_sock(sk)->sk_destruct;
-    }
+	mpdccp_pr_debug("role %d my_sk %p", role, my_sk);
+	my_sk->sk_data_ready    = sk->sk_data_ready;
+	my_sk->sk_backlog_rcv   = sk->sk_backlog_rcv;
+	my_sk->sk_destruct      = sk->sk_destruct;
+
 
     sk->sk_data_ready       = listen_data_ready;
     sk->sk_backlog_rcv      = listen_backlog_rcv;
     sk->sk_destruct         = my_sock_destruct;
-    
+
+    if (role == MPDCCP_CLIENT) {
+        my_sk->sk_state_change  = sk->sk_state_change;
+        sk->sk_state_change     = mp_state_change;
+    }
+
+    mpdccp_pr_debug("role %d sk %p kex_done %d", role, sk, mpcb->kex_done);
+    if (!mpcb->kex_done) {
+        /* Set the kex flag for this socket if no key exchange has been done before */
+        dccp_sk(sk)->is_kex_sk = 1;
+    } else  {
+        if (role == MPDCCP_CLIENT) {
+            /* Generate local nonce */
+            get_random_bytes(&dccp_sk(sk)->mpdccp_loc_nonce, 4);
+            mpdccp_pr_debug("client: generated nonce %x\n", dccp_sk(sk)->mpdccp_loc_nonce);
+        }
+    }
+
     // Memory is already reserved in struct my_sk
     mpdccp_pr_debug("Entered my_sock_init\n");
-    INIT_DELAYED_WORK(&my_sk->work, mpdccp_wq_workfn);
 
     sk->sk_user_data        = my_sk;
 
+    INIT_WORK(&my_sk->close_work, mpdccp_close_worker);
+    /* Make sure refcount for this module is increased */
+    try_module_get(THIS_MODULE);
     return 0;
 }
 EXPORT_SYMBOL_GPL(my_sock_init);
@@ -525,6 +583,7 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 				int remaddr_len)
 {
 	int			ret = 0;
+	int 			flags;
 	struct socket   	*sock; /* The newly created socket */
 	struct sock     	*sk;
 	struct mpdccp_link_info	*link_info = NULL;
@@ -533,16 +592,19 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	if (mpcb->role != MPDCCP_CLIENT) return -EINVAL;
 	
 	/* Create a new socket */
-	ret = sock_create(PF_INET, SOCK_DCCP, IPPROTO_DCCP, &sock);
+	ret = sock_create_kern(read_pnet(&mpcb->net), PF_INET, SOCK_DCCP, IPPROTO_DCCP, &sock);
 	if (ret < 0) {
 		mpdccp_pr_debug("Failed to create socket (%d).\n", ret);
 		goto out;
 	}
 	
 	sk = sock->sk;
+
+	/* Get the service type from meta socket */
+	dccp_sk(sk)->dccps_service = dccp_sk(mpcb->meta_sk)->dccps_service;
+
 	set_mpdccp(sk, mpcb);
 	
-	refcount_inc(&sk->sk_refcnt);
 	ret = my_sock_init (sk, mpcb, if_idx, MPDCCP_CLIENT);
 	if (ret < 0) {
 		mpdccp_pr_debug("Failed to init mysock (%d).\n", ret);
@@ -551,10 +613,9 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	}
 	
 	/* Bind the socket to one of the DCCP-enabled IP addresses */
-	ret = sock->ops->bind(sock, local_address, locaddr_len);
+	ret = kernel_bind(sock, local_address, locaddr_len);
 	if (ret < 0) {
 		mpdccp_pr_debug("Failed to bind socket %p (%d).\n", sk, ret);
-		my_sock_destruct(sk);
 		sock_release(sock);
 		goto out;
 	}
@@ -570,37 +631,46 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	mpdccp_my_sock(sk)->link_info = link_info;
 	mpdccp_my_sock(sk)->link_cnt = mpdccp_link_cnt(link_info);
 	mpdccp_my_sock(sk)->link_iscpy = 0;
-	
-	
-	rcu_read_lock_bh();
-	ret = dccp_v4_connect(sk, remote_address, remaddr_len);
-	if (ret < 0) {
+
+	/* Add socket to the request list */
+	spin_lock(&mpcb->psubflow_list_lock);
+	list_add_tail_rcu(&mpdccp_my_sock(sk)->sk_list , &mpcb->prequest_list);
+	mpdccp_pr_debug("Added new entry to prequest_list @ %p\n", mpdccp_my_sock(sk));
+	spin_unlock(&mpcb->psubflow_list_lock);
+
+	/* Only the first (key exchage) socket is blocking */
+	flags = dccp_sk(sk)->is_kex_sk ? 0 : O_NONBLOCK;
+	ret = kernel_connect(sock, remote_address, remaddr_len, flags);
+	if ((ret < 0) && (ret != -EINPROGRESS)) {
 #ifdef CONFIG_IP_MPDCCP_DEBUG
 		struct sockaddr_in *their_inaddr_ptr = (struct sockaddr_in *)remote_address; 
 		mpdccp_pr_debug("Failed to connect from sk %pI4 %p (%d).\n",
 			&their_inaddr_ptr->sin_addr, sk, ret);
-			my_sock_destruct(sk);
 #endif
 		sock_release(sock);
-		rcu_read_unlock_bh();
 		goto out;
 	}
-	
-	spin_lock(&mpcb->psubflow_list_lock);
-	list_add_tail_rcu(&mpdccp_my_sock(sk)->sk_list , &mpcb->psubflow_list);
-	mpdccp_pr_debug("Added new entry sk %p to psubflow_list @ %p\n", sk, mpdccp_my_sock(sk));
-	spin_unlock(&mpcb->psubflow_list_lock);
-	
-	mpcb->cnt_subflows      = (mpcb->cnt_subflows) + 1;
-	rcu_read_unlock_bh();
 
-	if (mpcb->sched_ops->init_subflow)
-		mpcb->sched_ops->init_subflow (sk);
+	if (dccp_sk(sk)->is_kex_sk && mpcb->kex_done) {
+		u32 token;
 
-	mpdccp_report_new_subflow (sk);
+		/* MP_KEY sockets can be authorized now. MP_JOIN sockets need to wait one more more ack */
+		dccp_sk(sk)->auth_done = 1;
 
-	mpdccp_pr_debug("client connection established successfully. There are %d subflows now.\n",
-			mpcb->cnt_subflows);
+		/* Reset the flag to avoid inserting MP_KEY options in subsenquent ACKs */
+		dccp_sk(sk)->is_kex_sk = 0;
+
+		/* Key exchange is now completed, generate the path tokens */
+		mpdccp_key_sha1(*(u64 *)mpcb->mpdccp_loc_key.value, *(u64 *)mpcb->mpdccp_rem_key.value, &token);
+		mpcb->mpdccp_loc_token = token;
+		mpdccp_key_sha1(*(u64 *)mpcb->mpdccp_rem_key.value, *(u64 *)mpcb->mpdccp_loc_key.value, &token);
+		mpcb->mpdccp_rem_token = token;
+		mpdccp_pr_debug("client: kex done lt: %x rt: %x", mpcb->mpdccp_loc_token, mpcb->mpdccp_rem_token);
+
+		/* Update the state and MSS of meta socket */
+		dccp_sk(mpcb->meta_sk)->dccps_mss_cache = dccp_sk(sk)->dccps_mss_cache;
+		mpcb->meta_sk->sk_state = DCCP_OPEN;
+	}
 
 out:
 	if (link_info && ret != 0) mpdccp_link_put (link_info);
@@ -632,7 +702,6 @@ int mpdccp_add_listen_sock (	struct mpdccp_cb *mpcb,
 
     sk = sock->sk;
     set_mpdccp(sk, mpcb);
-    refcount_inc(&sk->sk_refcnt);
 
     mpdccp_pr_debug ("init mysock\n");
     retval = my_sock_init (sk, mpcb, if_idx, MPDCCP_SERVER);
@@ -647,7 +716,6 @@ int mpdccp_add_listen_sock (	struct mpdccp_cb *mpcb,
     retval = sock->ops->bind(sock, local_address, locaddr_len);
     if (retval < 0) {
         mpdccp_pr_debug("Failed to bind socket %p (%d).\n", sk, retval);
-        my_sock_destruct(sk);
         sock_release(sock);
         goto out;
     }
@@ -670,7 +738,6 @@ int mpdccp_add_listen_sock (	struct mpdccp_cb *mpcb,
     retval = sock->ops->listen(sock, MPDCCP_SERVER_BACKLOG);
     if (retval < 0) {
         mpdccp_pr_debug("Failed to listen on socket(%d).\n", retval);
-    		my_sock_destruct(sk);
         sock_release(sock);
         rcu_read_unlock_bh();
         goto out;
@@ -692,16 +759,18 @@ out:
 }
 EXPORT_SYMBOL (mpdccp_add_listen_sock);
 
-int mpdccp_close_subflow (struct mpdccp_cb *mpcb, struct sock *sk)
+int mpdccp_close_subflow (struct mpdccp_cb *mpcb, struct sock *sk, int destroy)
 {
-	if (!mpcb || !sk) return -EINVAL;
-	/* guard dccp_close in if, to avoid loop call which would result in an deadlock */
-	if(sk->sk_state == DCCP_OPEN || sk->sk_state == DCCP_PARTOPEN || sk->sk_state == DCCP_LISTEN)
-	{
-		mpdccp_pr_debug("Close socket(%p)", sk);
-		dccp_close(sk, 0);
-	}
-	return 0;
+    if (!mpcb || !sk) return -EINVAL;
+    mpdccp_pr_debug("enter for %p role %s state %d closing %d", sk, dccp_role(sk), sk->sk_state, mpdccp_my_sock(sk)->closing);
+
+    /* This will call dccp_close() in process context (only once per socket) */
+    if (!mpdccp_my_sock(sk)->closing) {
+        mpdccp_my_sock(sk)->closing = 1;
+        mpdccp_pr_debug("Close socket(%p)", sk);
+        schedule_work(&mpdccp_my_sock(sk)->close_work);
+    }
+    return 0;
 }
 EXPORT_SYMBOL (mpdccp_close_subflow);
 
@@ -713,7 +782,7 @@ void mpdccp_handle_rem_addr(u32 del_path)
         mpdccp_for_each_conn(pconnection_list, mpcb) {
             mpdccp_for_each_sk(mpcb, sk) {
                 if(dccp_sk(sk)->id_rcv == del_path){
-                mpdccp_close_subflow(mpcb, sk);
+                mpdccp_close_subflow(mpcb, sk, 0);
                 mpdccp_pr_debug("delete path %u sk %p", del_path, sk);
                 }
             }
@@ -767,8 +836,13 @@ mpdccp_xmit_to_sk (
 	mpcb = get_mpcb (sk);
 	meta_sk = mpcb ? mpcb->meta_sk : NULL;
 
-	rcu_read_lock ();
-	lock_sock(sk);
+	// TODO: check why was necessary
+	//rcu_read_lock ();
+	if(in_atomic())
+		bh_lock_sock(sk);
+	else
+		lock_sock(sk);
+
 	if (dccp_qpolicy_full(sk)) {
 		ret = -EAGAIN;
 		goto out_release;
@@ -795,239 +869,14 @@ mpdccp_xmit_to_sk (
 	mpdccp_pr_debug("packet with %d bytes sent\n", len);
 
 out_release:
-	release_sock(sk);
-	rcu_read_unlock();
+	if(in_atomic())
+		bh_unlock_sock(sk);
+	else
+		release_sock(sk);
+	//rcu_read_unlock();
 	return ret;
 }
 EXPORT_SYMBOL_GPL(mpdccp_xmit_to_sk);
-
-/******************************************************
- * Server functionality
- ******************************************************/
-
-// TAG-0.7: Proper locking, possibly REMOVE
-
-/*
- * This will accept the next outstanding connection.
- * Needs to be called with the socket lock held.
- * Manipulated to work without locking the socket. Nonblocking sockets only.
- */
-struct sock *inet_csk_accept_nolock(struct sock *sk, int flags, int *err)
-{
-    struct inet_connection_sock *icsk = inet_csk(sk);
-    struct request_sock_queue *queue = &icsk->icsk_accept_queue;
-    struct request_sock *req;
-    struct dccp_request_sock *dreq;
-    struct sock *newsk;
-    int error;
-    struct link_user_data	*link_ud;
-
-    mpdccp_pr_debug("Entered inet_csk_accept_nolock().\n");
-
-    /* We need to make sure that this socket is listening,
-     * and that it has something pending.
-     */
-    error = -EINVAL;
-    if (sk->sk_state != TCP_LISTEN)
-        goto out_err;
-
-    /* Find already established connection.
-     * For now, blocking sockets are not supported (make 
-     * inet_csk_wait_for_connect() available globally to enable) 
-     */
-    if (reqsk_queue_empty(queue)) {
-        mpdccp_pr_debug("reqsk_queue_empty(queue).\n");
-        error = -EAGAIN;
-        goto out_err;
-
-    }
-    req = reqsk_queue_remove(queue, sk);
-    newsk = req->sk;
-    dreq = dccp_rsk(req);
-    /* HACK: put link_info *temporary* in sk_user_data */
-    link_ud = kmalloc (sizeof (struct link_user_data), GFP_KERNEL);
-    if (link_ud) {
-	link_ud->magic = LINK_UD_MAGIC;
-    	link_ud->link_info = dreq->link_info;
-	link_ud->user_data = newsk->sk_user_data;
-        newsk->sk_user_data = link_ud;
-	dreq->link_info = NULL;
-    } else {
-	if (dreq->link_info) {
-	    mpdccp_link_put (dreq->link_info);
-	    dreq->link_info = NULL;
-	}
-    }
-
-    if (sk->sk_protocol == IPPROTO_TCP &&
-        tcp_rsk(req)->tfo_listener) {
-
-        spin_lock_bh(&queue->fastopenq.lock);
-        if (tcp_rsk(req)->tfo_listener) {
-            /* We are still waiting for the final ACK from 3WHS
-             * so can't free req now. Instead, we set req->sk to
-             * NULL to signify that the child socket is taken
-             * so reqsk_fastopen_remove() will free the req
-             * when 3WHS finishes (or is aborted).
-             */
-            req->sk = NULL;
-            req = NULL;
-        }
-        spin_unlock_bh(&queue->fastopenq.lock);
-    }
-out:
-    mpdccp_pr_debug("Leaving func. Error is %d, req is %p, newsk is %p.\n", error, req, newsk);
-
-    if (req)
-        reqsk_put(req);
-
-    return newsk;
-out_err:
-    newsk = NULL;
-    req = NULL;
-    *err = error;
-    goto out;
-}
-EXPORT_SYMBOL(inet_csk_accept_nolock);
-
-/*
- * Accept a pending connection. The TCP layer now gives BSD semantics.
- * Manipulated to work without locking the socket.
- */
-int inet_accept_nolock(struct socket *sock, struct socket *newsock, int flags)
-{
-    struct sock *sk1 = sock->sk;
-    int err = -EINVAL;
-    struct sock *sk2;
-
-    mpdccp_pr_debug("Entered inet_accept_nolock(). Trying sk1->sk_prot->accept...\n");
-    sk2 = inet_csk_accept_nolock(sk1, flags, &err);
-
-    if (!sk2){
-        mpdccp_pr_debug("sk2 is NULL\n");
-        goto do_err;
-    }
-
-    sock_rps_record_flow(sk2);
-    WARN_ON(!((1 << sk2->sk_state) &
-          (TCPF_ESTABLISHED | TCPF_SYN_RECV |
-          TCPF_CLOSE_WAIT | TCPF_CLOSE)));
-
-    sock_graft(sk2, newsock);
-
-    mpdccp_pr_debug("sk2/newsock is connected now.\n");
-    newsock->state = SS_CONNECTED;
-    err = 0;
-do_err:
-    mpdccp_pr_debug("Leaving func (%d).\n", err);
-    return err;
-}
-EXPORT_SYMBOL(inet_accept_nolock);
-
-/*  Manipulated to work without locking the socket.*/
-int kernel_accept_nolock(struct socket *sock, struct socket **newsock, int flags)
-{
-    struct sock *sk = sock->sk;
-    int err;
-
-    mpdccp_pr_debug("Executing sock_create_lite @socket.c:3217.\n");
-    err = sock_create_lite(sk->sk_family, sk->sk_type, sk->sk_protocol,
-                   newsock);
-    if (err < 0)
-        goto done;
-
-    mpdccp_pr_debug("Executing sock->ops->accept @socket.c:3223.\n");
-    err = inet_accept_nolock(sock, *newsock, flags);
-    if (err < 0) {
-        mpdccp_pr_debug("inet_accept returned error %d.\n", err);
-        sock_release(*newsock);
-        *newsock = NULL;
-        goto done;
-    }
-
-    mpdccp_pr_debug("Executing __module_get @socket.c:3223.\n");
-    (*newsock)->ops = sock->ops;
-    __module_get((*newsock)->ops->owner);
-
-done:
-    return err;
-}
-EXPORT_SYMBOL(kernel_accept_nolock);
-
-static int mpdccp_accept(struct sock *sk)
-{
-    int ret;
-    struct sock     *newsk;
-    struct socket   *newsock, *sock = sk->sk_socket;
-    struct my_sock  *my_sk = mpdccp_my_sock(sk);
-    struct mpdccp_cb    *mpcb = my_sk->mpcb;
-    struct mpdccp_link_info	*link_info = NULL;
-    struct link_user_data	*link_ud;
-    //u32 path_id;
-    //struct dccp_sock *dp_newsk;
-
-    mpdccp_pr_debug("Accepting connection...\n");
-    ret = kernel_accept_nolock(sock, &newsock, O_NONBLOCK);
-    if (ret < 0) {
-        mpdccp_pr_debug("kernel_accept_nolock failed with exit code %d.\n", ret);
-        return ret;
-    }
-
-    mpdccp_pr_debug("Accept successful.\n");
-
-    newsk = newsock->sk;
-    /* HACK: get out link_info struct */
-    link_ud = (struct link_user_data*)newsk->sk_user_data;
-    if (link_ud && link_ud->magic == LINK_UD_MAGIC) {
-	link_info = link_ud->link_info;
-	newsk->sk_user_data = link_ud->user_data;
-	kfree (link_ud);
-    } else if (link_ud) {
-	link_info = mpdccp_my_sock(newsk)->link_info;
-	mpdccp_link_get (link_info);
-    }
-
-    // TODO: do we really need to increase sk_refcnt here?
-    //atomic_inc(&newsk->sk_refcnt);
-    refcount_inc(&newsk->sk_refcnt);
-    set_mpdccp (newsk, mpcb);
-
-    mpcb->cnt_subflows = (mpcb->cnt_subflows) + 1;
-
-    mpdccp_pr_debug("mysock original: %p, mysock new: %p\n", mpdccp_my_sock(sk), mpdccp_my_sock(newsk));
-    ret = my_sock_init(newsk, mpcb, mpdccp_my_sock(sk)->if_idx, MPDCCP_SERVER_SUBFLOW);
-    if (ret < 0) {
-        mpdccp_pr_debug("my_sock_init for sk %p failed with exit code %d.\n", sk, ret);
-        return ret;
-    }
-    if (link_info) {
-    	mpdccp_my_sock(newsk)->link_info = link_info;
-    } else {
-	mpdccp_my_sock(newsk)->link_info = mpdccp_my_sock(sk)->link_info;
-	mpdccp_link_get (mpdccp_my_sock(newsk)->link_info);
-    }
-    if (!mpdccp_my_sock(newsk)->link_info) {
-	mpdccp_my_sock(newsk)->link_info = mpdccp_getfallbacklink (read_pnet(&sk->sk_net));
-    }
-    mpdccp_my_sock(newsk)->link_cnt = mpdccp_link_cnt(mpdccp_my_sock(newsk)->link_info);
-    mpdccp_my_sock(newsk)->link_iscpy = 0;
-
-    spin_lock(&mpcb->psubflow_list_lock);
-    list_add_tail_rcu(&mpdccp_my_sock(newsk)->sk_list , &mpcb->psubflow_list);
-    mpdccp_pr_debug("Added new entry to psubflow_list @ %p\n", mpdccp_my_sock(sk));
-    spin_unlock(&mpcb->psubflow_list_lock);
-
-	if (mpcb->sched_ops->init_subflow)
-    		mpcb->sched_ops->init_subflow (newsk);
-
-    mpdccp_pr_debug("Connection accepted. There are %d subflows now sk. %p\n",
-                    mpcb->cnt_subflows, sk);
-    //path_id = mpdccp_my_sock(newsk)->link_info->id_rcv;
-    //mpdccp_pr_debug("subflow socket %p path_id %d",
-    //                newsk, path_id);
-
-    return 0;
-}
 
 /* Process listen state by calling original backlog_rcv callback
  * and accept the connection */
@@ -1063,33 +912,25 @@ int listen_backlog_rcv (struct sock *sk, struct sk_buff *skb)
 void listen_data_ready (struct sock *sk)
 {
     int ret;
-#if 0
-    struct my_sock *my_sk   = mpdccp_my_sock(sk);
 
-    //mpdccp_pr_debug("Executing data_ready callback for sk %p.\n", sk);
-    if (my_sk->sk_data_ready)
-        my_sk->sk_data_ready (sk);
-#endif
+    // Client side setup is not handled by this callback, use original workflow
+    if (sk->sk_state == DCCP_REQUESTING) {
+        struct my_sock *my_sk = mpdccp_my_sock(sk);
+        if (my_sk->sk_data_ready)
+            my_sk->sk_data_ready (sk);
 
-    // Client side setup is not handled by this callback
-    if (sk->sk_state == DCCP_REQUESTING)
         return;
+    }
 
     /* If the socket is not listening, it does not belong to a server. */
     if (sk->sk_state == DCCP_LISTEN) {
-        mpdccp_pr_debug("sk %p is in LISTEN state. Accepting...\n", sk);
-
-        ret = mpdccp_wq_handle_listen(sk);
-         if (ret < 0) {
-             mpdccp_pr_debug("mpdccp_wq_handle_listen failed with exit code %d.\n", ret);
-         }
-        //ret = queue_bnd_work(sk);
-        //if(ret < 0)
-        //    mpdccp_pr_debug("Failed to queue work (%d).\n", ret);
+        mpdccp_pr_debug("sk %p is in LISTEN state, not handled\n", sk);
+         return;
 
     } 
 
-    if(sk->sk_state == DCCP_OPEN) {
+    if ((sk->sk_state == DCCP_OPEN)
+        || (sk->sk_state == DCCP_PARTOPEN)) {
         //mpdccp_pr_debug("sk %p is in OPEN state. Reading...\n", sk);
 
         ret = mpdccp_read_from_subflow (sk);
@@ -1107,11 +948,78 @@ void listen_data_ready (struct sock *sk)
     return;
 }
 
+void mp_state_change(struct sock *sk)
+{
+    struct mpdccp_cb *mpcb;
+    struct sock *subsk;
+    mpdccp_pr_debug("enter sk %p role %s is_kex %d\n", sk, dccp_role(sk), dccp_sk(sk)->is_kex_sk);
+
+    mpcb = MPDCCP_CB(sk);
+
+    /* First (i.e. key exchange) subflow is ready at PARTOPEN state, the others need to wait to reach full OPEN due to extra ack */
+    if ((sk->sk_state == DCCP_PARTOPEN && dccp_sk(sk)->is_kex_sk)
+        || (sk->sk_state == DCCP_OPEN && !dccp_sk(sk)->is_kex_sk)) {
+
+        /* Check if the subflow was already added */
+        spin_lock(&mpcb->psubflow_list_lock);
+        mpdccp_for_each_sk(mpcb, subsk) {
+            if (sk == subsk) {
+                mpdccp_pr_debug("sk %p already in subflow_list, skipping\n", sk);
+                spin_unlock(&mpcb->psubflow_list_lock);
+                goto out;
+            }
+        }
+
+        /* Move socket from the request to the subflow list */
+        list_move_tail(&mpdccp_my_sock(sk)->sk_list, &mpcb->psubflow_list);
+        mpdccp_pr_debug("Added new entry sk %p to psubflow_list @ %p\n", sk, mpdccp_my_sock(sk));
+        spin_unlock(&mpcb->psubflow_list_lock);
+
+        mpcb->cnt_subflows = (mpcb->cnt_subflows) + 1;
+
+        if (mpcb->sched_ops->init_subflow)
+            mpcb->sched_ops->init_subflow(sk);
+
+        mpdccp_report_new_subflow(sk);
+        mpdccp_pr_debug("client connection established successfully. There are %d subflows now.\n", mpcb->cnt_subflows);
+    }
+
+out:
+    return;
+}
+
+/* Based on mptcp_key_sha1@mptcp_ctrl.c */
+/* modified to hash two keys */
+void mpdccp_key_sha1(u64 key1, u64 key2, u32 *token)
+{
+    u32 workspace[SHA_WORKSPACE_WORDS];
+    u32 mptcp_hashed_key[SHA_DIGEST_WORDS];
+    u8 input[64];
+
+    memset(workspace, 0, sizeof(workspace));
+
+    /* Initialize input with appropriate padding */
+    memset(&input[17], 0, sizeof(input) - 18); /* -18, because the last byte
+                                               * is explicitly set too
+                                               */
+    memcpy(input, &key1, sizeof(key1)); /* Copy key1 to the msg beginning */
+    memcpy(input+8, &key2, sizeof(key2)); /* Append key2 */
+    input[16] = 0x80; /* Padding: First bit after message = 1 */
+    input[63] = 0x80; /* Padding: Length of the message = 128 bits */
+
+    sha_init(mptcp_hashed_key);
+    sha_transform(mptcp_hashed_key, input, workspace);
+
+    if (token)
+        *token = mptcp_hashed_key[0];
+}
+EXPORT_SYMBOL(mpdccp_key_sha1);
 
 /* General initialization of MPDCCP */
 int mpdccp_ctrl_init(void)
 {
     INIT_LIST_HEAD(&pconnection_list);
+    spin_lock_init(&pconnection_list_lock);
 
     mpdccp_mysock_cache = kmem_cache_create("mpdccp_mysock", sizeof(struct my_sock),
                        0, SLAB_TYPESAFE_BY_RCU|SLAB_HWCACHE_ALIGN,

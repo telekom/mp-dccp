@@ -3,6 +3,7 @@
  * Copyright (C) 2017 by Andreas Philipp Matz, Deutsche Telekom AG
  * Copyright (C) 2017 by Markus Amend, Deutsche Telekom AG
  * Copyright (C) 2020 by Frank Reker, Deutsche Telekom AG
+ * Copyright (C) 2021 by Romeo Cane, Deutsche Telekom AG
  *
  * MPDCCP - DCCP bundling kernel module
  *
@@ -128,15 +129,15 @@ static void mpdccp_unregister(void)
 	mpdccp_pm_finish();
 	mpdccp_reordering_finish();
 	mpdccp_ctrl_finish();
+	mpdccp_deinit_funcs ();
 }
 
 module_init(mpdccp_register);
 module_exit(mpdccp_unregister);
 
 MODULE_AUTHOR("Andreas Ph. Matz");
-MODULE_AUTHOR("Markus Amend");
 MODULE_AUTHOR("Frank Reker");
-
+MODULE_AUTHOR("Romeo Cane");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Multipath DCCP");
 MODULE_VERSION(MPDCCP_VERSION);

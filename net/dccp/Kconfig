@@ -92,7 +92,7 @@ source net/dccp/scheduler/Kconfig
 source net/dccp/reordering/Kconfig
 
 
-config MPTCP_STATS
+config MPDCCP_STATS
 	bool "MPDCCP Statistics"
 	depends on IP_MPDCCP
 	---help---

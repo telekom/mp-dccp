@@ -61,7 +61,7 @@ int dccp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 
 	if (usin->sin_family != AF_INET)
 		return -EAFNOSUPPORT;
-	if (mpdccp_is_meta(sk)) {
+	if (mpdccp_isactive(sk) > 0) {
 		return mpdccp_connect (sk, uaddr, addr_len);
 	}
 
@@ -558,6 +558,16 @@ out:
 
 static void dccp_v4_reqsk_destructor(struct request_sock *req)
 {
+	struct dccp_request_sock *dreq;
+	dreq = dccp_rsk(req);
+
+	/* Release meta socket reference when request id destroyed */
+	if (dreq->meta_sk) {
+		dccp_pr_debug("releasing meta socket %p from request\n", dreq->meta_sk);
+		sock_put(dreq->meta_sk);
+		dreq->meta_sk = NULL;
+	}
+
 	dccp_feat_list_purge(&dccp_rsk(req)->dreq_featneg);
 	kfree(rcu_dereference_protected(inet_rsk(req)->ireq_opt, 1));
 }
@@ -615,6 +625,11 @@ int dccp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	dreq = dccp_rsk(req);
 	if (dccp_parse_options(sk, dreq, skb))
 		goto drop_and_free;
+
+	if (mpdccp_isactive(sk) > 0) {
+		if (mpdccp_conn_request(sk, dreq))
+			goto drop_and_free;
+	}
 
 	if (security_inet_conn_request(sk, skb, req))
 		goto drop_and_free;
@@ -949,9 +964,6 @@ static int dccp_v4_init_sock(struct sock *sk)
 
 static int inet_dccp_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 {
-	if (sock && mpdccp_is_meta(sock->sk)) {
-		return mpdccp_bind (sock->sk, uaddr, addr_len);
-	}
 	return inet_bind (sock, uaddr, addr_len);
 }
 

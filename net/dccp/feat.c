@@ -1568,3 +1568,4 @@ activation_failed:
 	dp->dccps_hc_rx_ackvec = NULL;
 	return -1;
 }
+EXPORT_SYMBOL(dccp_feat_activate_values);

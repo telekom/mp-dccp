@@ -155,6 +155,13 @@ MLATTR_RW(mpdccp_ignthrottle,fmt_uint,unsigned int)
 MLATTR_RW(mpdccp_match_mark,fmt_u32,u32)
 MLATTR_RW(mpdccp_match_mask,fmt_u32,u32)
 MLATTR_RW(mpdccp_send_mark,fmt_u32,u32)
+MLATTR_RW(mpdccp_path_type,fmt_u32,u32)
+MLATTR_RW(mpdccp_match_pathtype,fmt_u32,u32)
+MLATTR_RO(mpdccp_rx_packets,fmt_u64)
+MLATTR_RO(mpdccp_rx_bytes,fmt_u64)
+MLATTR_RO(mpdccp_tx_packets,fmt_u64)
+MLATTR_RO(mpdccp_tx_bytes,fmt_u64)
+
 
 static
 int
@@ -253,6 +260,12 @@ static struct attribute *mpdccp_link_sys_attrs[] = {
 	&mpdccp_match_mask_attribute.attr,
 	&mpdccp_send_mark_attribute.attr,
 	&mpdccp_cgstalg_attribute.attr,
+	&mpdccp_path_type_attribute.attr,
+	&mpdccp_match_pathtype_attribute.attr,
+	&mpdccp_rx_packets_attribute.attr,
+	&mpdccp_rx_bytes_attribute.attr,
+	&mpdccp_tx_packets_attribute.attr,
+	&mpdccp_tx_bytes_attribute.attr,
 	NULL,
 };
 
@@ -512,6 +525,8 @@ mpdccp_link_sysfs_del (
 		sysfs_remove_link (&ld->name, link->name);
 	}
 	link->sysfs_to_del = 0;
+
+	kobject_put (&link->kobj);
 }
 
 
@@ -553,17 +568,21 @@ int
 mpdccp_link_sysfs_netinit (
 	struct mpdccp_link_net_data	*ld)
 {
-	int	ret;
+	int	ret, ret2=0;
 
 	if (!ld) return -EINVAL;
   	ret = kobject_init_and_add (&ld->dev, &linkdev_kobj_ktype, mpdccp_link_sys_base_kobj, "dev");
-	if (ret < 0) return ret;
+	if (ret < 0) {
+		printk ("mpdccp_link::netinit: error creatind \"dev\" dir: %d\n", ret);
+		ret2 = ret;
+	}
   	ret = kobject_init_and_add (&ld->name, &linkname_kobj_ktype, mpdccp_link_sys_base_kobj, "name");
 	if (ret < 0) {
-		kobject_put (&ld->dev);
-		return ret;
+		//kobject_put (&ld->dev);
+		printk ("mpdccp_link::netinit: error creatind \"name\" dir: %d\n", ret);
+		ret2 = ret;
 	}
-	return 0;
+	return ret2;
 }
 
 void

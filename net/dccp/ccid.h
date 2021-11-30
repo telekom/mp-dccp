@@ -268,24 +268,27 @@ static inline int ccid_hc_tx_getsockopt(struct ccid *ccid, struct sock *sk,
 
 /* functions to get delay by natha :)*/
 
+/**
+ * Obtain SRTT value form CCID2 TX sock.
+ * NOTE: value is divided by 8 to match MRTT
+ */
 static inline u32 srtt_as_delayn(struct sock *sk, struct tcp_info *info){
     //dccp_pr_debug("srtt value : %u", info->tcpi_rtt);
     if(dccp_sk(sk)->dccps_hc_tx_ccid != NULL) { 
     	ccid_hc_tx_get_info(dccp_sk(sk)->dccps_hc_tx_ccid, sk, info);
-    	return info->tcpi_rtt; }
+    	return jiffies_to_msecs(info->tcpi_rtt >> 8); }
     else { return 0; }
 }
 
 /**
  * Obtain MRTT value form CCID2 TX sock.
- * NOTE: value is scaled by 8 to match SRTT
  */
 static inline u32 mrtt_as_delayn(struct sock *sk, struct tcp_info *info){
     //dccp_pr_debug("mrtt value : %u", info->tcpi_rttvar);
-    
+
     if(dccp_sk(sk)->dccps_hc_tx_ccid != NULL) { 
     	ccid_hc_tx_get_info(dccp_sk(sk)->dccps_hc_tx_ccid, sk, info);
-    	return (info->tcpi_rttvar * 8); }
+    	return jiffies_to_msecs(info->tcpi_rttvar); }
     else{ return 0; }
 }
 

@@ -239,6 +239,38 @@ enum dccp_packet_dequeueing_policy {
 	DCCPQ_POLICY_DROP_NEWEST,
 	DCCPQ_POLICY_MAX
 };
+/* for #ifdef's */
+#define DCCPQ_POLICY_DROP_OLDEST DCCPQ_POLICY_DROP_OLDEST
+#define DCCPQ_POLICY_DROP_NEWEST DCCPQ_POLICY_DROP_NEWEST
+
+
+
+/* Authentication data */
+#define MPDCCP_PLAIN_KEY_SIZE 8
+#define MPDCCP_C25519_KEY_SIZE 32
+#define MPDCCP_MAX_KEY_SIZE MPDCCP_C25519_KEY_SIZE
+#define MPDCCP_MAX_KEYS 2
+#define MPDCCP_HMAC_SIZE 20
+
+/* MPDCCP key types */
+enum mpdccp_key_type {
+	DCCPK_PLAIN = 0,
+	DCCPK_C25519_SHA256 = 1,
+	DCCPK_C25519_SHA512 = 2,
+	DCCPK_RESERVED  = 255,
+};
+
+enum {
+	DCCPKF_PLAIN = (1 << DCCPK_PLAIN),
+	DCCPKF_C25519_SHA256 = (1 << DCCPK_C25519_SHA256),
+	DCCPKF_C25519_SHA512 = (1 << DCCPK_C25519_SHA512),
+};
+
+struct mpdccp_key {
+	enum mpdccp_key_type type;
+	int size;
+	__u8 value[MPDCCP_MAX_KEY_SIZE];
+};
 
 /* DCCP socket options */
 #define DCCP_SOCKOPT_PACKET_SIZE	1 /* XXX deprecated, without effect */
