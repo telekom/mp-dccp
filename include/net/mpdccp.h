@@ -23,6 +23,10 @@
 #include <linux/dccp.h>
 #include <net/mpdccp_meta.h>
 
+/* List of supported version(s) (in ascending order of preference) */
+static u8 mpdccp_supported_versions[] __attribute__((unused)) = {
+	MPDCCP_VERS_0 << 4
+};
 
 struct sockaddr;
 struct sk_buff;
@@ -41,7 +45,6 @@ struct mpdccp_funcs {
 	int (*connect) (struct sock*, const struct sockaddr*, int addrlen);
 	int (*write_xmit) (struct sock*);
 	int (*xmit_skb) (struct sock*, struct sk_buff*);
-	int (*set_subflow_report) (struct sock*, void (*)(int, struct sock*, struct sock*, struct mpdccp_link_info*, int));
 	int (*activate) (struct sock*, int);
 	int (*isactive) (const struct sock*);
 	int (*conn_request) (struct sock *sk, struct dccp_request_sock *dreq);
@@ -80,6 +83,13 @@ static inline int mpdccp_is_meta (const struct sock *sk)
 #else
 	return 0;
 #endif
+}
+
+static inline bool mpdccp_is_validkey(struct mpdccp_key *key)
+{
+	return (key && (((key->type == DCCPK_PLAIN) && (key->size == MPDCCP_PLAIN_KEY_SIZE))
+			|| ((key->type == DCCPK_C25519_SHA256) && (key->size == MPDCCP_C25519_KEY_SIZE))
+			|| ((key->type == DCCPK_C25519_SHA512) && (key->size == MPDCCP_C25519_KEY_SIZE))));
 }
 
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
@@ -164,15 +174,27 @@ static inline int mpdccp_xmit_skb (struct sock *sk, struct sk_buff *skb)
 #endif
 }
 
-static inline int mpdccp_set_subflow_report (struct sock *sk, void (*callback)(int, struct sock*, struct sock*, struct mpdccp_link_info*, int))
-{
+
+#define MPDCCP_SUBFLOW_NOTIFIER
+struct mpdccp_subflow_notifier {
+	struct mpdccp_link_info	*link;
+	struct sock		*sk;
+	struct sock		*subsk;
+	int			role;
+};
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
-	MPDCCP_CHECK_SKFUNC(sk,set_subflow_report);
-	return mpdccp_funcs.set_subflow_report (sk, callback);
+int register_mpdccp_subflow_notifier (struct notifier_block *nb);
+int unregister_mpdccp_subflow_notifier (struct notifier_block *nb);
 #else
+static inline int register_mpdccp_subflow_notifier (struct notifier_block *nb)
+{
 	return 0;
-#endif
 }
+static inline int unregister_mpdccp_subflow_notifier (struct notifier_block *nb)
+{
+	return 0;
+}
+#endif
 
 
 static inline int mpdccp_activate (struct sock *sk, int on)

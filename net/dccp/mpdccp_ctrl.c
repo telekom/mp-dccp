@@ -45,11 +45,13 @@
 #include <linux/inetdevice.h>
 #include <net/mpdccp_link.h>
 #include <asm/unaligned.h>
+#include <crypto/hash.h>
 
 #include "mpdccp.h"
 #include "mpdccp_scheduler.h"
 #include "mpdccp_reordering.h"
 #include "mpdccp_pm.h"
+#include "feat.h"
 
 /*
  * TODO GLOBAL
@@ -86,6 +88,10 @@ static struct kmem_cache *mpdccp_mysock_cache __read_mostly;
 /* Work queue for all reading and writing to/from the socket. */
 struct workqueue_struct *mpdccp_wq;
 EXPORT_SYMBOL(mpdccp_wq);
+
+/* Crypto contexts for hashing */
+struct crypto_shash *tfm_hash;
+struct crypto_shash *tfm_hmac;
 
 /*********************************************************
  * Work queue functions
@@ -161,7 +167,7 @@ static int mpdccp_read_from_subflow (struct sock *sk)
         case DCCP_PKT_CLOSE:
         case DCCP_PKT_CLOSEREQ:
             mpdccp_my_sock(sk)->closing = 1;
-            schedule_work(&mpdccp_my_sock(sk)->close_work);
+            schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, 0);
 	        __kfree_skb(skb);
             break;
         default:
@@ -219,7 +225,7 @@ EXPORT_SYMBOL(mpdccp_forward_skb);
 
 struct mpdccp_cb *mpdccp_alloc_mpcb(void)
 {
-    //int i;
+    int i;
     struct mpdccp_cb *mpcb = NULL;
 
     /* Allocate memory for mpcb */
@@ -243,9 +249,15 @@ struct mpdccp_cb *mpdccp_alloc_mpcb(void)
 
     /* TODO: move the two settings below to sysctl controls */
     mpcb->mpdccp_suppkeys = MPDCCP_SUPPKEYS;
-    mpcb->mpdccp_ver = MPDCCP_VERSION_NUM;
     mpcb->glob_lfor_seqno = GLOB_SEQNO_INIT;
     mpcb->mp_oall_seqno = GLOB_SEQNO_INIT;
+    for (i=0; i < MPDCCP_MAX_KEYS; i++) {
+        mpcb->mpdccp_loc_keys[i].type = DCCPK_INVALID;
+        mpcb->mpdccp_loc_keys[i].size = 0;
+    }
+    mpcb->mpdccp_rem_key.type  = DCCPK_INVALID;
+    mpcb->mpdccp_rem_key.size  = 0;
+    mpcb->cur_key_idx = 0;
 
     mpdccp_init_path_manager(mpcb);
     mpdccp_init_scheduler(mpcb);
@@ -273,6 +285,7 @@ int mpdccp_destroy_mpcb(struct mpdccp_cb *mpcb)
 	/* Delete the mpcb from the list of MPDCCP connections */
 	spin_lock(&pconnection_list_lock);
 	list_del_rcu(&mpcb->connection_list);
+	INIT_LIST_HEAD(&mpcb->connection_list);
 	spin_unlock(&pconnection_list_lock);
 	
 	/* close all subflows */
@@ -306,10 +319,13 @@ int mpdccp_destroy_mpcb(struct mpdccp_cb *mpcb)
 		mysk = list_entry(pos, struct my_sock, sk_list);
 		if (mysk) {
 			sk = mysk->my_sk_sock;
-			ret = mpdccp_close_subflow(mpcb, sk, 1);
-			if (ret < 0) {
-				mpdccp_pr_debug ("error closing request socket: %d\n", ret);
-				return ret;
+			/* Only force close on the sockets in REQUESTING state */
+			if (sk->sk_state == DCCP_REQUESTING) {
+				ret = mpdccp_close_subflow(mpcb, sk, 1);
+				if (ret < 0) {
+					mpdccp_pr_debug ("error closing request socket: %d\n", ret);
+					return ret;
+				}
 			}
 		}
 	}
@@ -341,83 +357,154 @@ void mp_state_change (struct sock *sk);
 void my_sock_destruct (struct sock *sk)
 {
     struct my_sock   *my_sk = mpdccp_my_sock(sk);
-    struct mpdccp_cb *mpcb  = my_sk->mpcb;
+    struct mpdccp_cb *mpcb = NULL;
 
     mpdccp_report_destroy (sk);
-
-    /* Delete this subflow from the list of mpcb subflows */
-    if (!list_empty(&my_sk->sk_list)) {
-        spin_lock(&mpcb->psubflow_list_lock);
-        list_del_rcu(&my_sk->sk_list);
-        if (my_sk->link_info) {
-            mpdccp_link_put (my_sk->link_info);
-            my_sk->link_info = NULL;
+    if (my_sk) {
+        mpcb = my_sk->mpcb;
+        if (mpcb) {
+            struct my_sock *pos, *temp;
+            int found = 0;
+            /* Delete this subflow from the list of mpcb subflows */
+            spin_lock(&mpcb->psubflow_list_lock);
+            list_for_each_entry_safe(pos, temp, &((mpcb)->psubflow_list), sk_list) {
+                if (my_sk == pos) {
+                    sk = my_sk->my_sk_sock;
+                    list_del_rcu(&my_sk->sk_list);
+                    INIT_LIST_HEAD(&my_sk->sk_list);
+                    if (my_sk->link_info) {
+                        mpdccp_link_put (my_sk->link_info);
+                        my_sk->link_info = NULL;
+                    }
+                    mpcb->cnt_subflows--;
+                    found = 1;
+                    break;
+                }
+            }
+            /* If not found in mpcb subflows, it might be in the request list */
+            if (!found) {
+                list_for_each_entry_safe(pos, temp, &((mpcb)->prequest_list), sk_list) {
+                    if (my_sk == pos) {
+                        sk = my_sk->my_sk_sock;
+                        list_del_rcu(&my_sk->sk_list);
+                        INIT_LIST_HEAD(&my_sk->sk_list);
+                        if (my_sk->link_info) {
+                            mpdccp_link_put (my_sk->link_info);
+                            my_sk->link_info = NULL;
+                        }
+                        break;
+                    }
+                }
+            }
+            spin_unlock(&mpcb->psubflow_list_lock);
         }
-        mpcb->cnt_subflows--;
-        spin_unlock(&mpcb->psubflow_list_lock);
+        /* Wait for all readers to finish before removal */
+        //TAG-0.7: synchronize_rcu() is blocking. Migrate this to void call_rcu(struct rcu_head *head, rcu_callback_t func);
+        // atomic -> don't sync
+        // synchronize_rcu();
+
+        sk->sk_user_data = NULL;
+
+        /* Restore old function pointers */
+        if(my_sk->sk_data_ready)
+            sk->sk_data_ready       = my_sk->sk_data_ready;
+
+        if(my_sk->sk_backlog_rcv)
+            sk->sk_backlog_rcv      = my_sk->sk_backlog_rcv;
+
+        if(my_sk->sk_destruct)
+            sk->sk_destruct         = my_sk->sk_destruct;
+
+        if(my_sk->sk_state_change)
+            sk->sk_state_change     = my_sk->sk_state_change;
+
+        if(my_sk->sk_write_space)
+            sk->sk_write_space      = my_sk->sk_write_space;
+
+        if (my_sk->pcb)
+            mpdccp_free_reorder_path_cb(my_sk->pcb);
+
+        kmem_cache_free(mpdccp_mysock_cache, my_sk);
+
+        if (sk->sk_destruct) 
+            sk->sk_destruct (sk);
+
+        mpdccp_pr_debug ("subflow %p removed from mpcb %p, remaining subflows: %d", sk, mpcb, mpcb ? mpcb->cnt_subflows : -1);
+        if (mpcb && (mpcb->cnt_subflows == 0) && (mpcb->meta_sk->sk_state != DCCP_CLOSED)) {
+            mpdccp_pr_debug ("closing meta %p\n", mpcb->meta_sk);
+            dccp_done(mpcb->meta_sk);
+        }
     }
-
-    /* Wait for all readers to finish before removal */
-    //TAG-0.7: synchronize_rcu() is blocking. Migrate this to void call_rcu(struct rcu_head *head, rcu_callback_t func);
-    // atomic -> don't sync
-    // synchronize_rcu();
-
-    sk->sk_user_data = NULL;
-
-    /* Restore old function pointers */
-    if(my_sk->sk_data_ready)
-        sk->sk_data_ready       = my_sk->sk_data_ready;
-
-    if(my_sk->sk_backlog_rcv)
-        sk->sk_backlog_rcv      = my_sk->sk_backlog_rcv;
-
-    if(my_sk->sk_destruct)
-        sk->sk_destruct         = my_sk->sk_destruct;
-
-    if(my_sk->sk_state_change)
-        sk->sk_state_change     = my_sk->sk_state_change;
-
-    if (my_sk->pcb)
-        mpdccp_free_reorder_path_cb(my_sk->pcb);
-
-    kmem_cache_free(mpdccp_mysock_cache, my_sk);
-
-    if (sk->sk_destruct) 
-        sk->sk_destruct (sk);
 
     module_put(THIS_MODULE);
-
-    mpdccp_pr_debug ("subflow %p removed from mpcb %p, remaining subflows: %d", sk, mpcb, mpcb->cnt_subflows);
-    if ((mpcb->cnt_subflows == 0) && (mpcb->meta_sk->sk_state != DCCP_CLOSED)) {
-        mpdccp_pr_debug ("closing meta %p\n", mpcb->meta_sk);
-        dccp_done(mpcb->meta_sk);
-    }
 }
 
 static void mpdccp_close_worker(struct work_struct *work)
 {
     struct my_sock *my_sk;
     struct sock *sk;
-
-    my_sk = container_of(work, struct my_sock, close_work);
+    struct socket_wq *wq;
+    my_sk = container_of(work, struct my_sock, close_work.work);
     sk = my_sk->my_sk_sock;
 
     /* Finish the passive close stuff before final closure */
     if ((sk->sk_state == DCCP_PASSIVE_CLOSE)
         || (sk->sk_state == DCCP_PASSIVE_CLOSEREQ)) {
+
+            if (dccp_sk(sk)->dccps_role == DCCP_ROLE_CLIENT) {
+                /* Wipe any ACK retranmission queue */
+                inet_csk_clear_xmit_timer(sk, ICSK_TIME_RETRANS);
+                if (sk->sk_send_head != NULL) {
+                    kfree_skb(sk->sk_send_head);
+                    sk->sk_send_head = NULL;
+                }
+            }
             dccp_finish_passive_close(sk);
     }
 
-    dccp_close(sk, 0);
+    rcu_read_lock();
+    wq = rcu_dereference(sk->sk_wq);
+    rcu_read_unlock();
+
+    /* Try again later if the wq is not empty, otherwise dccp_close will invalidate it causing a crash */
+    if (skwq_has_sleeper(wq))
+        schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, msecs_to_jiffies(200));
+    else
+        dccp_close(sk, 0);
+}
+
+void subflow_write_space(struct sock *sk)
+{
+    struct my_sock *my_sk = (struct my_sock *)sk->sk_user_data;
+    struct mpdccp_cb *mpcb  = my_sk ? my_sk->mpcb : NULL;
+
+    /* Avoid waking any sleeper if the state is not OPEN or CLOSED */
+    if (my_sk && ((sk->sk_state == DCCP_OPEN || sk->sk_state == DCCP_CLOSED) || (mpcb && mpcb->fallback_sp)))
+        my_sk->sk_write_space(sk);
 }
 
 int my_sock_init (struct sock *sk, struct mpdccp_cb *mpcb, int if_idx, enum mpdccp_role role)
 {
     struct my_sock *my_sk;
+    int ret = 0;
     mpdccp_pr_debug("Enter my_sock_init().\n");
+
+    if (role == MPDCCP_CLIENT) {
+        ret = dccp_feat_register_sp(sk, DCCPF_MULTIPATH, 0,
+                                    mpdccp_supported_versions,
+                                    ARRAY_SIZE(mpdccp_supported_versions));
+        if (ret < 0 ) {
+            sk->sk_user_data = NULL;
+            goto out;
+        }
+    }
+
     my_sk = kmem_cache_zalloc(mpdccp_mysock_cache, GFP_ATOMIC);
-    if (!my_sk)
-        return -ENOBUFS;
+    if (!my_sk) {
+        mpdccp_pr_debug("no mem for my_sk\n");
+        ret = -ENOBUFS;
+        goto out;
+    }
 
     /* No locking needed, as readers do not yet have access to the structure */
     INIT_LIST_HEAD(&my_sk->sk_list);
@@ -431,25 +518,43 @@ int my_sock_init (struct sock *sk, struct mpdccp_cb *mpcb, int if_idx, enum mpdc
 
     /* Save the original socket callbacks before rewriting */
 
-	mpdccp_pr_debug("role %d my_sk %p", role, my_sk);
-	my_sk->sk_data_ready    = sk->sk_data_ready;
-	my_sk->sk_backlog_rcv   = sk->sk_backlog_rcv;
-	my_sk->sk_destruct      = sk->sk_destruct;
-
+    mpdccp_pr_debug("role %d my_sk %p", role, my_sk);
+    my_sk->sk_data_ready    = sk->sk_data_ready;
+    my_sk->sk_backlog_rcv   = sk->sk_backlog_rcv;
+    my_sk->sk_destruct      = sk->sk_destruct;
 
     sk->sk_data_ready       = listen_data_ready;
     sk->sk_backlog_rcv      = listen_backlog_rcv;
     sk->sk_destruct         = my_sock_destruct;
+    sk->sk_user_data        = my_sk;
 
     if (role == MPDCCP_CLIENT) {
         my_sk->sk_state_change  = sk->sk_state_change;
         sk->sk_state_change     = mp_state_change;
+
+        my_sk->sk_write_space   = sk->sk_write_space;
+        sk->sk_write_space      = subflow_write_space;
     }
 
     mpdccp_pr_debug("role %d sk %p kex_done %d", role, sk, mpcb->kex_done);
     if (!mpcb->kex_done) {
         /* Set the kex flag for this socket if no key exchange has been done before */
         dccp_sk(sk)->is_kex_sk = 1;
+
+        if (role == MPDCCP_CLIENT || role == MPDCCP_SERVER) {
+            int i;
+            u8 supp_keys = MPDCCP_SUPPKEYS;
+            /* Generate local keys for each supported type */
+            for (i=0; supp_keys && (i < MPDCCP_MAX_KEYS); i++) {
+                u32 keytype = ffs(supp_keys) - 1;
+                ret = mpdccp_generate_key(&mpcb->mpdccp_loc_keys[i], keytype);
+                if (ret) {
+                    mpdccp_pr_debug("error generating key type %d\n", keytype);
+                    break;
+                }
+                supp_keys &= ~(1 << keytype);
+            }
+        }
     } else  {
         if (role == MPDCCP_CLIENT) {
             /* Generate local nonce */
@@ -461,12 +566,11 @@ int my_sock_init (struct sock *sk, struct mpdccp_cb *mpcb, int if_idx, enum mpdc
     // Memory is already reserved in struct my_sk
     mpdccp_pr_debug("Entered my_sock_init\n");
 
-    sk->sk_user_data        = my_sk;
-
-    INIT_WORK(&my_sk->close_work, mpdccp_close_worker);
+    INIT_DELAYED_WORK(&my_sk->close_work, mpdccp_close_worker);
     /* Make sure refcount for this module is increased */
     try_module_get(THIS_MODULE);
-    return 0;
+out:
+    return ret;
 }
 EXPORT_SYMBOL_GPL(my_sock_init);
 
@@ -582,7 +686,7 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 				struct sockaddr *remote_address,
 				int remaddr_len)
 {
-	int			ret = 0;
+	int			ret = 0, isbh;
 	int 			flags;
 	struct socket   	*sock; /* The newly created socket */
 	struct sock     	*sk;
@@ -633,15 +737,24 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	mpdccp_my_sock(sk)->link_iscpy = 0;
 
 	/* Add socket to the request list */
-	spin_lock(&mpcb->psubflow_list_lock);
+	if (in_atomic()) {
+		spin_lock_bh(&mpcb->psubflow_list_lock);
+		isbh = 1;
+	} else {
+		spin_lock(&mpcb->psubflow_list_lock);
+		isbh = 0;
+	}
 	list_add_tail_rcu(&mpdccp_my_sock(sk)->sk_list , &mpcb->prequest_list);
 	mpdccp_pr_debug("Added new entry to prequest_list @ %p\n", mpdccp_my_sock(sk));
-	spin_unlock(&mpcb->psubflow_list_lock);
+	if (isbh) {
+		spin_unlock_bh(&mpcb->psubflow_list_lock);
+	} else {
+		spin_unlock(&mpcb->psubflow_list_lock);
+	}
 
 	/* Only the first (key exchage) socket is blocking */
 	flags = dccp_sk(sk)->is_kex_sk ? 0 : O_NONBLOCK;
-	/* HACK: reduce retry timeout to 200ms for join sessions*/
-	if (!dccp_sk(sk)->is_kex_sk) inet_csk(sk)->icsk_rto = ((unsigned int)HZ/5);
+
 	ret = kernel_connect(sock, remote_address, remaddr_len, flags);
 	if ((ret < 0) && (ret != -EINPROGRESS)) {
 #ifdef CONFIG_IP_MPDCCP_DEBUG
@@ -654,6 +767,8 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	}
 
 	if (dccp_sk(sk)->is_kex_sk && mpcb->kex_done) {
+		struct inet_sock *inet_meta = inet_sk(mpcb->meta_sk);
+		struct inet_sock *inet_sub = inet_sk(sk);
 		u32 token;
 
 		/* MP_KEY sockets can be authorized now. MP_JOIN sockets need to wait one more more ack */
@@ -662,18 +777,51 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 		/* Reset the flag to avoid inserting MP_KEY options in subsenquent ACKs */
 		dccp_sk(sk)->is_kex_sk = 0;
 
-		/* Key exchange is now completed, generate the path tokens */
-		mpdccp_key_sha1(*(u64 *)mpcb->mpdccp_loc_key.value, *(u64 *)mpcb->mpdccp_rem_key.value, &token);
+		/* Create local token */
+		ret = mpdccp_hash_key(mpcb->dkeyA, mpcb->dkeylen, &token);
+		if (ret) {
+			mpdccp_pr_debug("error hashing dkeyA, err %d", ret);
+			sock_release(sock);
+			goto out;
+		}
 		mpcb->mpdccp_loc_token = token;
-		mpdccp_key_sha1(*(u64 *)mpcb->mpdccp_rem_key.value, *(u64 *)mpcb->mpdccp_loc_key.value, &token);
+
+		/* Create remote token */
+		ret = mpdccp_hash_key(mpcb->dkeyB, mpcb->dkeylen, &token);
+		if (ret) {
+			mpdccp_pr_debug("error hashing dkeyB, err %d", ret);
+			sock_release(sock);
+			goto out;
+		}
 		mpcb->mpdccp_rem_token = token;
 		mpdccp_pr_debug("client: kex done lt: %x rt: %x", mpcb->mpdccp_loc_token, mpcb->mpdccp_rem_token);
 
 		/* Update the state and MSS of meta socket */
 		dccp_sk(mpcb->meta_sk)->dccps_mss_cache = dccp_sk(sk)->dccps_mss_cache;
 		mpcb->meta_sk->sk_state = DCCP_OPEN;
+
+		/* Update meta socket inet data with info from subflow */
+		inet_meta->inet_sport = inet_sub->inet_sport;
+		inet_meta->inet_dport = inet_sub->inet_dport;
+		inet_meta->inet_saddr = inet_sub->inet_saddr;
+		inet_meta->inet_daddr = inet_sub->inet_daddr;
 	}
 
+	if (mpcb->fallback_sp) {
+		struct inet_sock *inet_meta = inet_sk(mpcb->meta_sk);
+		struct inet_sock *inet_sub = inet_sk(sk);
+
+		/* Update the state and MSS of meta socket */
+		dccp_sk(mpcb->meta_sk)->dccps_mss_cache = dccp_sk(sk)->dccps_mss_cache;
+		mpcb->meta_sk->sk_state = DCCP_OPEN;
+		dccp_sk(sk)->is_kex_sk = 0;
+
+		/* Update meta socket inet data with info from subflow */
+		inet_meta->inet_sport = inet_sub->inet_sport;
+		inet_meta->inet_dport = inet_sub->inet_dport;
+		inet_meta->inet_saddr = inet_sub->inet_saddr;
+		inet_meta->inet_daddr = inet_sub->inet_daddr;
+	}
 out:
 	if (link_info && ret != 0) mpdccp_link_put (link_info);
 	return ret;
@@ -685,7 +833,7 @@ int mpdccp_add_listen_sock (	struct mpdccp_cb *mpcb,
 				int locaddr_len,
 				int if_idx)
 {
-    int                 retval	= 0;
+    int                 retval	= 0, isbh;
     struct socket   	*sock; /* The newly created socket */
     struct sock     	*sk;
     struct mpdccp_link_info	*link_info = NULL;
@@ -745,11 +893,21 @@ int mpdccp_add_listen_sock (	struct mpdccp_cb *mpcb,
         goto out;
     }
 
-    spin_lock(&mpcb->plisten_list_lock);
+    if (in_atomic()) {
+       spin_lock_bh(&mpcb->plisten_list_lock);
+	isbh = 1;
+    } else {
+       spin_lock(&mpcb->plisten_list_lock);
+	isbh = 0;
+    }
     list_add_tail_rcu(&mpdccp_my_sock(sk)->sk_list , &mpcb->plisten_list);
     mpcb->cnt_listensocks++;
     mpdccp_pr_debug("Added new entry to plisten_list @ %p\n", mpdccp_my_sock(sk));
-    spin_unlock(&mpcb->plisten_list_lock);
+    if (isbh) {
+       spin_unlock_bh(&mpcb->plisten_list_lock);
+    } else {
+       spin_unlock(&mpcb->plisten_list_lock);
+    }
     rcu_read_unlock_bh();
 
     mpdccp_pr_debug("server port added successfully. There are %d subflows now.\n",
@@ -763,14 +921,14 @@ EXPORT_SYMBOL (mpdccp_add_listen_sock);
 
 int mpdccp_close_subflow (struct mpdccp_cb *mpcb, struct sock *sk, int destroy)
 {
-    if (!mpcb || !sk) return -EINVAL;
+    if (!mpcb || !sk || !mpdccp_my_sock(sk)) return -EINVAL;
     mpdccp_pr_debug("enter for %p role %s state %d closing %d", sk, dccp_role(sk), sk->sk_state, mpdccp_my_sock(sk)->closing);
 
     /* This will call dccp_close() in process context (only once per socket) */
     if (!mpdccp_my_sock(sk)->closing) {
         mpdccp_my_sock(sk)->closing = 1;
         mpdccp_pr_debug("Close socket(%p)", sk);
-        schedule_work(&mpdccp_my_sock(sk)->close_work);
+        schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, 0);
     }
     return 0;
 }
@@ -823,7 +981,7 @@ mpdccp_xmit_to_sk (
 	struct sock	*sk,
 	struct sk_buff	*skb)
 {
-	int			len, ret=0;
+	int			len, ret=0, isbh;
 	long 			timeo;
 	struct mpdccp_cb	*mpcb;
 	struct sock		*meta_sk;
@@ -840,10 +998,13 @@ mpdccp_xmit_to_sk (
 
 	// TODO: check why was necessary
 	//rcu_read_lock ();
-	if(in_atomic())
+	if(in_atomic()) {
 		bh_lock_sock(sk);
-	else
+		isbh = 1;
+	} else {
 		lock_sock(sk);
+		isbh = 0;
+	}
 
 	if (dccp_qpolicy_full(sk)) {
 		ret = -EAGAIN;
@@ -871,7 +1032,7 @@ mpdccp_xmit_to_sk (
 	mpdccp_pr_debug("packet with %d bytes sent\n", len);
 
 out_release:
-	if(in_atomic())
+	if(isbh)
 		bh_unlock_sock(sk);
 	else
 		release_sock(sk);
@@ -958,16 +1119,15 @@ void mp_state_change(struct sock *sk)
 
     mpcb = MPDCCP_CB(sk);
 
-    /* First (i.e. key exchange) subflow is ready at PARTOPEN state, the others need to wait to reach full OPEN due to extra ack */
-    if ((sk->sk_state == DCCP_PARTOPEN && dccp_sk(sk)->is_kex_sk)
-        || (sk->sk_state == DCCP_OPEN && !dccp_sk(sk)->is_kex_sk)) {
-
+    if (sk->sk_state == DCCP_OPEN || (sk->sk_state == DCCP_PARTOPEN && mpcb && mpcb->fallback_sp)) {
         /* Check if the subflow was already added */
         spin_lock(&mpcb->psubflow_list_lock);
         mpdccp_for_each_sk(mpcb, subsk) {
             if (sk == subsk) {
                 mpdccp_pr_debug("sk %p already in subflow_list, skipping\n", sk);
                 spin_unlock(&mpcb->psubflow_list_lock);
+		/* nevertheless report it */
+        	mpdccp_report_new_subflow(sk);
                 goto out;
             }
         }
@@ -990,32 +1150,44 @@ out:
     return;
 }
 
-/* Based on mptcp_key_sha1@mptcp_ctrl.c */
-/* modified to hash two keys */
-void mpdccp_key_sha1(u64 key1, u64 key2, u32 *token)
+int mpdccp_hash_key(const u8 *key, u8 keylen, u32 *token)
 {
-    u32 workspace[SHA_WORKSPACE_WORDS];
-    u32 mptcp_hashed_key[SHA_DIGEST_WORDS];
-    u8 input[64];
+        SHASH_DESC_ON_STACK(desc, tfm_hash);
+        int ret;
+        u32 buf[8];
 
-    memset(workspace, 0, sizeof(workspace));
+        desc->tfm = tfm_hash;
+        desc->flags = 0;
+        ret = crypto_shash_digest(desc, key, keylen, (u8*)buf);
 
-    /* Initialize input with appropriate padding */
-    memset(&input[17], 0, sizeof(input) - 18); /* -18, because the last byte
-                                               * is explicitly set too
-                                               */
-    memcpy(input, &key1, sizeof(key1)); /* Copy key1 to the msg beginning */
-    memcpy(input+8, &key2, sizeof(key2)); /* Append key2 */
-    input[16] = 0x80; /* Padding: First bit after message = 1 */
-    input[63] = 0x80; /* Padding: Length of the message = 128 bits */
+        if (token)
+            *token = buf[0];
 
-    sha_init(mptcp_hashed_key);
-    sha_transform(mptcp_hashed_key, input, workspace);
-
-    if (token)
-        *token = mptcp_hashed_key[0];
+        return ret;
 }
-EXPORT_SYMBOL(mpdccp_key_sha1);
+EXPORT_SYMBOL(mpdccp_hash_key);
+
+int mpdccp_generate_key(struct mpdccp_key *key, int key_type)
+{
+	switch (key_type) {
+		case DCCPK_PLAIN:
+			key->type = key_type;
+			key->size = MPDCCP_PLAIN_KEY_SIZE;
+			get_random_bytes(&key->value, MPDCCP_PLAIN_KEY_SIZE);
+			break;
+		case DCCPK_C25519_SHA256:
+		case DCCPK_C25519_SHA512:
+			/* TODO: add support */
+		default:
+			key->size = 0;
+			key->type = DCCPK_INVALID;
+			mpdccp_pr_debug("cannot generate key of type %d", key_type);
+			return -1;
+	}
+	mpdccp_pr_debug("generated key %llx type %d", be64_to_cpu(*((__be64 *)key->value)), key->type);
+	return 0;
+}
+EXPORT_SYMBOL(mpdccp_generate_key);
 
 /* General initialization of MPDCCP */
 int mpdccp_ctrl_init(void)
@@ -1051,6 +1223,21 @@ int mpdccp_ctrl_init(void)
     	kmem_cache_destroy(mpdccp_cb_cache);
 	return -1;
     }
+
+    /* Allocate crypto contexts */
+    tfm_hash = crypto_alloc_shash("sha256", 0, 0);
+    if (IS_ERR(tfm_hash)) {
+        mpdccp_pr_debug("Failed to alloc tfm_hash, err %ld\n", PTR_ERR(tfm_hash));
+        return -1;
+    }
+
+    tfm_hmac = crypto_alloc_shash("hmac(sha256)", 0, 0);
+    if (IS_ERR(tfm_hmac)) {
+        mpdccp_pr_debug("Failed to alloc tfm_hmac, err %ld\n", PTR_ERR(tfm_hmac));
+        crypto_free_shash(tfm_hash);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -1061,6 +1248,12 @@ void mpdccp_ctrl_finish(void)
         destroy_workqueue(mpdccp_wq);
         mpdccp_wq = NULL;
     }
+
+    if (tfm_hash)
+        crypto_free_shash(tfm_hash);
+
+    if (tfm_hmac)
+        crypto_free_shash(tfm_hmac);
 
     kmem_cache_destroy(mpdccp_mysock_cache);
     kmem_cache_destroy(mpdccp_cb_cache);
@@ -1074,3 +1267,27 @@ void mpdccp_ctrl_finish(void)
 #endif
 }
 
+int mpdccp_hmac_sha256(const u8 *key, u8 keylen, const u8 *msg, u8 msglen, u8 *output)
+{
+        SHASH_DESC_ON_STACK(desc, tfm_hmac);
+        u8 buf[32];
+        int ret;
+
+        ret = crypto_shash_setkey(tfm_hmac, key, keylen);
+        if (ret) {
+            mpdccp_pr_debug("Failed crypto_shash_setkey, err %d", ret);
+            return -1;
+        }
+
+        desc->tfm = tfm_hmac;
+        desc->flags = 0;
+
+        ret = crypto_shash_digest(desc, msg, msglen, buf);
+        if (ret) {
+            mpdccp_pr_debug("Failed crypto_shash_digest, err %d", ret);
+            return -1;
+        }
+        memcpy(output, buf, MPDCCP_HMAC_SIZE);
+
+        return 0;
+}

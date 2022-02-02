@@ -26,6 +26,9 @@
 #include <linux/slab.h>
 #include "ccid.h"
 #include "feat.h"
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+#include "mpdccp.h"
+#endif
 
 /* feature-specific sysctls - initialised to the defaults from RFC 4340, 6.4 */
 unsigned long	sysctl_dccp_sequence_window __read_mostly = 100;
@@ -166,7 +169,7 @@ static const struct {
 	{ DCCPF_MIN_CSUM_COVER,  FEAT_AT_RX, FEAT_SP, 0,   dccp_hdlr_min_cscov},
 	{ DCCPF_DATA_CHECKSUM,	 FEAT_AT_RX, FEAT_SP, 0,   NULL },
 	{ DCCPF_SEND_LEV_RATE,	 FEAT_AT_RX, FEAT_SP, 0,   NULL },
-	{ DCCPF_MULTIPATH,	 FEAT_AT_TX, FEAT_NN, 1,   NULL },
+	{ DCCPF_MULTIPATH,	 FEAT_AT_TX, FEAT_SP, MPDCCP_VERS_UNDEFINED << 4, NULL },
 };
 #define DCCP_FEAT_SUPPORTED_MAX		ARRAY_SIZE(dccp_feat_table)
 
@@ -177,7 +180,7 @@ static const struct {
 static int dccp_feat_index(u8 feat_num)
 {
 	/* The first 9 entries are occupied by the types from RFC 4340, 6.4 */
-	if (feat_num > DCCPF_RESERVED && feat_num <= DCCPF_DATA_CHECKSUM)
+	if (feat_num > DCCPF_RESERVED && feat_num <= DCCPF_MULTIPATH)
 		return feat_num - 1;
 
 	/*
@@ -230,7 +233,7 @@ static const char *dccp_feat_fname(const u8 feat)
 		[DCCPF_DATA_CHECKSUM]	= "Send Data Checksum",
 		[DCCPF_MULTIPATH]	= "MPDCCP Capable",
 	};
-	if (feat > DCCPF_DATA_CHECKSUM && feat < DCCPF_MIN_CCID_SPECIFIC)
+	if (feat > DCCPF_MULTIPATH && feat < DCCPF_MIN_CCID_SPECIFIC)
 		return feature_names[DCCPF_RESERVED];
 
 	if (feat ==  DCCPF_SEND_LEV_RATE)
@@ -614,6 +617,8 @@ static u8 dccp_feat_is_valid_sp_val(u8 feat_num, u8 val)
 		return val < 2;
 	case DCCPF_MIN_CSUM_COVER:
 		return val < 16;
+	case DCCPF_MULTIPATH:
+		return ((val >> 4) < MPDCCP_VERS_MAX);
 	}
 	return 0;			/* feature unknown */
 }
@@ -763,6 +768,7 @@ int dccp_feat_register_sp(struct sock *sk, u8 feat, u8 is_local,
 	return __feat_register_sp(&dccp_sk(sk)->dccps_featneg, feat, is_local,
 				  0, list, len);
 }
+EXPORT_SYMBOL_GPL(dccp_feat_register_sp);
 
 /**
  * dccp_feat_nn_get  -  Query current/pending value of NN feature
@@ -1290,6 +1296,46 @@ confirmation_failed:
 			    : DCCP_RESET_CODE_OPTION_ERROR;
 }
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+static u8 dccp_mpcap_change_recv(struct dccp_request_sock *dreq, struct list_head *fn,
+									u8 opt, u8 *val, u8 len)
+{
+	u8 ret;
+	ret = dccp_feat_change_recv(fn, 0, opt, DCCPF_MULTIPATH , val, len, 1);
+	if (dreq) {
+		if (!ret) {
+			struct dccp_feat_entry *entry = dccp_feat_list_lookup(fn, DCCPF_MULTIPATH, 1);
+			if (entry && entry->val.sp.len) {
+				dreq->multipath_ver = entry->val.sp.vec[0] >> 4;
+				dccp_pr_debug("success MP version reconciliation with client: %d\n", dreq->multipath_ver);
+			}
+		} else if (ret == DCCP_RESET_CODE_OPTION_ERROR) {
+			dccp_pr_debug("failed MP version reconciliation with client, send empty confirmation\n");
+			ret = dccp_push_empty_confirm(fn, DCCPF_MULTIPATH, 1);
+		}
+	}
+	return ret;
+}
+
+static u8 dccp_mpcap_confirm_recv(struct sock *sk, struct list_head *fn,
+									u8 opt, u8 *val, u8 len)
+{
+
+	u8 ret;
+	ret = dccp_feat_confirm_recv(fn, 0, opt, DCCPF_MULTIPATH, val , len, 0);
+	if (!ret) {
+			struct dccp_feat_entry *entry = dccp_feat_list_lookup(fn, DCCPF_MULTIPATH, 0);
+			if (entry && entry->val.sp.len) {
+				dccp_sk(sk)->multipath_ver = entry->val.sp.vec[0] >> 4;
+				dccp_pr_debug("confirmed MP version with server: %d\n", dccp_sk(sk)->multipath_ver);
+			} else {
+				dccp_pr_debug("failed MP version negotiation with server\n");
+			}
+	}
+	return ret;
+}
+#endif
+
 /**
  * dccp_feat_handle_nn_established  -  Fast-path reception of NN options
  * @sk:		socket of an established DCCP connection
@@ -1414,12 +1460,22 @@ int dccp_feat_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 		switch (opt) {
 		case DCCPO_CHANGE_L:
 		case DCCPO_CHANGE_R:
-			return dccp_feat_change_recv(fn, mandatory, opt, feat,
-						     val, len, server);
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+			if (is_mpdccp(sk) && server && (feat == DCCPF_MULTIPATH))
+				return dccp_mpcap_change_recv(dreq, fn, opt, val, len);
+			else
+#endif
+				return dccp_feat_change_recv(fn, mandatory, opt, feat,
+										     val, len, server);
 		case DCCPO_CONFIRM_R:
 		case DCCPO_CONFIRM_L:
-			return dccp_feat_confirm_recv(fn, mandatory, opt, feat,
-						      val, len, server);
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+			if (is_mpdccp(sk) && !server && (feat == DCCPF_MULTIPATH))
+				return dccp_mpcap_confirm_recv(sk, fn, opt, val, len);
+			else
+#endif
+				return dccp_feat_confirm_recv(fn, mandatory, opt, feat,
+										      val, len, server);
 		}
 		break;
 	/*

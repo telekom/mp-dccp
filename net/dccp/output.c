@@ -18,13 +18,16 @@
 
 #include <net/inet_sock.h>
 #include <net/sock.h>
-#include <net/mpdccp.h>
-#include <net/mpdccp_meta.h>
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+#  include <net/mpdccp.h>
+#  include <net/mpdccp_meta.h>
+#endif
 
 #include "ackvec.h"
 #include "ccid.h"
 #include "dccp.h"
 #include "output.h"
+#include "feat.h"
 
 static inline void dccp_event_ack_sent(struct sock *sk)
 {
@@ -358,12 +361,14 @@ void dccp_write_xmit(struct sock *sk)
 	struct sk_buff *skb;
 	int		rc;
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	if (mpdccp_is_meta (sk)) {
 		rc = mpdccp_write_xmit (sk);
 		if (rc < 0)
 			dccp_pr_debug("error in mpdccp_write_xmit: %d", rc);
 		return;
 	}
+#endif
 	while ((skb = dccp_qpolicy_top(sk))) {
 		rc = ccid_hc_tx_send_packet(dp->dccps_hc_tx_ccid, sk, skb);
 
@@ -443,7 +448,8 @@ struct sk_buff *dccp_make_response(const struct sock *sk, struct dst_entry *dst,
 	if (dccp_insert_options_rsk(dreq, skb))
 		goto response_failed;
 
-	if (mpdccp_isactive(sk) > 0) {
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	if ((mpdccp_isactive(sk) > 0) && dreq && (dreq->multipath_ver != MPDCCP_VERS_UNDEFINED)) {
 		if (dreq->meta_sk && dreq->meta_sk->sk_state != DCCP_OPEN) {
 			dccp_pr_debug("meta socket %p not in OPEN state during response\n", dreq->meta_sk);
 			goto response_failed;
@@ -451,6 +457,7 @@ struct sk_buff *dccp_make_response(const struct sock *sk, struct dst_entry *dst,
 		if (dccp_insert_options_rsk_mp(sk, dreq, skb))
 			goto response_failed;
 	}
+#endif
 
 	/* Build and checksum header */
 	dh = dccp_zeroed_hdr(skb, dccp_header_size);
@@ -622,6 +629,38 @@ void dccp_send_ack(struct sock *sk)
 }
 
 EXPORT_SYMBOL_GPL(dccp_send_ack);
+
+void dccp_send_ack_entail(struct sock *sk)
+{
+	struct sk_buff *skb;
+
+	/* If we have been reset, we may not send again. */
+	if (sk->sk_state != DCCP_CLOSED) {
+		skb = alloc_skb(sk->sk_prot->max_header, GFP_ATOMIC);
+
+		if (skb == NULL) {
+			inet_csk_schedule_ack(sk);
+			inet_csk(sk)->icsk_ack.ato = TCP_ATO_MIN;
+			inet_csk_reset_xmit_timer(sk, ICSK_TIME_DACK,
+						  TCP_DELACK_MAX,
+						  DCCP_RTO_MAX);
+			return;
+		}
+
+		/* Reserve space for headers */
+		skb_reserve(skb, sk->sk_prot->max_header);
+		DCCP_SKB_CB(skb)->dccpd_type = DCCP_PKT_ACK;
+
+
+		skb = dccp_skb_entail(sk, skb);
+		inet_csk_reset_xmit_timer(sk, ICSK_TIME_RETRANS,
+					  DCCP_TIMEOUT_INIT, DCCP_RTO_MAX);
+
+		dccp_transmit_skb(sk, skb);
+	}
+}
+
+EXPORT_SYMBOL_GPL(dccp_send_ack_entail);
 
 #if IS_ENABLED(CONFIG_DCCP_KEEPALIVE)
 void dccp_send_keepalive(struct sock *sk)

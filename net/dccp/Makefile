@@ -34,12 +34,12 @@ dccp_probe-y := probe.o
 # mpdccp needs at least the default scheduler
 obj-$(CONFIG_IP_MPDCCP) += mpdccp.o
 mpdccp-$(CONFIG_IP_MPDCCP) := 	mpdccp_ctrl.o mpdccp_sysctl.o mpdccp_mod.o \
-				mpdccp_proto.o \
+				mpdccp_proto.o mpdccp_subflow.o \
 				mpdccp_pm.o pm/pm_default.o \
 				mpdccp_scheduler.o scheduler/sched_default.o \
 				mpdccp_reordering.o reordering/ro_default.o
 
-obj-$(CONFIG_IP_DCCP) += mpdccplink.o
+obj-$(CONFIG_IP_MPDCCP) += mpdccplink.o
 mpdccplink-y := mpdccp_link.o
 mpdccplink-$(CONFIG_SYSFS) += mpdccp_link_sysfs.o
 

@@ -25,8 +25,10 @@
 #include "ccid.h"
 #include "dccp.h"
 #include "feat.h"
-#include "mpdccp.h"
-#include <net/mpdccp.h>
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+#  include "mpdccp.h"
+#  include <net/mpdccp.h>
+#endif
 
 u64 dccp_decode_value_var(const u8 *bf, const u8 len)
 {
@@ -139,12 +141,14 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 	u32 elapsed_time;
 	__be32 opt_val;
 	int rc;
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	u64 oall_seq = 0;	//MPDCCP overall seqno
 	u32 delay = 0;		//MPDCCP delay report
 	u32 path_id = 0;    //MPDCCP path_id
 	u32 del_path = 0;    //MPDCCP path_id
-	int mandatory = 0;
 	u8 mp_opt = 0;
+#endif
+	int mandatory = 0;
 	memset(opt_recv, 0, sizeof(*opt_recv));
 
 	opt = len = 0;
@@ -296,6 +300,7 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 			dccp_pr_debug("%s rx opt: ELAPSED_TIME=%d\n",
 				      dccp_role(sk), elapsed_time);
 			break;
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 		case DCCPO_MULTIPATH:
 			if (len == 0)
 				goto out_invalid_option;
@@ -349,17 +354,39 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 					goto out_invalid_option;
 				}
 				opt_recv->saw_mpkey = 1;
-				/* Store version */
-				opt_recv->dccpor_mp_vers = *value++;
-				len--;
 				if (pkt_type == DCCP_PKT_REQUEST) {
-					/* Request: collect supported key types */
-					while (len) {
-						u8 curr_type = *value++;
-						opt_recv->dccpor_mp_suppkeys |= (1 << curr_type);
+					int i;
+					/* Request: collect key types */
+					for (i = 0; len && (i < MPDCCP_MAX_KEYS); i++) {
+						int key_len;
+						u8 key_type = *value++;
+						switch (key_type) {
+							case DCCPK_PLAIN:
+								key_len = MPDCCP_PLAIN_KEY_SIZE;
+								break;
+							/* fall through */
+							case DCCPK_C25519_SHA256:
+							case DCCPK_C25519_SHA512:
+								key_len = MPDCCP_C25519_KEY_SIZE;
+								break;
+							default:
+								dccp_pr_debug("%s rx opt: received unsupported key type %d", dccp_role(sk), key_type);
+								goto out_invalid_option;
+						}
 						len--;
+						if (len < key_len) {
+							dccp_pr_debug("%s rx opt: invalid key length %d", dccp_role(sk), len);
+							goto out_invalid_option;
+						}
+
+						dccp_pr_debug("%s rx opt: DCCPO_MP_KEY(%d) = %llx, type %d, len %d, sk %p dreq %p remlen %d", dccp_role(sk), i, be64_to_cpu(*(u64*)value), key_type, key_len, sk, dreq, len);
+						memcpy(opt_recv->dccpor_mp_keys[i].value, value, key_len);
+						opt_recv->dccpor_mp_keys[i].size = key_len;
+						opt_recv->dccpor_mp_keys[i].type = key_type;
+						opt_recv->dccpor_mp_suppkeys |= (1 << key_type);
+						len -= key_len;
+						value += key_len;
 					}
-					dccp_pr_debug("%s rx opt: DCCPO_MP_KEY = %x, sk %p dreq %p", dccp_role(sk), opt_recv->dccpor_mp_suppkeys, sk, dreq);
 				} else if ((pkt_type == DCCP_PKT_ACK) || (pkt_type == DCCP_PKT_RESPONSE)) {
 					int i;
 					/* Response/Ack: collect key data */
@@ -393,12 +420,17 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 						len -= key_len;
 						value += key_len;
 					}
+					/* Send ack if the authentication was completed before */
+					if ((pkt_type == DCCP_PKT_ACK) && dccp_sk(sk)->auth_done) {
+						dccp_send_ack(sk);
+					}
 				}
 				break;
 			case DCCPO_MP_JOIN:
 				if (len != 8) {
 					goto out_invalid_option;
 				}
+				opt_recv->saw_mpjoin = 1;
 				opt_recv->dccpor_mp_token = get_unaligned_be32(value);
 				value += 4;
 				opt_recv->dccpor_mp_nonce = get_unaligned_be32(value);
@@ -411,6 +443,10 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 				}
 				dccp_pr_debug("%s rx opt: DCCPO_MP_HMAC = %llx, sk %p dreq %p", dccp_role(sk), be64_to_cpu(*(u64 *)value), sk, dreq);
 				memcpy(opt_recv->dccpor_mp_hmac,value, MPDCCP_HMAC_SIZE);
+				/* Send ack if the authentication was completed before */
+				if ((pkt_type == DCCP_PKT_ACK) && dccp_sk(sk)->auth_done) {
+					dccp_send_ack(sk);
+				}
 				break;
 			default:
 				DCCP_CRIT("DCCP(%p): mp option %d(len=%d) not "
@@ -439,6 +475,7 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 // 			mpdccp_handle_del_addr(value, sk, len);
 
 // 			break;
+#endif
 		case DCCPO_MIN_RX_CCID_SPECIFIC ... DCCPO_MAX_RX_CCID_SPECIFIC:
 			if (ccid_hc_rx_parse_options(dp->dccps_hc_rx_ccid, sk,
 						     pkt_type, opt, value, len))
@@ -534,6 +571,7 @@ int dccp_insert_option(struct sk_buff *skb, const unsigned char option,
 
 EXPORT_SYMBOL_GPL(dccp_insert_option);
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 static int dccp_insert_option_multipath(struct sk_buff *skb, const unsigned char mp_option,
 		       const void *value, const unsigned char len)
 {
@@ -587,6 +625,7 @@ static int dccp_insert_option_mp_delpath(struct sk_buff *skb, u32 mp_delpath)
 
 	return dccp_insert_option_multipath(skb, DCCPO_MP_DELPATH, &be_mp_delpath, sizeof(be_mp_delpath));
 }
+#endif
 
 static int dccp_insert_option_ndp(struct sock *sk, struct sk_buff *skb)
 {
@@ -825,42 +864,57 @@ static void dccp_insert_option_padding(struct sk_buff *skb)
 	}
 }
 
-static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_key *key1, struct mpdccp_key *key2, int pkt_type)
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_cb *mpcb, struct dccp_request_sock *dreq)
 {
-	u8 buf[MPDCCP_MAX_KEY_SIZE*3];
-	int ret;
+	u8 buf[MPDCCP_MAX_KEYS*(MPDCCP_MAX_KEY_SIZE + 1)];
+	int ret, i;
 	int optlen = 0;
 
-	buf[0] = MPDCCP_VERSION_NUM;
-	switch (pkt_type) {
+	switch (DCCP_SKB_CB(skb)->dccpd_type) {
 		case DCCP_PKT_REQUEST:
-			buf[1] = DCCPK_PLAIN;
-			optlen = 2;
+			for (i=0; i < MPDCCP_MAX_KEYS; i++) {
+				struct mpdccp_key *key = &mpcb->mpdccp_loc_keys[i];
+				if (mpcb && mpdccp_is_validkey(key)) {
+					buf[optlen] = key->type;
+					memcpy(&buf[optlen + 1], key->value, key->size);
+					optlen += key->size + 1;
+				}
+			}
 			break;
 		case DCCP_PKT_RESPONSE:
-			if (key1 && key1->size < MPDCCP_MAX_KEY_SIZE) {
-				buf[1] = key1->type;
-				memcpy(&buf[2], key1->value, key1->size);
-				optlen = key1->size + 2;
+			if (dreq && mpdccp_is_validkey(&dreq->mpdccp_loc_key)) {
+				struct mpdccp_key *key = &dreq->mpdccp_loc_key;
+				buf[0] = key->type;
+				memcpy(&buf[1], key->value, key->size);
+				optlen = key->size + 1;
 			} else {
-				DCCP_WARN("MP_KEY: invalid input key\n");
+				DCCP_WARN("MP_KEY: invalid input key for DCCP_PKT_RESPONSE\n");
 				ret = -1;
 			}
 			break;
 		case DCCP_PKT_ACK:
-			if (key1 && key1->size < MPDCCP_MAX_KEY_SIZE && key2 && key2->size < MPDCCP_MAX_KEY_SIZE) {
-				buf[1] = key1->type;
-				memcpy(&buf[2], key1->value, key1->size);
-				buf[key1->size + 2] = key2->type;
-				memcpy(&buf[key1->size + 3], key2->value, key2->size);
-				optlen = key1->size + key2->size + 3;
+			if (mpcb && (mpcb->cur_key_idx < MPDCCP_MAX_KEYS)) {
+				struct mpdccp_key *key1, *key2;
+				key1 = &mpcb->mpdccp_loc_keys[mpcb->cur_key_idx];
+				key2 = &mpcb->mpdccp_rem_key;
+				if (mpdccp_is_validkey(key1) && mpdccp_is_validkey(key2)) {
+					buf[0] = key1->type;
+					memcpy(&buf[1], key1->value, key1->size);
+					buf[key1->size + 1] = key2->type;
+					memcpy(&buf[key1->size + 2], key2->value, key2->size);
+					optlen = key1->size + key2->size + 2;
+				} else {
+					DCCP_WARN("MP_KEY: invalid input key(s) for DCCP_PKT_ACK\n");
+					ret = -1;
+				}
 			} else {
-				DCCP_WARN("MP_KEY: invalid input key(s)\n");
+				DCCP_WARN("MP_KEY: invalid mpcb for DCCP_PKT_ACK\n");
 				ret = -1;
 			}
 			break;
 		default:
-			DCCP_WARN("MP_KEY: unsupported packet type %d\n", pkt_type);
+			DCCP_WARN("MP_KEY: unsupported packet type %d\n", DCCP_SKB_CB(skb)->dccpd_type);
 			ret = -1;
 			break;
 	}
@@ -869,7 +923,9 @@ static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_key *key
 	}
 	return ret;
 }
+#endif
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 static int dccp_insert_option_mp_join(struct sk_buff *skb, u32 token, u32 nonce)
 {
 	u8 buf[8];
@@ -879,17 +935,18 @@ static int dccp_insert_option_mp_join(struct sk_buff *skb, u32 token, u32 nonce)
 
 	return dccp_insert_option_multipath(skb, DCCPO_MP_JOIN, &buf, sizeof(buf));
 }
+#endif
 
-/* Reordering role dependency used to control added options */
-bool mpdccp_role = true; 
 
 int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 {
 	struct dccp_sock *dp = dccp_sk(sk);
 	struct ccid2_hc_tx_sock *hc = NULL;
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	struct tcp_info info;
 	u32 mp_path_id;
 	u32 mp_delpath;
+#endif
 	hc = ccid2_hc_tx_sk(sk);
 
 	DCCP_SKB_CB(skb)->dccpd_opt_len = 0;
@@ -928,10 +985,16 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 	/* Insert overall sequence number as DCCP option */
 	//dccp_insert_option_mp_seq(skb);
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	/* Role dependent option required status. MPDCCP Server does not have 
 	 * to add delay values since MPDCCP Client knows delays due to its 
 	 * congestion control */
-	if(is_mpdccp(sk)){
+	if (is_mpdccp(sk)) {
+		struct mpdccp_cb *mpcb = MPDCCP_CB(sk);
+		/* Skip if fallback to sp DCCP */
+		if (mpcb && mpcb->fallback_sp)
+			goto out;
+
 		/* Insert delay value (sub-flow specific) as DCCP option */
 		switch(DCCP_SKB_CB(skb)->dccpd_type){
 			case DCCP_PKT_DATA:
@@ -941,8 +1004,8 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 				dccp_insert_option_mp_delay(skb, get_delay_valn(sk, &info));
 				dccp_pr_debug("delay = %u  on socket (0x%p)", get_delay_valn(sk, &info), sk); 
 				//dccp_pr_debug("delay = %u on socket (0x%p)", get_delay_val(hc), sk);
-				if(MPDCCP_CB(sk) && MPDCCP_CB(sk)->delpath){
-					mp_delpath = MPDCCP_CB(sk)->delpath;
+				if(mpcb && mpcb->delpath){
+					mp_delpath = mpcb->delpath;
 					dccp_pr_debug("del_path %u", mp_delpath);
 					//printk(KERN_INFO "delpath sk %u, %p", mp_delpath, sk);
 					dccp_insert_option_mp_delpath(skb, mp_delpath);
@@ -957,24 +1020,24 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 				if (dccp_sk(sk)->is_kex_sk) {
 					dccp_pr_debug("(%s) REQ insert opt MP_KEY (supp)", dccp_role(sk));
 					/* Insert supported keys */
-					dccp_insert_option_mp_key(skb, NULL, NULL, DCCP_PKT_REQUEST);
+					dccp_insert_option_mp_key(skb, mpcb, NULL);
 				} else {
 					/* Insert token and nonce */
 					dccp_pr_debug("(%s) REQ insert opt MP_JOIN tk:%x nc:%x",
 									dccp_role(sk),
-									MPDCCP_CB(sk)->mpdccp_rem_token,
+									mpcb->mpdccp_rem_token,
 									dccp_sk(sk)->mpdccp_loc_nonce);
-					dccp_insert_option_mp_join(skb, MPDCCP_CB(sk)->mpdccp_rem_token, dccp_sk(sk)->mpdccp_loc_nonce);
+					dccp_insert_option_mp_join(skb, mpcb->mpdccp_rem_token, dccp_sk(sk)->mpdccp_loc_nonce);
 				}
 				break;
 			case DCCP_PKT_ACK:
 				if (dccp_sk(sk)->is_kex_sk) {
 					dccp_pr_debug("(%s) ACK insert opt MP_KEY %llx %llx",
 									dccp_role(sk),
-									be64_to_cpu(*((__be64*)MPDCCP_CB(sk)->mpdccp_loc_key.value)),
-									be64_to_cpu(*((__be64*)MPDCCP_CB(sk)->mpdccp_rem_key.value)));
+									be64_to_cpu(*((__be64*)mpcb->mpdccp_loc_keys[mpcb->cur_key_idx].value)),
+									be64_to_cpu(*((__be64*)mpcb->mpdccp_rem_key.value)));
 					/* Insert local & remote key */
-					dccp_insert_option_mp_key(skb, &MPDCCP_CB(sk)->mpdccp_loc_key, &MPDCCP_CB(sk)->mpdccp_rem_key, DCCP_PKT_ACK);
+					dccp_insert_option_mp_key(skb, mpcb, NULL);
 				} else {
 					if (!dccp_sk(sk)->auth_done){
 						/* Insert HMAC */
@@ -985,10 +1048,11 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 			default:
 				break;
 		}
-	}	
+	}
 
-    /* Insert padding to achieve option size as multiple of 32 bit (4 byte) */
-
+out:
+#endif
+	/* Insert padding to achieve option size as multiple of 32 bit (4 byte) */
 	dccp_insert_option_padding(skb);
 	return 0;
 }
@@ -1014,13 +1078,12 @@ int dccp_insert_options_rsk(struct dccp_request_sock *dreq, struct sk_buff *skb)
 
 int dccp_insert_options_rsk_mp(const struct sock *sk, struct dccp_request_sock *dreq, struct sk_buff *skb)
 {
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	struct mpdccp_cb *mpcb;
+	struct dccp_sock *dp = dccp_sk(sk);
+	struct dccp_options_received *opt_recv = &dp->dccps_options_received;
 
-	if (!dreq->meta_sk) {
-		dccp_pr_debug("(%s) RES insert opt MP_KEY %llx", dccp_role(sk), be64_to_cpu(*((__be64 *)dreq->mpdccp_loc_key.value)));
-		/* Insert local key */
-		dccp_insert_option_mp_key(skb, &dreq->mpdccp_loc_key, NULL, DCCP_PKT_RESPONSE);
-	} else {
+	if (opt_recv->saw_mpjoin) {
 		mpcb = MPDCCP_CB(dreq->meta_sk);
 		if (!mpcb) {
 			dccp_pr_debug("(%s) invalid MPCB", dccp_role(sk));
@@ -1032,7 +1095,13 @@ int dccp_insert_options_rsk_mp(const struct sock *sk, struct dccp_request_sock *
 		/* Insert HMAC */
 		dccp_pr_debug("(%s) RES insert opt MP_HMAC %llx", dccp_role(sk), be64_to_cpu(*((u64 *)dreq->mpdccp_loc_hmac)));
 		dccp_insert_option_multipath(skb, DCCPO_MP_HMAC, dreq->mpdccp_loc_hmac, MPDCCP_HMAC_SIZE);
+	} else if (opt_recv->saw_mpkey) {
+		dccp_pr_debug("(%s) RES insert opt MP_KEY %llx", dccp_role(sk), be64_to_cpu(*((__be64 *)dreq->mpdccp_loc_key.value)));
+		/* Insert local key */
+		dccp_insert_option_mp_key(skb, NULL, dreq);
 	}
+
 	dccp_insert_option_padding(skb);
+#endif
 	return 0;
 }

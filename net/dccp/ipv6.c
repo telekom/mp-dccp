@@ -33,7 +33,9 @@
 #include <net/secure_seq.h>
 #include <net/sock.h>
 
-#include <net/mpdccp.h>
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+# include <net/mpdccp.h>
+#endif
 
 #include "dccp.h"
 #include "ipv6.h"
@@ -346,10 +348,12 @@ static int dccp_v6_conn_request(struct sock *sk, struct sk_buff *skb)
 	if (dccp_parse_options(sk, dreq, skb))
 		goto drop_and_free;
 
-	if (mpdccp_isactive(sk) > 0) {
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	if ((mpdccp_isactive(sk) > 0) && dreq && (dreq->multipath_ver != MPDCCP_VERS_UNDEFINED)) {
 		if (mpdccp_conn_request(sk, dreq))
 			goto drop_and_free;
 	}
+#endif
 
 	if (security_inet_conn_request(sk, skb, req))
 		goto drop_and_free;
@@ -830,9 +834,11 @@ static int dccp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 	if (usin->sin6_family != AF_INET6)
 		return -EAFNOSUPPORT;
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	if (mpdccp_is_meta(sk)) {
 		return mpdccp_connect (sk, uaddr, addr_len);
 	}
+#endif
 
 	memset(&fl6, 0, sizeof(fl6));
 

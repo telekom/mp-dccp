@@ -19,14 +19,18 @@
 #include <net/sock.h>
 #include <net/xfrm.h>
 #include <net/inet_timewait_sock.h>
-#include <net/mpdccp.h>
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+#  include <net/mpdccp.h>
+#endif
 
 #include "ackvec.h"
 #include "ccid.h"
 #include "dccp.h"
 #include "feat.h"
 
-#include "mpdccp.h"
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+#  include "mpdccp.h"
+#endif
 
 struct inet_timewait_death_row dccp_death_row = {
 	.sysctl_max_tw_buckets = NR_FILE * 2,
@@ -196,14 +200,17 @@ struct sock *dccp_check_req(struct sock *sk, struct sk_buff *skb,
 	if (dccp_parse_options(sk, dreq, skb))
 		 goto drop;
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	if (is_mpdccp(sk)) {
 		/* Copy the negotiated features as they will be purged in syn_recv_sock() */
 		dccp_feat_clone_list(&dreq->dreq_featneg, &dreq->dreq_featneg_mp);
 	}
+#endif
 
 	child = inet_csk(sk)->icsk_af_ops->syn_recv_sock(sk, skb, req, NULL,
 							 req, &own_req);
 	if (child) {
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 			if (is_mpdccp(sk) && own_req) {
 				int ret;
 				struct sock *master_sk;
@@ -218,9 +225,9 @@ struct sock *dccp_check_req(struct sock *sk, struct sk_buff *skb,
 					dccp_pr_debug("after mpdccp_check_req meta %p master %p\n", child, master_sk);
 					child = master_sk;
 				}
-			} else {
+			} else
+#endif
 				child = inet_csk_complete_hashdance(sk, child, req, own_req);
-			}
 			goto out;
 	}
 
@@ -289,7 +296,14 @@ int dccp_reqsk_init(struct request_sock *req,
 	inet_rsk(req)->ir_num	   = ntohs(dccp_hdr(skb)->dccph_dport);
 	inet_rsk(req)->acked	   = 0;
 	dreq->dreq_timestamp_echo  = 0;
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	dreq->meta_sk              = NULL;
+	dreq->multipath_ver        = MPDCCP_VERS_UNDEFINED;
+	dreq->mpdccp_loc_key.type  = DCCPK_INVALID;
+	dreq->mpdccp_rem_key.type  = DCCPK_INVALID;
+	dreq->mpdccp_loc_key.size  = 0;
+	dreq->mpdccp_rem_key.size  = 0;
+#endif
 
 	/* inherit feature negotiation options from listening socket */
 	return dccp_feat_clone_list(&dp->dccps_featneg, &dreq->dreq_featneg);

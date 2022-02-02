@@ -110,12 +110,14 @@ extern int  sysctl_dccp_keepalive_rcv_intvl;
 #endif
 extern int  sysctl_dccp_sync_ratelimit;
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 /* Reordering role: Controls addition of new DCCP options on client side
  * (overall sequence number, delay value transmission)
  * true  : client role
  * false : server role
  */
 extern bool mpdccp_role;
+#endif
 
 /*
  *	48-bit sequence number arithmetic (signed and unsigned)
@@ -246,6 +248,7 @@ void dccp_v4_send_check(struct sock *sk, struct sk_buff *skb);
 int dccp_retransmit_skb(struct sock *sk);
 
 void dccp_send_ack(struct sock *sk);
+void dccp_send_ack_entail(struct sock *sk);
 #if IS_ENABLED(CONFIG_DCCP_KEEPALIVE)
 void dccp_send_keepalive(struct sock *sk);
 #endif

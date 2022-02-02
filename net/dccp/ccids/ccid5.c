@@ -1187,6 +1187,7 @@ static void ccid5_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 	u64 ackno, seqno;
 	struct ccid5_seq *seqp;
 	int done = 0;
+	bool not_rst = 0;
 	unsigned int maxincr = 0;
 	struct rate_sample_dccp rs_i = { .prior_delivered = 0 };
 	struct rate_sample_dccp *rs = &rs_i;
@@ -1252,6 +1253,7 @@ static void ccid5_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 		seqp = seqp->ccid5s_next;
 		if (seqp == hc->tx_seqh) {
 			seqp = hc->tx_seqh->ccid5s_prev;
+			not_rst = 1;
 			break;
 		}
 	}
@@ -1379,7 +1381,7 @@ static void ccid5_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 	/* restart RTO timer if not all outstanding data has been acked */
 	if (hc->tx_pipe == 0)
 		sk_stop_timer(sk, &hc->tx_rtotimer);
-	else
+	else if(!not_rst)
 		sk_reset_timer(sk, &hc->tx_rtotimer, jiffies + hc->tx_rto);
 	delivered = hc->delivered - delivered;
 	lost = hc->lost - lost;	

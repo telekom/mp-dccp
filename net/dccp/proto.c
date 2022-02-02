@@ -236,6 +236,9 @@ int dccp_init_sock(struct sock *sk, const __u8 ctl_sock_initialized)
 	dp->dccps_keepalive_rcv_intvl = sysctl_dccp_keepalive_rcv_intvl;
 	dp->dccps_keepalive_enable = sysctl_dccp_keepalive_enable;
 #endif
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	dp->multipath_ver = MPDCCP_VERS_UNDEFINED;
+#endif
 	dp->dccps_hc_rx_ccid = NULL;
 	dp->dccps_hc_tx_ccid = NULL;
 
@@ -259,9 +262,11 @@ void dccp_destroy_sock(struct sock *sk)
 		kfree_skb(sk->sk_send_head);
 		sk->sk_send_head = NULL;
 	}
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	if (mpdccp_is_meta(sk)) {
 		mpdccp_destroy_sock (sk);
 	}
+#endif
 
 	/* Clean up a referenced DCCP bind bucket. */
 	if (inet_csk(sk)->icsk_bind_hash != NULL)
@@ -289,6 +294,18 @@ static inline int dccp_listen_start(struct sock *sk, int backlog)
 {
 	struct dccp_sock *dp = dccp_sk(sk);
 	dp->dccps_role = DCCP_ROLE_LISTEN;
+
+	/* Register MP_CAPABLE feature for multipath sockets */
+	if (is_mpdccp(sk)) {
+		int ret;
+		ret = dccp_feat_register_sp(sk, DCCPF_MULTIPATH, 1,
+						mpdccp_supported_versions,
+						ARRAY_SIZE(mpdccp_supported_versions));
+		if (ret < 0 ) {
+			return -EPROTO;
+		}
+	}
+
 	/* do not start to listen if feature negotiation setup fails */
 	if (dccp_feat_finalise_settings(dp))
 		return -EPROTO;
@@ -309,9 +326,11 @@ int dccp_disconnect(struct sock *sk, int flags)
 	int err = 0;
 	const int old_state = sk->sk_state;
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	if (mpdccp_is_meta(sk)) {
 		/* not implemented yet */
 	}
+#endif
 
 	if (old_state != DCCP_CLOSED)
 		dccp_set_state(sk, DCCP_CLOSED);
@@ -936,9 +955,11 @@ int dccp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
 	do {
 		/* For meta sockets this can race with mpdccp_forward_skb(), need atomic access to rx queue */
 		struct sk_buff *skb;
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 		if (mpdccp_is_meta(sk))
 			skb = skb_peek_safe(&sk->sk_receive_queue);
 		else
+#endif
 			skb = skb_peek(&sk->sk_receive_queue);
 
 		if (skb == NULL)
@@ -965,9 +986,11 @@ int dccp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
 			dccp_pr_debug("packet_type=%s\n",
 				      dccp_packet_name(dh->dccph_type));
 			/* For meta sockets this can race with mpdccp_forward_skb(), need atomic access to rx queue */
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 			if (mpdccp_is_meta(sk))
 				sk_eat_skb_safe(sk, skb);
 			else
+#endif
 				sk_eat_skb(sk, skb);
 		}
 verify_sock_status:
@@ -1026,9 +1049,11 @@ verify_sock_status:
 	found_fin_ok:
 		if (!(flags & MSG_PEEK)) {
 			/* For meta sockets this can race with mpdccp_forward_skb(), need atomic access to rx queue */
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 			if (mpdccp_is_meta(sk))
 				sk_eat_skb_safe(sk, skb);
 			else
+#endif
 				sk_eat_skb(sk, skb);
 		}
 		break;
@@ -1090,12 +1115,23 @@ static void dccp_terminate_connection(struct sock *sk)
 	case DCCP_PARTOPEN:
 		dccp_pr_debug("Stop PARTOPEN timer (%p)\n", sk);
 		inet_csk_clear_xmit_timer(sk, ICSK_TIME_DACK);
+
+		if (is_mpdccp(sk) && dccp_sk(sk)->dccps_role == DCCP_ROLE_CLIENT) {
+			/* Stop the ACK retry timer */
+			inet_csk_clear_xmit_timer(sk, ICSK_TIME_RETRANS);
+			if (sk->sk_send_head != NULL) {
+				kfree_skb(sk->sk_send_head);
+				sk->sk_send_head = NULL;
+			}
+		}
 		/* fall through */
 	case DCCP_OPEN:
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 		/* Don't send close pkt on MP meta sockets*/
 		if (!mpdccp_is_meta(sk)) {
 			dccp_send_close(sk, 1);
 		}
+#endif
 
 		if (dccp_sk(sk)->dccps_role == DCCP_ROLE_SERVER &&
 		    !dccp_sk(sk)->dccps_server_timewait)
@@ -1107,9 +1143,11 @@ static void dccp_terminate_connection(struct sock *sk)
 		dccp_set_state(sk, next_state);
 	}
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	if (mpdccp_is_meta(sk)) {
 		mpdccp_close_meta(sk);
 	}
+#endif
 }
 
 void dccp_close(struct sock *sk, long timeout)

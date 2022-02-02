@@ -216,7 +216,7 @@ enum dccp_feature_numbers {
 	DCCPF_SEND_NDP_COUNT = 7,
 	DCCPF_MIN_CSUM_COVER = 8,
 	DCCPF_DATA_CHECKSUM = 9,
-	DCCPF_MULTIPATH = 10,	/* (unused): Used to negotiate MP support on connection establishment */
+	DCCPF_MULTIPATH = 10,	/* Used to negotiate MP support on connection establishment */
 	/* 11-127 reserved */
 	DCCPF_MIN_CCID_SPECIFIC = 128,
 	DCCPF_SEND_LEV_RATE = 192,	/* RFC 4342, sec. 8.4 */
@@ -249,15 +249,22 @@ enum dccp_packet_dequeueing_policy {
 #define MPDCCP_PLAIN_KEY_SIZE 8
 #define MPDCCP_C25519_KEY_SIZE 32
 #define MPDCCP_MAX_KEY_SIZE MPDCCP_C25519_KEY_SIZE
-#define MPDCCP_MAX_KEYS 2
+#define MPDCCP_MAX_KEYS 3
 #define MPDCCP_HMAC_SIZE 20
+
+/* MPDCCP version type */
+enum mpdccp_version {
+	MPDCCP_VERS_0 = 0,
+	MPDCCP_VERS_MAX = 1,
+	MPDCCP_VERS_UNDEFINED = 0xF,
+};
 
 /* MPDCCP key types */
 enum mpdccp_key_type {
 	DCCPK_PLAIN = 0,
 	DCCPK_C25519_SHA256 = 1,
 	DCCPK_C25519_SHA512 = 2,
-	DCCPK_RESERVED  = 255,
+	DCCPK_INVALID  = 255,
 };
 
 enum {
@@ -268,7 +275,7 @@ enum {
 
 struct mpdccp_key {
 	enum mpdccp_key_type type;
-	int size;
+	u32 size;
 	__u8 value[MPDCCP_MAX_KEY_SIZE];
 };
 

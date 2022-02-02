@@ -27,9 +27,10 @@
 #include <net/tcp_states.h>
 #include <net/xfrm.h>
 #include <net/secure_seq.h>
-#include <net/mpdccp_link.h>
-
-#include <net/mpdccp.h>
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+#  include <net/mpdccp_link.h>
+#  include <net/mpdccp.h>
+#endif
 
 #include "ackvec.h"
 #include "ccid.h"
@@ -61,9 +62,11 @@ int dccp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 
 	if (usin->sin_family != AF_INET)
 		return -EAFNOSUPPORT;
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	if (mpdccp_isactive(sk) > 0) {
 		return mpdccp_connect (sk, uaddr, addr_len);
 	}
+#endif
 
 	nexthop = daddr = usin->sin_addr.s_addr;
 
@@ -562,11 +565,13 @@ static void dccp_v4_reqsk_destructor(struct request_sock *req)
 	dreq = dccp_rsk(req);
 
 	/* Release meta socket reference when request id destroyed */
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	if (dreq->meta_sk) {
 		dccp_pr_debug("releasing meta socket %p from request\n", dreq->meta_sk);
 		sock_put(dreq->meta_sk);
 		dreq->meta_sk = NULL;
 	}
+#endif
 
 	dccp_feat_list_purge(&dccp_rsk(req)->dreq_featneg);
 	kfree(rcu_dereference_protected(inet_rsk(req)->ireq_opt, 1));
@@ -626,17 +631,12 @@ int dccp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	if (dccp_parse_options(sk, dreq, skb))
 		goto drop_and_free;
 
-	if (mpdccp_isactive(sk) > 0) {
-		int ret = mpdccp_conn_request(sk, dreq);
-		if (ret == 2) {
-			/* HACK: free the request but return 0 to avoid sending a reset */
-			reqsk_free(req);
-			return 0;
-		} else if (ret) {
-			/* Normal reject with reset */
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	if ((mpdccp_isactive(sk) > 0) && dreq && (dreq->multipath_ver != MPDCCP_VERS_UNDEFINED)) {
+		if (mpdccp_conn_request(sk, dreq))
 			goto drop_and_free;
-		}
 	}
+#endif
 
 	if (security_inet_conn_request(sk, skb, req))
 		goto drop_and_free;
@@ -661,8 +661,10 @@ int dccp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	dreq->dreq_gss     = dreq->dreq_iss;
 	dreq->dreq_service = service;
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	/* put here path detection - HACK: should be in mpdccp code, but this is a lot of work */
 	dreq->link_info = mpdccp_link_find_by_skb (read_pnet(&sk->sk_net), skb);
+#endif
 
 	if (dccp_v4_send_response(sk, req))
 		goto drop_and_free;

@@ -160,7 +160,9 @@ static inline unsigned int dccp_hdr_len(const struct sk_buff *skb)
  * @dreq_timestamp_echo: last received timestamp to echo (13.1)
  * @dreq_timestamp_echo: the time of receiving the last @dreq_timestamp_echo
  */
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 struct mpdccp_link_info;
+#endif
 struct dccp_request_sock {
 	struct inet_request_sock dreq_inet_rsk;
 	__u64			 dreq_iss;
@@ -172,8 +174,11 @@ struct dccp_request_sock {
 	struct list_head	 dreq_featneg;
 	__u32			 dreq_timestamp_echo;
 	__u32			 dreq_timestamp_time;
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	struct mpdccp_link_info  *link_info;
+#endif
 	int 			id_rcv;
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	struct mpdccp_key	mpdccp_loc_key;
 	struct mpdccp_key	mpdccp_rem_key;
 	u32			mpdccp_loc_token;
@@ -183,7 +188,9 @@ struct dccp_request_sock {
 	u8 			mpdccp_loc_hmac[MPDCCP_HMAC_SIZE];
 	u8 			mpdccp_rem_hmac[MPDCCP_HMAC_SIZE];
 	struct sock*		meta_sk;
+#endif
 	struct list_head	dreq_featneg_mp;
+	enum mpdccp_version	multipath_ver;
 };
 
 static inline struct dccp_request_sock *dccp_rsk(const struct request_sock *req)
@@ -201,17 +208,21 @@ struct dccp_options_received {
 	u32	dccpor_timestamp;
 	u32	dccpor_timestamp_echo;
 	u32	dccpor_elapsed_time;
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	u64 dccpor_oall_seq:48;		/* MPDCCP overall sequence number */
 	u32 dccpor_delay;			/* MPDCCP delay transmission */
 	u32 dccpor_path_id;			/* MPDCCP delay transmission */
+#endif
 	u32 dccpor_delpath_rcv;
-	u8 dccpor_mp_vers;			/* MPDCCP version */
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	u8 dccpor_mp_suppkeys;			/* MPDCCP supported key types */
 	u32 dccpor_mp_token;			/* MPDCCP path token */
 	u32 dccpor_mp_nonce;			/* MPDCCP path nonce */
 	u8 dccpor_mp_hmac[MPDCCP_HMAC_SIZE];	/* MPDCCP HMAC */
 	struct mpdccp_key dccpor_mp_keys[MPDCCP_MAX_KEYS];	/* MPDCCP keys */
+#endif
 	int saw_mpkey;
+	int saw_mpjoin;
 };
 
 struct ccid;
@@ -347,11 +358,13 @@ struct dccp_sock {
 	int 	multipath_active;
 	int 	is_kex_sk;
 	int 	auth_done;
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 	u32	mpdccp_loc_nonce;
 	u32 	mpdccp_rem_nonce;
 	u8 	mpdccp_loc_hmac[MPDCCP_HMAC_SIZE];
 	u8 	mpdccp_rem_hmac[MPDCCP_HMAC_SIZE];
-	int 	need_hmac_ack;
+	enum mpdccp_version multipath_ver;
+#endif
 };
 
 static inline struct dccp_sock *dccp_sk(const struct sock *sk)

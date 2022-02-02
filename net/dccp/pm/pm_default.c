@@ -206,9 +206,11 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 
 		switch (mpcb->role) {
 		case MPDCCP_CLIENT:
-			mpdccp_add_client_conn(mpcb, local, locaddr_len, if_idx,
-					(struct sockaddr*)&mpcb->mpdccp_remote_addr,
-					mpcb->remaddr_len);
+			/* Do not add more subflows if the client in in SP mode */
+			if (!(mpcb->fallback_sp && (mpcb->cnt_subflows > 0)))
+				mpdccp_add_client_conn(mpcb, local, locaddr_len, if_idx,
+						(struct sockaddr*)&mpcb->mpdccp_remote_addr,
+						mpcb->remaddr_len);
 			break;
 		case MPDCCP_SERVER:
 			/* do nothing */
@@ -242,7 +244,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 	//TODO reordering
 	pr_info("RO: mpdccp_del_addr triggered...");
 
-	rcu_read_lock_bh();
+	//rcu_read_lock_bh();
 	spin_lock(&pm_ns->plocal_lock);
 
 	/* Delete the address from the list of known addresses so that
@@ -269,7 +271,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 	if(!found) 
 	{
 		spin_unlock(&pm_ns->plocal_lock);
-		rcu_read_unlock_bh();
+		//rcu_read_unlock_bh();
 		return false;
 	}
 
@@ -339,7 +341,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 		}
 	}
 	spin_unlock(&pm_ns->plocal_lock);
-	rcu_read_unlock_bh();
+	//rcu_read_unlock_bh();
 
 	return true;
 }
@@ -359,12 +361,12 @@ next_event:
 
 	/* First, let's dequeue an event from our event-list */
 	/* TODO: is _bh REALLY the right thing to do here? */
-	rcu_read_lock_bh();
+	//rcu_read_lock_bh();
 	event = list_first_entry_or_null(&pm_ns->events,
 					 struct mpdccp_local_addr_event, list);
 	if (!event) {
 		/* No more events to work on */
-		rcu_read_unlock_bh();
+		//rcu_read_unlock_bh();
 		return;
 	}
 
@@ -382,7 +384,7 @@ next_event:
 			mpdccp_pr_debug("Add address failed: Address already in use.\n");
 		}
 	}
-	rcu_read_unlock_bh();
+	//rcu_read_unlock_bh();
 
 	goto next_event;
 }
@@ -785,7 +787,7 @@ static int netdev_event(struct notifier_block *this, unsigned long event,
 	      event == NETDEV_CHANGE))
 		return NOTIFY_DONE;
 
-	rcu_read_lock();
+	//rcu_read_lock();
 	in_dev = __in_dev_get_rtnl(dev);
 
 	if (in_dev) {
@@ -804,7 +806,7 @@ static int netdev_event(struct notifier_block *this, unsigned long event,
 	}
 #endif
 
-	rcu_read_unlock();
+	//rcu_read_unlock();
 	return NOTIFY_DONE;
 }
 
@@ -921,13 +923,14 @@ add_init_client_conn (
 	if (!mpcb || !remote_address) return -EINVAL;
 	if (mpcb->role != MPDCCP_CLIENT) return -EPERM;
 	
-	pm_ns = fm_get_ns (current->nsproxy->net_ns);
+	//pm_ns = fm_get_ns (current->nsproxy->net_ns);
+	pm_ns = fm_get_ns (read_pnet (&mpcb->net));
 	
 	memcpy(&mpcb->mpdccp_remote_addr, remote_address, socklen);
 	mpcb->remaddr_len = socklen;
 	
 	/* Create subflows on all local interfaces */
-	rcu_read_lock_bh();
+	//rcu_read_lock_bh();
 	list_for_each_entry_rcu(local, &pm_ns->plocal_addr_list, address_list) {
 		/* Set target IPv4/v6 address correctly */
 		if (local->family == AF_INET) {
@@ -945,20 +948,23 @@ add_init_client_conn (
 		}
 		local_if_idx = local->if_idx;
 		/* unlock since mpdccp_add_client_conn() can sleep (data from the list entry are now copied locally) */
-		rcu_read_unlock_bh();
+		//rcu_read_unlock_bh();
 		ret = mpdccp_add_client_conn (	mpcb, local_address, locaddr_len,
 						local_if_idx, remote_address, socklen);
 		if ((ret < 0) && (ret != -EINPROGRESS) ) {
 			mpdccp_pr_debug ("error in mpdccp_add_client_conn() for "
 					"subflow %d: %d\n", num, ret);
-			goto out;
 		} else {
 			num++;
+			if (mpcb && mpcb->fallback_sp) {
+				mpdccp_pr_debug ("fallback to single path DCCP, don't create more subflows\n");
+				goto out;
+			}
 		}
 		/* lock again to continue scanning the list */
-		rcu_read_lock_bh();
+		//rcu_read_lock_bh();
 	}
-	rcu_read_unlock_bh();
+	//rcu_read_unlock_bh();
 
 out:
 	if (num == 0) {
@@ -1001,13 +1007,14 @@ add_init_server_conn (
     }
     if (server_port == 0) return -EINVAL;
 
-    pm_ns = fm_get_ns (current->nsproxy->net_ns);
+    //pm_ns = fm_get_ns (current->nsproxy->net_ns);
+    pm_ns = fm_get_ns (read_pnet (&mpcb->net));
 
     mpcb->server_port = server_port;
     mpcb->backlog = backlog;
 
     /* Create subflows on all local interfaces */
-    rcu_read_lock_bh();
+    //rcu_read_lock_bh();
     list_for_each_entry_rcu(local, &pm_ns->plocal_addr_list, address_list) {
     
 	/* Set target IPv4/v6 address correctly */
@@ -1029,11 +1036,11 @@ add_init_server_conn (
 					local->if_idx);
 	if (ret < 0) {
 	    mpdccp_pr_debug ("error in mpdccp_add_listen_sock(): %d\n", ret);
-    	    rcu_read_unlock_bh();
+    	    //rcu_read_unlock_bh();
 	    return ret;
 	}
     }
-    rcu_read_unlock_bh();
+    //rcu_read_unlock_bh();
 
     mpdccp_pr_debug("all server sockets added successfully. There are %d "
 			"listening sockets now.\n", mpcb->cnt_subflows);

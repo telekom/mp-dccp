@@ -15,8 +15,10 @@
 #include <linux/slab.h>
 
 #include <net/sock.h>
-#include <net/mpdccp.h>
-#include "mpdccp.h"
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+# include <net/mpdccp.h>
+# include "mpdccp.h"
+#endif
 
 #include "ackvec.h"
 #include "ccid.h"
@@ -298,11 +300,13 @@ static int __dccp_rcv_established(struct sock *sk, struct sk_buff *skb,
 	switch (dccp_hdr(skb)->dccph_type) {
 	case DCCP_PKT_DATAACK:
 	case DCCP_PKT_DATA:
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 		/* Data packets on MP need additional checks */
 		if (is_mpdccp(sk)) {
 			if (mpdccp_rcv_established(sk))
 				goto discard;
 		}
+#endif
 		/*
 		 * FIXME: schedule DATA_DROPPED (RFC 4340, 11.7.2) if and when
 		 * - sk_shutdown == RCV_SHUTDOWN, use Code 1, "Not Listening"
@@ -436,10 +440,12 @@ static int dccp_rcv_request_sent_state_process(struct sock *sk,
 		if (dccp_parse_options(sk, NULL, skb))
 			return 1;
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 		if (is_mpdccp(sk)) {
 			if (mpdccp_rcv_request_sent_state_process(sk, skb))
 				return 1;
 		}
+#endif
 
 		/* Obtain usec RTT sample from SYN exchange (used by TFRC). */
 		if (likely(dp->dccps_options_received.dccpor_timestamp_echo))
@@ -515,7 +521,15 @@ static int dccp_rcv_request_sent_state_process(struct sock *sk,
 			__kfree_skb(skb);
 			return 0;
 		}
-		dccp_send_ack(sk);
+
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+		/* For MPDCCP the ACK must be in the rtx queue */
+		if (is_mpdccp(sk) && MPDCCP_CB(sk) && !MPDCCP_CB(sk)->fallback_sp)
+			dccp_send_ack_entail(sk);
+		else
+#endif
+			dccp_send_ack(sk);
+
 		return -1;
 	}
 
@@ -577,10 +591,12 @@ static int dccp_rcv_respond_partopen_state_process(struct sock *sk,
 
 		dccp_set_state(sk, DCCP_OPEN);
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
 		if (is_mpdccp(sk)) {
 			if (mpdccp_rcv_respond_partopen_state_process(sk, dh->dccph_type))
 				break;
 		}
+#endif
 
 		if (dh->dccph_type == DCCP_PKT_DATAACK ||
 		    dh->dccph_type == DCCP_PKT_DATA) {

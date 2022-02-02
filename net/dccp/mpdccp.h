@@ -44,9 +44,11 @@
  * TAG-0.7: Replaced by user space tool */
 #define MPDCCP_IPV4_MAX             16
 
-/* TODO: move to sysctl */
-#define MPDCCP_VERSION_NUM 1
-#define MPDCCP_SUPPKEYS  (DCCPKF_PLAIN | DCCPKF_C25519_SHA256 | DCCPKF_C25519_SHA512)
+/* Bitfield representing the supported key types for handshake */
+#define MPDCCP_SUPPKEYS  (DCCPKF_PLAIN)
+/* TODO: add support for all key types */
+//#define MPDCCP_SUPPKEYS  (DCCPKF_PLAIN | DCCPKF_C25519_SHA256 | DCCPKF_C25519_SHA512)
+
 
 /* Defines for MPDCCP options.
  * All length values account for payload ONLY. */
@@ -269,22 +271,23 @@ struct mpdccp_cb
 	u64 mp_oall_seqno;
 
 	/* Authentication data */
-	struct mpdccp_key 	mpdccp_loc_key;
+	struct mpdccp_key 	mpdccp_loc_keys[MPDCCP_MAX_KEYS];
 	struct mpdccp_key 	mpdccp_rem_key;
+	u8			dkeyA[MPDCCP_MAX_KEY_SIZE * 2];
+	u8			dkeyB[MPDCCP_MAX_KEY_SIZE * 2];
+	int			dkeylen;
 	u32			mpdccp_loc_token;
 	u32			mpdccp_rem_token;
 	int			kex_done;
-	u8			mpdccp_ver;
 	u8			mpdccp_suppkeys;
+	int			cur_key_idx;
+	int			fallback_sp;
 
 	/* First subflow socket */
 	struct sock*		master_sk;
 
 	/* Namespace info */
 	possible_net_t		net;
-
-	/* call back functions */
-	void 		(*report_subflow) (int, struct sock*, struct sock*, struct mpdccp_link_info*, int);
 };
 
 /* This struct holds subflow-level information. */
@@ -298,7 +301,7 @@ struct my_sock
 	struct mpdccp_cb        *mpcb;
 	
 	/* send|recv work. TODO: not sure if i need dynamic memory here to re-queue that work. */
-	struct work_struct     close_work;
+	struct delayed_work     close_work;
 	struct mpdccp_link_info	*link_info;
 	int				link_cnt;
 	int				link_iscpy;
@@ -317,12 +320,12 @@ struct my_sock
 	 * void            (*sk_write_space)(struct sock *sk);
 	 * void            (*sk_error_report)(struct sock *sk);
 	 */
+	void            (*sk_write_space)(struct sock *sk);
 	void            (*sk_state_change)(struct sock *sk);
 	void            (*sk_data_ready)(struct sock *sk);
 	int             (*sk_backlog_rcv)(struct sock *sk, 
 	                    struct sk_buff *skb);
 	void            (*sk_destruct)(struct sock *sk);
-	void	(*report_subflow) (int, struct sock*, struct sock*, struct mpdccp_link_info*, int);
 	
 	/* Reordering related data */
 	struct mpdccp_reorder_path_cb *pcb;
@@ -339,7 +342,6 @@ struct my_sock
 int mpdccp_init_funcs (void);
 int mpdccp_deinit_funcs (void);
 
-int mpdccp_report_subflow (struct sock*, int);
 int mpdccp_report_new_subflow (struct sock*);
 int mpdccp_report_destroy (struct sock*);
 
@@ -375,12 +377,18 @@ void my_sock_destruct (struct sock *sk);
 int mpdccp_xmit_to_sk (struct sock *sk, struct sk_buff *skb);
 
 /* Functions for authentication */
-void mpdccp_key_sha1(u64 key1, u64 key2, u32 *token);
-void mpdccp_hmac_sha1(const u8 *key_1, const u8 *key_2, u32 *hash_out, int arg_num, ...);
+int mpdccp_hash_key(const u8 *in, u8 inlen, u32 *token);
+int mpdccp_hmac_sha256(const u8 *key, u8 keylen, const u8 *msg, u8 msglen, u8 *output);
+int mpdccp_generate_key(struct mpdccp_key *key, int key_type);
 
 static inline struct mpdccp_cb *get_mpcb(const struct sock *sk)
 {
 	return MPDCCP_CB(sk);
+}
+static inline struct sock *mpdccp_getmeta (const struct sock *sk)
+{
+	struct mpdccp_cb *mpcb = MPDCCP_CB(sk);
+	return mpcb ? mpcb->meta_sk : NULL;
 }
 
 // Inverse function to dccp_sk()

@@ -379,185 +379,18 @@ int
 _mpdccp_destroy_sock (
 	struct sock	*sk)
 {
-	struct mpdccp_meta_sk	*meta_sk;
 	struct mpdccp_cb	*mpcb;
 
 	if (!mpdccp_is_meta(sk)) return -EINVAL;
-	meta_sk = sk->sk_user_data;
-	sk->sk_user_data = 0;
 	mpcb = MPDCCP_CB(sk);
 	if (mpcb) mpdccp_destroy_mpcb (mpcb);
-	if (meta_sk) kfree (meta_sk);
 	unset_mpdccp(sk);
 	return 0;
 }
 
 
-int
-mpdccp_report_destroy (
-	struct sock	*sk)
-{
-	return mpdccp_report_subflow (sk, MPDCCP_SUBFLOW_DESTROY);
-}
-EXPORT_SYMBOL(mpdccp_report_destroy);
 
 
-int
-mpdccp_report_new_subflow (
-	struct sock	*sk)
-{
-	return mpdccp_report_subflow (sk, MPDCCP_SUBFLOW_CREATE);
-}
-EXPORT_SYMBOL(mpdccp_report_new_subflow);
-
-
-int
-mpdccp_report_subflow (
-	struct sock	*sk,
-	int		action)
-{
-	struct sock		*meta_sk;
-	struct mpdccp_cb	*mpcb;
-	struct my_sock		*my_sk;
-	struct mpdccp_link_info	*link;
-
-	if (!sk) return -EINVAL;
-	if (mpdccp_is_meta(sk)) return 0;
-	mpcb = get_mpcb (sk);
-	if (!mpcb) return -EINVAL;
-	meta_sk = mpcb->meta_sk;
-	if (!meta_sk) return -EINVAL;
-	my_sk = mpdccp_my_sock(sk);
-	if (!my_sk) return -EINVAL;
-	rcu_read_lock();
-	link = my_sk->link_info;
-	mpdccp_link_get (link);
-	rcu_read_unlock();
-	if (mpcb->report_subflow) {
-		mpcb->report_subflow (action, meta_sk, sk, link, mpcb->role);
-	}
-	rcu_read_lock();
-	mpdccp_link_put (link);
-	rcu_read_unlock();
-	return 0;
-}
-EXPORT_SYMBOL(mpdccp_report_subflow);
-
-
-static
-int
-_mpdccp_set_subflow_report (
-	struct sock	*sk,
-	void 		(*report_subflow) (int, struct sock*, struct sock*, struct mpdccp_link_info*, int))
-{
-	struct mpdccp_cb	*mpcb;
-
-	if (!mpdccp_is_meta(sk)) return -EINVAL;
-	mpcb = MPDCCP_CB(sk);
-	if (!mpcb) return -EINVAL;
-	mpcb->report_subflow = report_subflow;
-	return 0;
-}
-
-/* From mptcp_hmac_sha1@mptcp_ctrl.c */
-void mpdccp_hmac_sha1(const u8 *key_1, const u8 *key_2, u32 *hash_out, int arg_num, ...)
-{
-	u32 workspace[SHA_WORKSPACE_WORDS];
-	u8 input[128]; /* 2 512-bit blocks */
-	int i;
-	int index;
-	int length;
-	u8 *msg;
-	va_list list;
-
-	memset(workspace, 0, sizeof(workspace));
-
-	/* Generate key xored with ipad */
-	memset(input, 0x36, 64);
-	for (i = 0; i < 8; i++)
-		input[i] ^= key_1[i];
-	for (i = 0; i < 8; i++)
-		input[i + 8] ^= key_2[i];
-
-	va_start(list, arg_num);
-	index = 64;
-	for (i = 0; i < arg_num; i++) {
-		length = va_arg(list, int);
-		msg = va_arg(list, u8 *);
-		BUG_ON(index + length > 125); /* Message is too long */
-		memcpy(&input[index], msg, length);
-		index += length;
-	}
-	va_end(list);
-
-	input[index] = 0x80; /* Padding: First bit after message = 1 */
-	memset(&input[index + 1], 0, (126 - index));
-
-	/* Padding: Length of the message = 512 + message length (bits) */
-	input[126] = 0x02;
-	input[127] = ((index - 64) * 8); /* Message length (bits) */
-
-	sha_init(hash_out);
-	sha_transform(hash_out, input, workspace);
-	memset(workspace, 0, sizeof(workspace));
-
-	sha_transform(hash_out, &input[64], workspace);
-	memset(workspace, 0, sizeof(workspace));
-
-	for (i = 0; i < 5; i++)
-		hash_out[i] = cpu_to_be32(hash_out[i]);
-
-	/* Prepare second part of hmac */
-	memset(input, 0x5C, 64);
-	for (i = 0; i < 8; i++)
-		input[i] ^= key_1[i];
-	for (i = 0; i < 8; i++)
-		input[i + 8] ^= key_2[i];
-
-	memcpy(&input[64], hash_out, 20);
-	input[84] = 0x80;
-	memset(&input[85], 0, 41);
-
-	/* Padding: Length of the message = 512 + 160 bits */
-	input[126] = 0x02;
-	input[127] = 0xA0;
-
-	sha_init(hash_out);
-	sha_transform(hash_out, input, workspace);
-	memset(workspace, 0, sizeof(workspace));
-
-	sha_transform(hash_out, &input[64], workspace);
-
-	for (i = 0; i < 5; i++)
-		hash_out[i] = cpu_to_be32(hash_out[i]);
-}
-
-static int mpdccp_generate_key(struct mpdccp_key *key, int key_type)
-{
-	__u64 temp;
-	int ret;
-	switch (key_type) {
-		case DCCPK_PLAIN:
-			key->type = key_type;
-			key->size = MPDCCP_PLAIN_KEY_SIZE;
-			get_random_bytes(&temp, MPDCCP_PLAIN_KEY_SIZE);
-			memcpy(key->value, &temp, MPDCCP_PLAIN_KEY_SIZE);
-			ret = 0;
-			break;
-		case DCCPK_C25519_SHA256:
-		case DCCPK_C25519_SHA512:
-			/* TODO: add support */
-			key->size = 0;
-			ret = -1;
-			break;
-		default:
-			mpdccp_pr_debug("cannot generate key of type %d", key_type);
-			key->size = 0;
-			ret = -1;
-	}
-	mpdccp_pr_debug("generated key %llx type %d", be64_to_cpu(*((__be64 *)key->value)), key->type);
-	return ret;
-}
 
 static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 {
@@ -572,11 +405,6 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 		int key_type;
 		dreq->meta_sk = NULL;
 
-		if (opt_recv->dccpor_mp_vers != MPDCCP_VERSION_NUM) {
-			mpdccp_pr_debug("version mismatch srv: %d cli: %d", MPDCCP_VERSION_NUM, opt_recv->dccpor_mp_vers);
-			return -1;
-		}
-
 		/* TODO: replace with proper crypto select algo */
 		key_type = ffs(opt_recv->dccpor_mp_suppkeys & MPDCCP_SUPPKEYS) - 1;
 		if (key_type < 0) {
@@ -590,10 +418,11 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 			mpdccp_pr_debug("error generating key of type %d", key_type);
 			return -1;
 		}
-	} else {
+	} else if (opt_recv->saw_mpjoin) {
 		/* No MP_KEY: this is a join */
 		struct sock *meta_sk = NULL;
 		struct mpdccp_cb *mpcb;
+		int ret;
 
 		if ((opt_recv->dccpor_mp_token == 0) || (opt_recv->dccpor_mp_nonce == 0)) {
 			mpdccp_pr_debug("invalid token or nonce received");
@@ -613,8 +442,7 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 
 		if (meta_sk == NULL) {
 			mpdccp_pr_debug("no token found for join");
-			/* HACK: return special code to reject request but avoid sending reset */
-			return 2;
+			return -1;
 		}
 
 		mpcb = MPDCCP_CB(meta_sk);
@@ -623,6 +451,12 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 		sock_hold(meta_sk);
 		dreq->meta_sk = meta_sk;
 
+		/* Check the MP version is the same as the first subflow */
+		if (dccp_sk(meta_sk)->multipath_ver != dreq->multipath_ver) {
+			mpdccp_pr_debug("MP version mismatch in JOIN expected: %d got:%d", dccp_sk(meta_sk)->multipath_ver, dreq->multipath_ver);
+			return -1;
+		}
+
 		/* Generate local nonce */
 		get_random_bytes(&dreq->mpdccp_loc_nonce, 4);
 		mpdccp_pr_debug("generated nonce %x", dreq->mpdccp_loc_nonce);
@@ -630,13 +464,16 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 		/* Calculate HMAC */
 		put_unaligned_be32(mpcb->mpdccp_loc_token, &msg[0]);
 		put_unaligned_be32(dreq->mpdccp_rem_nonce, &msg[4]);
-		mpdccp_hmac_sha1((u8 *)mpcb->mpdccp_loc_key.value,
-						 (u8 *)mpcb->mpdccp_rem_key.value,
-						 (u32 *)dreq->mpdccp_loc_hmac, 1,
-						 8, msg);
-
+		ret = mpdccp_hmac_sha256(mpcb->dkeyB, mpcb->dkeylen, msg, 8, dreq->mpdccp_loc_hmac);
+		if (ret) {
+			mpdccp_pr_debug("error calculating HMAC, err %d", ret);
+			return -1;
+		}
 		mpdccp_pr_debug("calculated HMAC %llx", be64_to_cpu(*((u64 *)dreq->mpdccp_loc_hmac)));
+	} else {
+		mpdccp_pr_debug("no MP_KEY or MP_JOIN in DCCP REQUEST");
 	}
+
 	return 0;
 }
 static int _mpdccp_rcv_request_sent_state_process(struct sock *sk, const struct sk_buff *skb)
@@ -649,34 +486,54 @@ static int _mpdccp_rcv_request_sent_state_process(struct sock *sk, const struct 
 
 	if (dccp_sk(sk)->is_kex_sk) {
 		/* We are in key exchange phase: process data from MP_KEY option */
-		int key_type;
+		int i;
 		mpcb = MPDCCP_CB(sk);
-
-		/* Check if key type proposed is supported */
-		key_type = ffs(opt_recv->dccpor_mp_suppkeys & MPDCCP_SUPPKEYS) - 1;
-		if (key_type < 0) {
-			mpdccp_pr_debug("no key type match srv: %x cli: %x", opt_recv->dccpor_mp_suppkeys, MPDCCP_SUPPKEYS);
-			return -1;
+		/* Fallback to single path if mp cannot be established */
+		if (!opt_recv->saw_mpkey || (dccp_sk(sk)->multipath_ver == MPDCCP_VERS_UNDEFINED)) {
+			mpdccp_pr_debug("no MP_KEY in response, fallback to single DCCP");
+			if (mpcb) {
+				mpdccp_pr_debug("no MP_KEY in response or invalid MP version, fallback to single path DCCP\n");
+				mpcb->fallback_sp = 1;
+				return 0;
+			} else {
+				mpdccp_pr_debug("invalid MPCB\n");
+				return -1;
+			}
 		}
 
-		/* Store remote key */
-		if (opt_recv->dccpor_mp_keys[0].type != key_type) {
-			mpdccp_pr_debug("rx key not the expected type rx: %d exp: %d", opt_recv->dccpor_mp_keys[0].type, key_type);
-			return -1;
-		}
 		if ((opt_recv->dccpor_mp_keys[0].size == 0) || (opt_recv->dccpor_mp_keys[0].size > MPDCCP_MAX_KEY_SIZE)) {
 			mpdccp_pr_debug("rx key(s) have invalid length %d", opt_recv->dccpor_mp_keys[0].size);
 			return -1;
 		}
 
+		/* Pick the local key with the same type as the remote */
+		for (i=0; i < MPDCCP_MAX_KEYS; i++) {
+			if (mpcb->mpdccp_loc_keys[i].type == opt_recv->dccpor_mp_keys[0].type) {
+				mpcb->cur_key_idx = i;
+				mpdccp_pr_debug("found local matching key idx %i type %d\n", i, mpcb->mpdccp_loc_keys[i].type);
+				break;
+			}
+		}
+		if (i == MPDCCP_MAX_KEYS) {
+			mpdccp_pr_debug("no key type match srv: %x cli: %x", opt_recv->dccpor_mp_suppkeys, MPDCCP_SUPPKEYS);
+			return -1;
+		}
+
+		/* Store the remote key */
 		mpcb->mpdccp_rem_key.type = opt_recv->dccpor_mp_keys[0].type;
 		mpcb->mpdccp_rem_key.size = opt_recv->dccpor_mp_keys[0].size;
 		memcpy(mpcb->mpdccp_rem_key.value, opt_recv->dccpor_mp_keys[0].value, mpcb->mpdccp_rem_key.size);
 
-		/* Generate local key for handshake */
-		/* TODO: check for collisions in existing MPCBs */
-		if (mpdccp_generate_key(&mpcb->mpdccp_loc_key, key_type)) {
-			mpdccp_pr_debug("error generating key of type %d", key_type);
+		/* Created derived key(s) */
+		if (mpcb->mpdccp_loc_keys[i].type == DCCPK_PLAIN) {
+			memcpy(&mpcb->dkeyA[0], mpcb->mpdccp_loc_keys[i].value, MPDCCP_PLAIN_KEY_SIZE);
+			memcpy(&mpcb->dkeyA[MPDCCP_PLAIN_KEY_SIZE], mpcb->mpdccp_rem_key.value, MPDCCP_PLAIN_KEY_SIZE);
+			memcpy(&mpcb->dkeyB[0], mpcb->mpdccp_rem_key.value, MPDCCP_PLAIN_KEY_SIZE);
+			memcpy(&mpcb->dkeyB[MPDCCP_PLAIN_KEY_SIZE], mpcb->mpdccp_loc_keys[i].value, MPDCCP_PLAIN_KEY_SIZE);
+			mpcb->dkeylen = MPDCCP_PLAIN_KEY_SIZE * 2;
+		} else {
+			/* TODO */
+			mpdccp_pr_debug("unsupported key type %d", mpcb->mpdccp_loc_keys[i].type);
 			return -1;
 		}
 
@@ -686,8 +543,15 @@ static int _mpdccp_rcv_request_sent_state_process(struct sock *sk, const struct 
 		/* We are in authentication phase: process data from MP_JOIN option */
 		u8 hash_mac[MPDCCP_HMAC_SIZE];
 		u8 msg[8];
+		int ret;
 
 		mpcb = MPDCCP_CB(sk);
+
+		if (!opt_recv->saw_mpjoin || mpcb->fallback_sp || (dccp_sk(sk)->multipath_ver == MPDCCP_VERS_UNDEFINED)) {
+			mpdccp_pr_debug("no MP_JOIN in response, invalid MP version or using single path DCCP fallback\n");
+			return -1;
+		}
+
 		if ((opt_recv->dccpor_mp_token == 0) || (opt_recv->dccpor_mp_nonce == 0)) {
 			mpdccp_pr_debug("invalid token or nonce received");
 			return -1;
@@ -699,10 +563,11 @@ static int _mpdccp_rcv_request_sent_state_process(struct sock *sk, const struct 
 		memcpy(dccp_sk(sk)->mpdccp_rem_hmac, opt_recv->dccpor_mp_hmac, MPDCCP_HMAC_SIZE);
 		put_unaligned_be32(mpcb->mpdccp_rem_token, &msg[0]);
 		put_unaligned_be32(dccp_sk(sk)->mpdccp_loc_nonce, &msg[4]);
-		mpdccp_hmac_sha1((u8 *)mpcb->mpdccp_rem_key.value,
-						 (u8 *)mpcb->mpdccp_loc_key.value,
-						 (u32 *)hash_mac, 1,
-						 8, msg);
+		ret = mpdccp_hmac_sha256(mpcb->dkeyB, mpcb->dkeylen, msg, 8, hash_mac);
+		if (ret) {
+			mpdccp_pr_debug("error calculating HMAC, err %d", ret);
+			return -1;
+		}
 		mpdccp_pr_debug("calculated HMAC(B) %llx", be64_to_cpu(*((u64 *)hash_mac)));
 
 		if (memcmp(dccp_sk(sk)->mpdccp_rem_hmac, hash_mac, MPDCCP_HMAC_SIZE)) {
@@ -716,10 +581,11 @@ static int _mpdccp_rcv_request_sent_state_process(struct sock *sk, const struct 
 		/* Now calculate the HMAC from the received JOIN */
 		put_unaligned_be32(mpcb->mpdccp_rem_token, &msg[0]);
 		put_unaligned_be32(dccp_sk(sk)->mpdccp_rem_nonce, &msg[4]);
-		mpdccp_hmac_sha1((u8 *)mpcb->mpdccp_loc_key.value,
-						 (u8 *)mpcb->mpdccp_rem_key.value,
-						 (u32 *)dccp_sk(sk)->mpdccp_loc_hmac, 1,
-						 8, msg);
+		ret = mpdccp_hmac_sha256(mpcb->dkeyA, mpcb->dkeylen, msg, 8, dccp_sk(sk)->mpdccp_loc_hmac);
+		if (ret) {
+			mpdccp_pr_debug("error calculating HMAC, err %d", ret);
+			return -1;
+		}
 		mpdccp_pr_debug("calculated HMAC(A) %llx", be64_to_cpu(*((u64 *)dccp_sk(sk)->mpdccp_loc_hmac)));
 	}
 	return 0;
@@ -727,12 +593,14 @@ static int _mpdccp_rcv_request_sent_state_process(struct sock *sk, const struct 
 
 static int _mpdccp_rcv_established(struct sock *sk)
 {
+	struct mpdccp_cb *mpcb = MPDCCP_CB(sk);
+
 	/* Check if the socket has been authenticated */
-	if(!dccp_sk(sk)->auth_done) {
-		mpdccp_pr_debug("sk %p NOT authenticated \n", sk);
-		return -1;
+	if(dccp_sk(sk)->auth_done || (mpcb && mpcb->fallback_sp)) {
+			return 0;
 	}
-	return 0;
+	mpdccp_pr_debug("sk %p NOT authenticated \n", sk);
+	return -1;
 }
 
 static int _mpdccp_rcv_respond_partopen_state_process(struct sock *sk, int type)
@@ -740,25 +608,46 @@ static int _mpdccp_rcv_respond_partopen_state_process(struct sock *sk, int type)
 	struct mpdccp_cb *mpcb = MPDCCP_CB(sk);
 	mpdccp_pr_debug("enter for sk %p role %s is_meta %d is_kex %d type %d", sk, dccp_role(sk), mpdccp_is_meta(sk), dccp_sk(sk)->is_kex_sk, type);
 
-	if (type == DCCP_PKT_ACK || type == DCCP_PKT_DATAACK ) {
+	if (mpcb && !mpcb->fallback_sp && (type == DCCP_PKT_ACK || type == DCCP_PKT_DATAACK)) {
 		if (dccp_sk(sk)->is_kex_sk && !mpcb->kex_done) {
+			int key_idx = mpcb->cur_key_idx;
 			mpdccp_pr_debug("key exchange done for mpcb %p\n", mpcb); 
 			mpcb->kex_done = 1;
+
+			/* Created derived key(s) */
+			if (mpcb->mpdccp_loc_keys[key_idx].type == DCCPK_PLAIN) {
+				memcpy(&mpcb->dkeyA[0], mpcb->mpdccp_rem_key.value, MPDCCP_PLAIN_KEY_SIZE);
+				memcpy(&mpcb->dkeyA[MPDCCP_PLAIN_KEY_SIZE], mpcb->mpdccp_loc_keys[key_idx].value, MPDCCP_PLAIN_KEY_SIZE);
+				memcpy(&mpcb->dkeyB[0], mpcb->mpdccp_loc_keys[key_idx].value, MPDCCP_PLAIN_KEY_SIZE);
+				memcpy(&mpcb->dkeyB[MPDCCP_PLAIN_KEY_SIZE], mpcb->mpdccp_rem_key.value, MPDCCP_PLAIN_KEY_SIZE);
+				mpcb->dkeylen = MPDCCP_PLAIN_KEY_SIZE * 2;
+			} else {
+				/* TODO */
+				mpdccp_pr_debug("unsupported key type %d", mpcb->mpdccp_loc_keys[key_idx].type);
+				return -1;
+			}
 			/* No longer need to include the MP_KEY in the options */
 			dccp_sk(sk)->is_kex_sk = 0;
 		}
 
+		if (dccp_sk(sk)->dccps_role == DCCP_ROLE_CLIENT) {
+			/* Stop the ACK retry timer */
+			inet_csk_clear_xmit_timer(sk, ICSK_TIME_RETRANS);
+			WARN_ON(sk->sk_send_head == NULL);
+			kfree_skb(sk->sk_send_head);
+			sk->sk_send_head = NULL;
+		}
+
 		/* Authentication complete, send an additional ACK if required */
 		dccp_sk(sk)->auth_done = 1;
-		if (dccp_sk(sk)->need_hmac_ack) {
+		if (dccp_sk(sk)->dccps_role == DCCP_ROLE_SERVER) {
 			mpdccp_pr_debug("send ACK");
 			dccp_send_ack(sk);
-			dccp_sk(sk)->need_hmac_ack = 0;
 		}
 	}
 
 	/* Open the meta socket if necessary */
-	if ((sk->sk_state == DCCP_OPEN) && (mpcb->meta_sk->sk_state == DCCP_RESPOND)) {
+	if ((sk->sk_state == DCCP_OPEN) && (mpcb && mpcb->meta_sk->sk_state == DCCP_RESPOND)) {
 		mpdccp_pr_debug("opening meta %p\n", mpcb->meta_sk);
 		mpcb->meta_sk->sk_state = DCCP_OPEN;
 	}
@@ -885,7 +774,8 @@ _mpdccp_create_master(
 	mpcb->has_localaddr = 1;
 	mpcb->mpdccp_loc_token = dreq->mpdccp_loc_token;
 	mpcb->mpdccp_rem_token = dreq->mpdccp_rem_token;
-	mpcb->mpdccp_loc_key = dreq->mpdccp_loc_key;
+	mpcb->mpdccp_loc_keys[0] = dreq->mpdccp_loc_key;
+	mpcb->cur_key_idx = 0;
 	mpcb->mpdccp_rem_key = dreq->mpdccp_rem_key;
 	mpcb->role = MPDCCP_SERVER;
 
@@ -915,10 +805,20 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 
 	mpdccp_pr_debug("enter sk %p newsk %p dmeta %p", sk, newsk, dreq->meta_sk);
 
-	if (!dreq->meta_sk && !mpdccp_is_meta(newsk)) {
+	if (dreq && !dreq->meta_sk && !mpdccp_is_meta(newsk)) {
 		/* This is a new session, need to create MPCB and meta */
 		u32 token;
+		int dkeylen;
+		u8 dkeyA[MPDCCP_MAX_KEY_SIZE * 2];
+		u8 dkeyB[MPDCCP_MAX_KEY_SIZE * 2];
 
+		/* Fallback to single path if mp cannot be established */
+		if (!opt_recv->saw_mpkey || (dreq->multipath_ver == MPDCCP_VERS_UNDEFINED)) {
+			mpdccp_pr_debug("failed MP negotiation with client, fallback to single path DCCP\n");
+			mpdccp_activate (newsk, 0);
+			*master_sk = inet_csk_complete_hashdance(sk, newsk, req, true);
+			return 0;
+		}
 		/* Validate the data from the options */
 		if (opt_recv->dccpor_mp_keys[0].type != dreq->mpdccp_loc_key.type) {
 			mpdccp_pr_debug("received key not the expected type rx: %d exp: %d",
@@ -929,6 +829,8 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 			mpdccp_pr_debug("received key has invalid length");
 			return -1;
 		}
+
+		dccp_sk(newsk)->multipath_ver = dreq->multipath_ver;
 
 		/* Get the client key */
 		dreq->mpdccp_rem_key.type = opt_recv->dccpor_mp_keys[0].type;
@@ -941,12 +843,34 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 		/* Calculate the path tokens */
 		dccp_sk(newsk)->is_kex_sk = 0;
 
-		mpdccp_key_sha1(*(u64 *)dreq->mpdccp_loc_key.value,
-						*(u64 *)dreq->mpdccp_rem_key.value, &token);
+		/* Created derived key(s) */
+		if (dreq->mpdccp_loc_key.type == DCCPK_PLAIN) {
+			memcpy(&dkeyA[0], dreq->mpdccp_rem_key.value, MPDCCP_PLAIN_KEY_SIZE);
+			memcpy(&dkeyA[MPDCCP_PLAIN_KEY_SIZE], dreq->mpdccp_loc_key.value, MPDCCP_PLAIN_KEY_SIZE);
+			memcpy(&dkeyB[0], dreq->mpdccp_loc_key.value, MPDCCP_PLAIN_KEY_SIZE);
+			memcpy(&dkeyB[MPDCCP_PLAIN_KEY_SIZE], dreq->mpdccp_rem_key.value, MPDCCP_PLAIN_KEY_SIZE);
+			dkeylen = MPDCCP_PLAIN_KEY_SIZE * 2;
+		} else {
+			/* TODO */
+			mpdccp_pr_debug("unsupported key type %d", dreq->mpdccp_loc_key.type);
+			return -1;
+		}
+
+		/* Create local token */
+		ret = mpdccp_hash_key(dkeyB, dkeylen, &token);
+		if (ret) {
+			mpdccp_pr_debug("error hashing dkeyB, err %d", ret);
+			return -1;
+		}
 		dreq->mpdccp_loc_token = token;
 		mpdccp_pr_debug("token(B) %x", token);
-		mpdccp_key_sha1(*(u64 *)dreq->mpdccp_rem_key.value,
-						*(u64 *)dreq->mpdccp_loc_key.value, &token);
+
+		/* Create remote token */
+		ret = mpdccp_hash_key(dkeyA, dkeylen, &token);
+		if (ret) {
+			mpdccp_pr_debug("error hashing dkeyA, err %d", ret);
+			return -1;
+		}
 		dreq->mpdccp_rem_token = token;
 		mpdccp_pr_debug("token(A) %x", token);
 
@@ -980,9 +904,12 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 		memcpy(dreq->mpdccp_rem_hmac, opt_recv->dccpor_mp_hmac, MPDCCP_HMAC_SIZE);
 		put_unaligned_be32(mpcb->mpdccp_loc_token, &msg[0]);
 		put_unaligned_be32(dreq->mpdccp_loc_nonce, &msg[4]);
-		mpdccp_hmac_sha1((u8 *)mpcb->mpdccp_rem_key.value,
-						 (u8 *)mpcb->mpdccp_loc_key.value, (u32 *)hash_mac, 1, 8,
-						 msg);
+		ret = mpdccp_hmac_sha256(mpcb->dkeyA, mpcb->dkeylen, msg, 8, hash_mac);
+		if (ret) {
+			mpdccp_pr_debug("error calculating HMAC, err %d", ret);
+			return -1;
+		}
+
 		if (memcmp(dreq->mpdccp_rem_hmac, hash_mac, MPDCCP_HMAC_SIZE)) {
 					mpdccp_pr_debug("HMAC validation failed! rx: %llx exp: %llx\n",
 									be64_to_cpu(*(u64 *)dreq->mpdccp_rem_hmac),
@@ -1001,9 +928,7 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 
 		/* Drop the request since this is not following the accept() flow */
 		inet_csk_reqsk_queue_drop(sk, req);
-
-		/* Set the flag to send an ack later */
-		dccp_sk(newsk)->need_hmac_ack = 1;
+		reqsk_queue_removed(&inet_csk(sk)->icsk_accept_queue, req);
 	}
 	return 0;
 }
@@ -1045,7 +970,6 @@ mpdccp_init_funcs (void)
 		.connect = _mpdccp_connect,
 		.write_xmit = _mpdccp_write_xmit,
 		.xmit_skb = _mpdccp_xmit_skb,
-		.set_subflow_report = _mpdccp_set_subflow_report,
 		.activate = _mpdccp_activate,
 		.isactive = _mpdccp_isactive,
 		.conn_request = _mpdccp_conn_request,

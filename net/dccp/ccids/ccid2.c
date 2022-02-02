@@ -531,6 +531,7 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 	u64 ackno, seqno;
 	struct ccid2_seq *seqp;
 	int done = 0;
+	bool not_rst = 0;
 	unsigned int maxincr = 0;
 
 	/* check reverse path congestion */
@@ -587,6 +588,7 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 		seqp = seqp->ccid2s_next;
 		if (seqp == hc->tx_seqh) {
 			seqp = hc->tx_seqh->ccid2s_prev;
+			not_rst = 1;
 			break;
 		}
 	}
@@ -624,9 +626,11 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 			if (done)
 				break;
 
+
 			/* check all seqnos in the range of the vector
 			 * run length
 			 */
+
 			while (between48(seqp->ccid2s_seq,ackno_end_rl,ackno)) {
 				const u8 state = dccp_ackvec_state(avp->vec);
 
@@ -720,7 +724,7 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 	/* restart RTO timer if not all outstanding data has been acked */
 	if (hc->tx_pipe == 0)
 		sk_stop_timer(sk, &hc->tx_rtotimer);
-	else
+	else if(!not_rst)
 		sk_reset_timer(sk, &hc->tx_rtotimer, jiffies + hc->tx_rto);
 done:
 	/* check if incoming Acks allow pending packets to be sent */
