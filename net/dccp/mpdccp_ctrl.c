@@ -359,6 +359,7 @@ void my_sock_destruct (struct sock *sk)
     struct my_sock   *my_sk = mpdccp_my_sock(sk);
     struct mpdccp_cb *mpcb = NULL;
     int found = 0;
+    int rem_subflows = 0;
 
     mpdccp_report_destroy (sk);
     if (my_sk) {
@@ -377,6 +378,7 @@ void my_sock_destruct (struct sock *sk)
                         my_sk->link_info = NULL;
                     }
                     mpcb->cnt_subflows--;
+                    rem_subflows = mpcb->cnt_subflows;
                     found = 1;
                     break;
                 }
@@ -429,8 +431,8 @@ void my_sock_destruct (struct sock *sk)
         if (sk->sk_destruct) 
             sk->sk_destruct (sk);
 
-        mpdccp_pr_debug ("subflow %p removed from mpcb %p (found %d), remaining subflows: %d", sk, mpcb, found, mpcb ? mpcb->cnt_subflows : -1);
-        if (found && mpcb && (mpcb->cnt_subflows == 0) && (mpcb->meta_sk->sk_state != DCCP_CLOSED)) {
+        mpdccp_pr_debug ("subflow %p removed from mpcb %p (found %d), remaining subflows: %d", sk, mpcb, found, rem_subflows);
+        if (found && (rem_subflows == 0) && mpcb && (mpcb->meta_sk->sk_state != DCCP_CLOSED)) {
             mpdccp_pr_debug ("closing meta %p\n", mpcb->meta_sk);
             dccp_done(mpcb->meta_sk);
         }
@@ -1135,9 +1137,8 @@ void mp_state_change(struct sock *sk)
         /* Move socket from the request to the subflow list */
         list_move_tail(&mpdccp_my_sock(sk)->sk_list, &mpcb->psubflow_list);
         mpdccp_pr_debug("Added new entry sk %p to psubflow_list @ %p\n", sk, mpdccp_my_sock(sk));
-        spin_unlock(&mpcb->psubflow_list_lock);
-
         mpcb->cnt_subflows = (mpcb->cnt_subflows) + 1;
+        spin_unlock(&mpcb->psubflow_list_lock);
 
         if (mpcb->sched_ops->init_subflow)
             mpcb->sched_ops->init_subflow(sk);

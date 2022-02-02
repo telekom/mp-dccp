@@ -714,8 +714,6 @@ create_subflow(
 		goto err;
 	}
 
-	mpcb->cnt_subflows = (mpcb->cnt_subflows) + 1;
-
 	mpdccp_my_sock(newsk)->link_info = link_info;
 	mpdccp_my_sock(newsk)->link_cnt = mpdccp_link_cnt(link_info);
 	mpdccp_my_sock(newsk)->link_iscpy = 0;
@@ -723,6 +721,7 @@ create_subflow(
 	spin_lock(&mpcb->psubflow_list_lock);
 	list_add_tail_rcu(&mpdccp_my_sock(newsk)->sk_list, &mpcb->psubflow_list);
 	mpdccp_pr_debug("Added new entry to psubflow_list @ %p\n", mpdccp_my_sock(newsk));
+	mpcb->cnt_subflows = (mpcb->cnt_subflows) + 1;
 	spin_unlock(&mpcb->psubflow_list_lock);
 
 	if (mpcb->sched_ops->init_subflow)
