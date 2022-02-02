@@ -358,13 +358,13 @@ void my_sock_destruct (struct sock *sk)
 {
     struct my_sock   *my_sk = mpdccp_my_sock(sk);
     struct mpdccp_cb *mpcb = NULL;
+    int found = 0;
 
     mpdccp_report_destroy (sk);
     if (my_sk) {
         mpcb = my_sk->mpcb;
         if (mpcb) {
             struct my_sock *pos, *temp;
-            int found = 0;
             /* Delete this subflow from the list of mpcb subflows */
             spin_lock(&mpcb->psubflow_list_lock);
             list_for_each_entry_safe(pos, temp, &((mpcb)->psubflow_list), sk_list) {
@@ -429,8 +429,8 @@ void my_sock_destruct (struct sock *sk)
         if (sk->sk_destruct) 
             sk->sk_destruct (sk);
 
-        mpdccp_pr_debug ("subflow %p removed from mpcb %p, remaining subflows: %d", sk, mpcb, mpcb ? mpcb->cnt_subflows : -1);
-        if (mpcb && (mpcb->cnt_subflows == 0) && (mpcb->meta_sk->sk_state != DCCP_CLOSED)) {
+        mpdccp_pr_debug ("subflow %p removed from mpcb %p (found %d), remaining subflows: %d", sk, mpcb, found, mpcb ? mpcb->cnt_subflows : -1);
+        if (found && mpcb && (mpcb->cnt_subflows == 0) && (mpcb->meta_sk->sk_state != DCCP_CLOSED)) {
             mpdccp_pr_debug ("closing meta %p\n", mpcb->meta_sk);
             dccp_done(mpcb->meta_sk);
         }
