@@ -275,7 +275,7 @@ enum {
 
 struct mpdccp_key {
 	enum mpdccp_key_type type;
-	u32 size;
+	__u32 size;
 	__u8 value[MPDCCP_MAX_KEY_SIZE];
 };
 
