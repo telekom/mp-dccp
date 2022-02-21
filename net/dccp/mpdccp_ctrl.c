@@ -367,7 +367,6 @@ void my_sock_destruct (struct sock *sk)
     mpcb = my_sk->mpcb;
     if (mpcb) {
         struct my_sock *pos, *temp;
-        int found = 0;
         spin_lock(&mpcb->psubflow_list_lock);
         list_for_each_entry_safe(pos, temp, &((mpcb)->psubflow_list), sk_list) {
             if (my_sk == pos) {
