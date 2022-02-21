@@ -687,7 +687,7 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 				struct sockaddr *remote_address,
 				int remaddr_len)
 {
-	int			ret = 0;
+	int			ret = 0, isbh;
 	int 			flags;
 	struct socket   	*sock; /* The newly created socket */
 	struct sock     	*sk;
@@ -738,10 +738,20 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	mpdccp_my_sock(sk)->link_iscpy = 0;
 
 	/* Add socket to the request list */
-	spin_lock(&mpcb->psubflow_list_lock);
+	if (in_softirq()) {
+		spin_lock_bh(&mpcb->psubflow_list_lock);
+		isbh = 1;
+	} else {
+		spin_lock(&mpcb->psubflow_list_lock);
+		isbh = 0;
+	}
 	list_add_tail_rcu(&mpdccp_my_sock(sk)->sk_list , &mpcb->prequest_list);
 	mpdccp_pr_debug("Added new entry to prequest_list @ %p\n", mpdccp_my_sock(sk));
-	spin_unlock(&mpcb->psubflow_list_lock);
+	if (isbh) {
+		spin_unlock_bh(&mpcb->psubflow_list_lock);
+	} else {
+		spin_unlock(&mpcb->psubflow_list_lock);
+	}
 
 	/* Only the first (key exchage) socket is blocking */
 	flags = dccp_sk(sk)->is_kex_sk ? 0 : O_NONBLOCK;
@@ -824,7 +834,7 @@ int mpdccp_add_listen_sock (	struct mpdccp_cb *mpcb,
 				int locaddr_len,
 				int if_idx)
 {
-    int                 retval	= 0;
+    int                 retval	= 0, isbh;
     struct socket   	*sock; /* The newly created socket */
     struct sock     	*sk;
     struct mpdccp_link_info	*link_info = NULL;
@@ -875,21 +885,36 @@ int mpdccp_add_listen_sock (	struct mpdccp_cb *mpcb,
 
 
     mpdccp_pr_debug ("set subflow to listen state\n");
-    //rcu_read_lock_bh();
     retval = sock->ops->listen(sock, MPDCCP_SERVER_BACKLOG);
     if (retval < 0) {
         mpdccp_pr_debug("Failed to listen on socket(%d).\n", retval);
         sock_release(sock);
-        rcu_read_unlock_bh();
         goto out;
     }
 
-    spin_lock(&mpcb->plisten_list_lock);
+    if (in_softirq()) {
+       spin_lock_bh(&mpcb->plisten_list_lock);
+	isbh = 1;
+    } else {
+       spin_lock(&mpcb->plisten_list_lock);
+	isbh = 0;
+    }
+    if (isbh)
+    	rcu_read_lock_bh();
+    else
+    	rcu_read_lock();
     list_add_tail_rcu(&mpdccp_my_sock(sk)->sk_list , &mpcb->plisten_list);
+    if (isbh)
+    	rcu_read_unlock_bh();
+    else
+    	rcu_read_unlock();
     mpcb->cnt_listensocks++;
     mpdccp_pr_debug("Added new entry to plisten_list @ %p\n", mpdccp_my_sock(sk));
-    spin_unlock(&mpcb->plisten_list_lock);
-    //rcu_read_unlock_bh();
+    if (isbh) {
+       spin_unlock_bh(&mpcb->plisten_list_lock);
+    } else {
+       spin_unlock(&mpcb->plisten_list_lock);
+    }
 
     mpdccp_pr_debug("server port added successfully. There are %d subflows now.\n",
 			mpcb->cnt_subflows);
@@ -962,7 +987,7 @@ mpdccp_xmit_to_sk (
 	struct sock	*sk,
 	struct sk_buff	*skb)
 {
-	int			len, ret=0;
+	int			len, ret=0, isbh;
 	long 			timeo;
 	struct mpdccp_cb	*mpcb;
 	struct sock		*meta_sk;
@@ -977,7 +1002,13 @@ mpdccp_xmit_to_sk (
 	mpcb = get_mpcb (sk);
 	meta_sk = mpcb ? mpcb->meta_sk : NULL;
 
-	lock_sock(sk);
+	if (in_softirq()) {
+		bh_lock_sock(sk);
+		isbh = 1;
+	} else {
+		lock_sock(sk);
+		isbh = 0;
+	}
 
 	if (dccp_qpolicy_full(sk)) {
 		ret = -EAGAIN;
@@ -1005,7 +1036,10 @@ mpdccp_xmit_to_sk (
 	mpdccp_pr_debug("packet with %d bytes sent\n", len);
 
 out_release:
-	release_sock(sk);
+	if(isbh)
+		bh_unlock_sock(sk);
+	else
+		release_sock(sk);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(mpdccp_xmit_to_sk);

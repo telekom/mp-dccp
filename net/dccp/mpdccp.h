@@ -125,7 +125,6 @@ extern bool mpdccp_debug;
 
 static inline void
 set_mpdccp(struct sock *sk, struct mpdccp_cb *mpcb) {
-	dccp_sk(sk)->mpdccp.magic = MPDCCP_MAGIC;
 	dccp_sk(sk)->mpdccp = (struct mpdccp_meta_cb) {
                                 .magic = MPDCCP_MAGIC,
                                 .mpcb = mpcb,

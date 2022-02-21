@@ -387,6 +387,7 @@ _mpdccp_destroy_sock (
 	mpcb = MPDCCP_CB(sk);
 	if (mpcb) mpdccp_destroy_mpcb (mpcb);
 	unset_mpdccp(sk);
+	module_put (THIS_MODULE);
 	return 0;
 }
 
@@ -959,7 +960,6 @@ static int _mpdccp_close_meta(struct sock *meta_sk)
 			}
 		}
 	}
-	module_put (THIS_MODULE);
 	return ret;
 }
 
