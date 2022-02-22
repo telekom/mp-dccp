@@ -63,24 +63,42 @@ call_mpdccp_subflow_notifiers (
 	struct sock		*sk)
 {
 	int				ret;
-	struct sock			*meta_sk;
-	struct mpdccp_cb		*mpcb;
-	struct my_sock			*my_sk;
-	struct mpdccp_link_info		*link;
+	struct sock			*meta_sk = NULL;
+	struct mpdccp_cb		*mpcb = NULL;
+	struct my_sock			*my_sk = NULL;
+	struct mpdccp_link_info		*link = NULL;
 	struct mpdccp_subflow_notifier	info;
 
 	if (!sk) return -EINVAL;
-	if (mpdccp_is_meta(sk)) return 0;
 	mpcb = get_mpcb (sk);
 	if (!mpcb) return -EINVAL;
-	meta_sk = mpcb->meta_sk;
-	if (!meta_sk) return -EINVAL;
-	my_sk = mpdccp_my_sock(sk);
-	if (!my_sk) return -EINVAL;
-	rcu_read_lock();
-	link = my_sk->link_info;
-	mpdccp_link_get (link);
-	rcu_read_unlock();
+	switch (action) {
+	case MPDCCP_EV_ALL_SUBFLOW_DOWN:
+		if (!mpcb->up_reported) return 0;
+		if (!mpdccp_is_meta(sk)) return 0;
+		meta_sk = sk;
+		sk = NULL;
+		link = NULL;
+		break;
+	case MPDCCP_EV_SUBFLOW_CREATE:
+	case MPDCCP_EV_SUBFLOW_DESTROY:
+		if (mpdccp_is_meta(sk)) return 0;
+		meta_sk = mpcb->meta_sk;
+		if (!meta_sk) return -EINVAL;
+		my_sk = mpdccp_my_sock(sk);
+		if (!my_sk) return -EINVAL;
+		if (action == MPDCCP_EV_SUBFLOW_CREATE) {
+			my_sk->up_reported = 1;
+			mpcb->up_reported = 1;
+		} else {
+			if (!my_sk->up_reported) return 0;
+		}
+		rcu_read_lock();
+		link = my_sk->link_info;
+		mpdccp_link_get (link);
+		rcu_read_unlock();
+		break;
+	}
 	sock_hold (meta_sk);
 
 	info = (struct mpdccp_subflow_notifier) {
@@ -91,20 +109,29 @@ call_mpdccp_subflow_notifiers (
 	};
 
 	ret = raw_notifier_call_chain(&mpdccp_subflow_chain, action, &info);
-	rcu_read_lock();
-	mpdccp_link_put (link);
-	rcu_read_unlock();
+	if (link) {
+		rcu_read_lock();
+		mpdccp_link_put (link);
+		rcu_read_unlock();
+	}
 	sock_put (meta_sk);
 	return ret;
 }
 EXPORT_SYMBOL(call_mpdccp_subflow_notifiers);
 
+int
+mpdccp_report_alldown (
+	struct sock	*sk)
+{
+	return call_mpdccp_subflow_notifiers (MPDCCP_EV_ALL_SUBFLOW_DOWN, sk);
+}
+EXPORT_SYMBOL(mpdccp_report_alldown);
 
 int
 mpdccp_report_destroy (
 	struct sock	*sk)
 {
-	return call_mpdccp_subflow_notifiers (MPDCCP_SUBFLOW_DESTROY, sk);
+	return call_mpdccp_subflow_notifiers (MPDCCP_EV_SUBFLOW_DESTROY, sk);
 }
 EXPORT_SYMBOL(mpdccp_report_destroy);
 
@@ -113,7 +140,7 @@ int
 mpdccp_report_new_subflow (
 	struct sock	*sk)
 {
-	return call_mpdccp_subflow_notifiers (MPDCCP_SUBFLOW_CREATE, sk);
+	return call_mpdccp_subflow_notifiers (MPDCCP_EV_SUBFLOW_CREATE, sk);
 }
 EXPORT_SYMBOL(mpdccp_report_new_subflow);
 

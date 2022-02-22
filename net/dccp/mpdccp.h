@@ -220,8 +220,7 @@ struct mpdccp_reorder_path_cb;
 struct mpdccp_pm_ops;
 
 /* This struct holds connection-level (i.e., bundling) information. */
-struct mpdccp_cb
-{
+struct mpdccp_cb {
 	/* List of MPDCCP end-to-end connections */
 	struct list_head        connection_list;
 	/* Pointer to list of per-connection subflows */
@@ -254,6 +253,7 @@ struct mpdccp_cb
 	u16			    server_port;	// Server only 
 	int			    backlog;
 	int                     delpath;
+	int			up_reported;
 	
 	/* Scheduler related data */
 	struct mpdccp_sched_ops *sched_ops;
@@ -302,8 +302,9 @@ struct my_sock
 	/* send|recv work. TODO: not sure if i need dynamic memory here to re-queue that work. */
 	struct delayed_work     close_work;
 	struct mpdccp_link_info	*link_info;
-	int				link_cnt;
-	int				link_iscpy;
+	int			link_cnt;
+	int			link_iscpy;
+	int			up_reported;
 	
 	/* Path manager related data */
 	int     if_idx; /* Interface ID, used for event handling */
@@ -343,6 +344,7 @@ int mpdccp_deinit_funcs (void);
 
 int mpdccp_report_new_subflow (struct sock*);
 int mpdccp_report_destroy (struct sock*);
+int mpdccp_report_alldown (struct sock*);
 
 
 

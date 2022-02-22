@@ -17,8 +17,13 @@
 #define MPDCCP_UI_H
 
 
-#define MPDCCP_SUBFLOW_CREATE	1
-#define MPDCCP_SUBFLOW_DESTROY	2
+#define MPDCCP_EV_SUBFLOW_CREATE	1
+#define MPDCCP_EV_SUBFLOW_DESTROY	2
+#define MPDCCP_EV_ALL_SUBFLOW_DOWN	3
+
+/* the following two are for backward compatibilitiy */
+#define MPDCCP_SUBFLOW_CREATE	MPDCCP_EV_SUBFLOW_CREATE
+#define MPDCCP_SUBFLOW_DESTROY	MPDCCP_EV_SUBFLOW_DESTROY
 
 #include <linux/dccp.h>
 #include <net/mpdccp_meta.h>
