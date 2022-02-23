@@ -890,9 +890,7 @@ int mpdccp_add_listen_sock (	struct mpdccp_cb *mpcb,
     }
 
     spin_lock(&mpcb->plisten_list_lock);
-    rcu_read_lock();
     list_add_tail_rcu(&mpdccp_my_sock(sk)->sk_list , &mpcb->plisten_list);
-    rcu_read_unlock();
     mpcb->cnt_listensocks++;
     mpdccp_pr_debug("Added new entry to plisten_list @ %p\n", mpdccp_my_sock(sk));
     spin_unlock(&mpcb->plisten_list_lock);
