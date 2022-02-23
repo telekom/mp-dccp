@@ -166,9 +166,11 @@ static int mpdccp_read_from_subflow (struct sock *sk)
             break;
         case DCCP_PKT_CLOSE:
         case DCCP_PKT_CLOSEREQ:
-            mpdccp_my_sock(sk)->closing = 1;
-            schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, 0);
-	        __kfree_skb(skb);
+            if (!mpdccp_my_sock(sk)->closing) {
+                mpdccp_my_sock(sk)->closing = 1;
+                schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, 0);
+            }
+            __kfree_skb(skb);
             break;
         default:
             mpdccp_pr_debug("unhandled packet type %d from socket %p", dh->dccph_type, sk);
@@ -196,6 +198,12 @@ int mpdccp_forward_skb(struct sk_buff *skb, struct mpdccp_cb *mpcb)
 		printk ("mpdccp_forward_skb: drop packet - queue full\n");
 		dev_kfree_skb_any(skb);
 		return -ENOBUFS;
+	}
+
+	if (meta_sk->sk_state != DCCP_OPEN) {
+		printk ("mpdccp_forward_skb: drop packet - meta socket not open (state %d)\n", meta_sk->sk_state);
+		dev_kfree_skb_any(skb);
+		return -EINVAL;
 	}
 
 	mpdccp_pr_debug ("enqueue packet\n");
@@ -374,6 +382,7 @@ void my_sock_destruct (struct sock *sk)
                 list_del_rcu(&my_sk->sk_list);
                 INIT_LIST_HEAD(&my_sk->sk_list);
                 mpcb->cnt_subflows--;
+                rem_subflows = mpcb->cnt_subflows;
                 found = 1;
                 break;
             }
@@ -385,13 +394,10 @@ void my_sock_destruct (struct sock *sk)
                     sk = my_sk->my_sk_sock;
                     list_del_rcu(&my_sk->sk_list);
                     INIT_LIST_HEAD(&my_sk->sk_list);
-                    mpcb->cnt_subflows--;
-                    found = 1;
                     break;
                 }
             }
         }
-        rem_subflows = mpcb->cnt_subflows;
         spin_unlock(&mpcb->psubflow_list_lock);
     }
     /* Wait for all readers to finish before removal */
