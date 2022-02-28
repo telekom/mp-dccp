@@ -1140,8 +1140,11 @@ void mp_state_change(struct sock *sk)
         mpcb->cnt_subflows = (mpcb->cnt_subflows) + 1;
         spin_unlock(&mpcb->psubflow_list_lock);
 
-        if (mpcb->sched_ops->init_subflow)
+        if (mpcb->sched_ops->init_subflow) {
+	    rcu_read_lock ();
             mpcb->sched_ops->init_subflow(sk);
+	    rcu_read_unlock ();
+	}
 
         mpdccp_report_new_subflow(sk);
         mpdccp_pr_debug("client connection established successfully. There are %d subflows now.\n", mpcb->cnt_subflows);

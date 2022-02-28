@@ -177,16 +177,21 @@ do_mpdccp_write_xmit (
 {
 	struct mpdccp_cb	*mpcb;
 	struct sock		*sk;
+	int			ret;
 
 	if (!skb) return -EINVAL;
 	mpcb = MPDCCP_CB(meta_sk);
 	if (!mpcb) return -EINVAL;
 
+	rcu_read_lock ();
 	sk = mpcb->sched_ops->get_subflow(mpcb);
 	if (!sk) {
+		rcu_read_unlock();
 		return -EAGAIN;
 	}
-	return mpdccp_xmit_to_sk (sk, skb);
+	ret = mpdccp_xmit_to_sk (sk, skb);
+	rcu_read_unlock ();
+	return ret;
 }
 
 static int do_mpdccp_setsockopt(struct sock *sk, int level, int optname,
@@ -724,8 +729,11 @@ create_subflow(
 	mpcb->cnt_subflows = (mpcb->cnt_subflows) + 1;
 	spin_unlock(&mpcb->psubflow_list_lock);
 
-	if (mpcb->sched_ops->init_subflow)
+	if (mpcb->sched_ops->init_subflow) {
+		rcu_read_lock ();
 		mpcb->sched_ops->init_subflow(newsk);
+		rcu_read_unlock ();
+	}
 
 	mpdccp_pr_debug("Connection accepted. There are %d subflows now newsk. %p\n",
 					mpcb->cnt_subflows, newsk);
