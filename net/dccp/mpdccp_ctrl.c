@@ -442,9 +442,12 @@ void my_sock_destruct (struct sock *sk)
 
     mpdccp_pr_debug ("subflow %p removed from mpcb %p (found %d), remaining subflows: %d", sk, mpcb, found, rem_subflows);
     if (found && (rem_subflows == 0) && mpcb && (mpcb->meta_sk->sk_state != DCCP_CLOSED)) {
-        mpdccp_pr_debug ("closing meta %p\n", mpcb->meta_sk);
-        dccp_done(mpcb->meta_sk);
-	mpdccp_report_alldown (mpcb->meta_sk);
+	struct sock	*msk = mpcb->meta_sk;
+        mpdccp_pr_debug ("closing meta %p\n", msk);
+	sock_hold (msk);
+        dccp_done(msk);
+	mpdccp_report_alldown (msk);
+	sock_put (msk);
     }
 }
 

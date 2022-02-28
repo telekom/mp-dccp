@@ -74,8 +74,8 @@ call_mpdccp_subflow_notifiers (
 	if (!mpcb) return -EINVAL;
 	switch (action) {
 	case MPDCCP_EV_ALL_SUBFLOW_DOWN:
-		if (!mpcb->up_reported) return 0;
 		if (!mpdccp_is_meta(sk)) return 0;
+		if (!mpcb->up_reported) return 0;
 		meta_sk = sk;
 		sk = NULL;
 		link = NULL;
