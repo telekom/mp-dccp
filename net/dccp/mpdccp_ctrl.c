@@ -983,7 +983,7 @@ mpdccp_xmit_to_sk (
 	struct sock	*sk,
 	struct sk_buff	*skb)
 {
-	int			len, ret=0, isbh;
+	int			len, ret=0;
 	long 			timeo;
 	struct mpdccp_cb	*mpcb;
 	struct sock		*meta_sk;
@@ -998,15 +998,7 @@ mpdccp_xmit_to_sk (
 	mpcb = get_mpcb (sk);
 	meta_sk = mpcb ? mpcb->meta_sk : NULL;
 
-	// TODO: check why was necessary
-	//rcu_read_lock ();
-	if(in_atomic()) {
-		bh_lock_sock(sk);
-		isbh = 1;
-	} else {
-		lock_sock(sk);
-		isbh = 0;
-	}
+	lock_sock(sk);
 
 	if (dccp_qpolicy_full(sk)) {
 		ret = -EAGAIN;
@@ -1034,11 +1026,7 @@ mpdccp_xmit_to_sk (
 	mpdccp_pr_debug("packet with %d bytes sent\n", len);
 
 out_release:
-	if(isbh)
-		bh_unlock_sock(sk);
-	else
-		release_sock(sk);
-	//rcu_read_unlock();
+	release_sock(sk);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(mpdccp_xmit_to_sk);

@@ -116,11 +116,9 @@ _mpdccp_xmit_skb (
 
 	if (!sk || !skb) return -EINVAL;
 	if (!mpdccp_is_meta (sk)) return -EINVAL;
-	rcu_read_lock();
-	bh_lock_sock(sk);
+	lock_sock(sk);
 	if (dccp_qpolicy_full(sk)) {
-		bh_unlock_sock(sk);
-		rcu_read_unlock();
+		release_sock(sk);
 		return -EAGAIN;
 	}
 
@@ -128,19 +126,17 @@ _mpdccp_xmit_skb (
 	timeo = sock_sndtimeo(sk, 1);
 	if ((1 << sk->sk_state) & ~(DCCPF_OPEN | DCCPF_PARTOPEN)) {
 		if ((ret = sk_stream_wait_connect(sk, &timeo)) != 0) {
-			bh_unlock_sock(sk);
-			rcu_read_unlock();
+			release_sock(sk);
 			return -EAGAIN;
 		}
 	}
 
 	skb_set_owner_w(skb, sk);
 	dccp_qpolicy_push(sk, skb);
-	if (!timer_pending(&dccp_sk(sk)->dccps_xmit_timer)) {
+	//if (!timer_pending(&dccp_sk(sk)->dccps_xmit_timer)) {
 		mpdccp_write_xmit(sk);
-	}
-	bh_unlock_sock(sk);
-	rcu_read_unlock ();
+	//}
+	release_sock(sk);
 	return 0;
 }
 
@@ -185,12 +181,11 @@ do_mpdccp_write_xmit (
 
 	rcu_read_lock ();
 	sk = mpcb->sched_ops->get_subflow(mpcb);
+	rcu_read_unlock();
 	if (!sk) {
-		rcu_read_unlock();
 		return -EAGAIN;
 	}
 	ret = mpdccp_xmit_to_sk (sk, skb);
-	rcu_read_unlock ();
 	return ret;
 }
 
@@ -204,7 +199,6 @@ static int do_mpdccp_setsockopt(struct sock *sk, int level, int optname,
 	char				*val;
 	struct mpdccp_reorder_ops	*reorder;
 
-        rcu_read_lock();
 	lock_sock(sk);
 	mpcb = MPDCCP_CB(sk);
 	if (level == SOL_DCCP) {
@@ -256,7 +250,6 @@ static int do_mpdccp_setsockopt(struct sock *sk, int level, int optname,
 	}
 out_release:
 	release_sock (sk);
-	rcu_read_unlock();
 	return err;
 }
 
