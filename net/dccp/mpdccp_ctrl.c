@@ -361,84 +361,85 @@ void my_sock_destruct (struct sock *sk)
     int found = 0;
     int rem_subflows = 0;
 
-    mpdccp_report_destroy (sk);
-    if (my_sk) {
-        mpcb = my_sk->mpcb;
-        if (mpcb) {
-            struct my_sock *pos, *temp;
-            /* Delete this subflow from the list of mpcb subflows */
-            spin_lock(&mpcb->psubflow_list_lock);
-            list_for_each_entry_safe(pos, temp, &((mpcb)->psubflow_list), sk_list) {
+    if (!my_sk) return;
+
+    /* Delete this subflow from the list of mpcb subflows */
+    mpcb = my_sk->mpcb;
+    if (mpcb) {
+        struct my_sock *pos, *temp;
+        int found = 0;
+        spin_lock(&mpcb->psubflow_list_lock);
+        list_for_each_entry_safe(pos, temp, &((mpcb)->psubflow_list), sk_list) {
+            if (my_sk == pos) {
+                sk = my_sk->my_sk_sock;
+                list_del_rcu(&my_sk->sk_list);
+                INIT_LIST_HEAD(&my_sk->sk_list);
+                mpcb->cnt_subflows--;
+                found = 1;
+                break;
+            }
+        }
+        /* If not found in mpcb subflows, it might be in the request list */
+        if (!found) {
+            list_for_each_entry_safe(pos, temp, &((mpcb)->prequest_list), sk_list) {
                 if (my_sk == pos) {
                     sk = my_sk->my_sk_sock;
                     list_del_rcu(&my_sk->sk_list);
                     INIT_LIST_HEAD(&my_sk->sk_list);
-                    if (my_sk->link_info) {
-                        mpdccp_link_put (my_sk->link_info);
-                        my_sk->link_info = NULL;
-                    }
                     mpcb->cnt_subflows--;
-                    rem_subflows = mpcb->cnt_subflows;
                     found = 1;
                     break;
                 }
             }
-            /* If not found in mpcb subflows, it might be in the request list */
-            if (!found) {
-                list_for_each_entry_safe(pos, temp, &((mpcb)->prequest_list), sk_list) {
-                    if (my_sk == pos) {
-                        sk = my_sk->my_sk_sock;
-                        list_del_rcu(&my_sk->sk_list);
-                        INIT_LIST_HEAD(&my_sk->sk_list);
-                        if (my_sk->link_info) {
-                            mpdccp_link_put (my_sk->link_info);
-                            my_sk->link_info = NULL;
-                        }
-                        break;
-                    }
-                }
-            }
-            spin_unlock(&mpcb->psubflow_list_lock);
         }
-        /* Wait for all readers to finish before removal */
-        //TAG-0.7: synchronize_rcu() is blocking. Migrate this to void call_rcu(struct rcu_head *head, rcu_callback_t func);
-        // atomic -> don't sync
-        // synchronize_rcu();
+        rem_subflows = mpcb->cnt_subflows;
+        spin_unlock(&mpcb->psubflow_list_lock);
+    }
+    /* Wait for all readers to finish before removal */
+    //TAG-0.7: synchronize_rcu() is blocking. Migrate this to void call_rcu(struct rcu_head *head, rcu_callback_t func);
+    // atomic -> don't sync
+    // synchronize_rcu();
 
-        sk->sk_user_data = NULL;
+    /* report socket destruction */
+    mpdccp_report_destroy (sk);
 
-        /* Restore old function pointers */
-        if(my_sk->sk_data_ready)
-            sk->sk_data_ready       = my_sk->sk_data_ready;
-
-        if(my_sk->sk_backlog_rcv)
-            sk->sk_backlog_rcv      = my_sk->sk_backlog_rcv;
-
-        if(my_sk->sk_destruct)
-            sk->sk_destruct         = my_sk->sk_destruct;
-
-        if(my_sk->sk_state_change)
-            sk->sk_state_change     = my_sk->sk_state_change;
-
-        if(my_sk->sk_write_space)
-            sk->sk_write_space      = my_sk->sk_write_space;
-
-        if (my_sk->pcb)
-            mpdccp_free_reorder_path_cb(my_sk->pcb);
-
-        kmem_cache_free(mpdccp_mysock_cache, my_sk);
-
-        if (sk->sk_destruct) 
-            sk->sk_destruct (sk);
-
-        mpdccp_pr_debug ("subflow %p removed from mpcb %p (found %d), remaining subflows: %d", sk, mpcb, found, rem_subflows);
-        if (found && (rem_subflows == 0) && mpcb && (mpcb->meta_sk->sk_state != DCCP_CLOSED)) {
-            mpdccp_pr_debug ("closing meta %p\n", mpcb->meta_sk);
-            dccp_done(mpcb->meta_sk);
-        }
+    /* release link_info struct */
+    if (my_sk->link_info) {
+        mpdccp_link_put (my_sk->link_info);
+        my_sk->link_info = NULL;
     }
 
-    module_put(THIS_MODULE);
+    sk->sk_user_data = NULL;
+
+    /* Restore old function pointers */
+    if(my_sk->sk_data_ready)
+        sk->sk_data_ready       = my_sk->sk_data_ready;
+
+    if(my_sk->sk_backlog_rcv)
+        sk->sk_backlog_rcv      = my_sk->sk_backlog_rcv;
+
+    if(my_sk->sk_destruct)
+        sk->sk_destruct         = my_sk->sk_destruct;
+
+    if(my_sk->sk_state_change)
+        sk->sk_state_change     = my_sk->sk_state_change;
+
+    if(my_sk->sk_write_space)
+        sk->sk_write_space      = my_sk->sk_write_space;
+
+    if (my_sk->pcb)
+        mpdccp_free_reorder_path_cb(my_sk->pcb);
+
+    kmem_cache_free(mpdccp_mysock_cache, my_sk);
+
+    if (sk->sk_destruct) 
+        sk->sk_destruct (sk);
+
+    mpdccp_pr_debug ("subflow %p removed from mpcb %p (found %d), remaining subflows: %d", sk, mpcb, found, rem_subflows);
+    if (found && (rem_subflows == 0) && mpcb && (mpcb->meta_sk->sk_state != DCCP_CLOSED)) {
+        mpdccp_pr_debug ("closing meta %p\n", mpcb->meta_sk);
+        dccp_done(mpcb->meta_sk);
+    }
 }
 
 static void mpdccp_close_worker(struct work_struct *work)
@@ -570,7 +571,6 @@ int my_sock_init (struct sock *sk, struct mpdccp_cb *mpcb, int if_idx, enum mpdc
 
     INIT_DELAYED_WORK(&my_sk->close_work, mpdccp_close_worker);
     /* Make sure refcount for this module is increased */
-    try_module_get(THIS_MODULE);
 out:
     return ret;
 }
@@ -688,7 +688,7 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 				struct sockaddr *remote_address,
 				int remaddr_len)
 {
-	int			ret = 0, isbh;
+	int			ret = 0;
 	int 			flags;
 	struct socket   	*sock; /* The newly created socket */
 	struct sock     	*sk;
@@ -739,20 +739,10 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	mpdccp_my_sock(sk)->link_iscpy = 0;
 
 	/* Add socket to the request list */
-	if (in_atomic()) {
-		spin_lock_bh(&mpcb->psubflow_list_lock);
-		isbh = 1;
-	} else {
-		spin_lock(&mpcb->psubflow_list_lock);
-		isbh = 0;
-	}
+	spin_lock(&mpcb->psubflow_list_lock);
 	list_add_tail_rcu(&mpdccp_my_sock(sk)->sk_list , &mpcb->prequest_list);
 	mpdccp_pr_debug("Added new entry to prequest_list @ %p\n", mpdccp_my_sock(sk));
-	if (isbh) {
-		spin_unlock_bh(&mpcb->psubflow_list_lock);
-	} else {
-		spin_unlock(&mpcb->psubflow_list_lock);
-	}
+	spin_unlock(&mpcb->psubflow_list_lock);
 
 	/* Only the first (key exchage) socket is blocking */
 	flags = dccp_sk(sk)->is_kex_sk ? 0 : O_NONBLOCK;
@@ -835,7 +825,7 @@ int mpdccp_add_listen_sock (	struct mpdccp_cb *mpcb,
 				int locaddr_len,
 				int if_idx)
 {
-    int                 retval	= 0, isbh;
+    int                 retval	= 0;
     struct socket   	*sock; /* The newly created socket */
     struct sock     	*sk;
     struct mpdccp_link_info	*link_info = NULL;
@@ -886,7 +876,7 @@ int mpdccp_add_listen_sock (	struct mpdccp_cb *mpcb,
 
 
     mpdccp_pr_debug ("set subflow to listen state\n");
-    rcu_read_lock_bh();
+    //rcu_read_lock_bh();
     retval = sock->ops->listen(sock, MPDCCP_SERVER_BACKLOG);
     if (retval < 0) {
         mpdccp_pr_debug("Failed to listen on socket(%d).\n", retval);
@@ -895,22 +885,12 @@ int mpdccp_add_listen_sock (	struct mpdccp_cb *mpcb,
         goto out;
     }
 
-    if (in_atomic()) {
-       spin_lock_bh(&mpcb->plisten_list_lock);
-	isbh = 1;
-    } else {
-       spin_lock(&mpcb->plisten_list_lock);
-	isbh = 0;
-    }
+    spin_lock(&mpcb->plisten_list_lock);
     list_add_tail_rcu(&mpdccp_my_sock(sk)->sk_list , &mpcb->plisten_list);
     mpcb->cnt_listensocks++;
     mpdccp_pr_debug("Added new entry to plisten_list @ %p\n", mpdccp_my_sock(sk));
-    if (isbh) {
-       spin_unlock_bh(&mpcb->plisten_list_lock);
-    } else {
-       spin_unlock(&mpcb->plisten_list_lock);
-    }
-    rcu_read_unlock_bh();
+    spin_unlock(&mpcb->plisten_list_lock);
+    //rcu_read_unlock_bh();
 
     mpdccp_pr_debug("server port added successfully. There are %d subflows now.\n",
 			mpcb->cnt_subflows);

@@ -61,11 +61,15 @@ _mpdccp_mk_meta_sk (
 
 	if (!sk) return -EINVAL;
 	if (mpdccp_is_meta (sk)) return 0;
+	try_module_get (THIS_MODULE);
 	dp->mpdccp = (struct mpdccp_meta_cb) {
 			.magic = MPDCCP_MAGIC,
 			.is_meta = 1 };
 	dp->mpdccp.mpcb = mpdccp_alloc_mpcb ();
-	if (!dp->mpdccp.mpcb) return -ENOBUFS;
+	if (!dp->mpdccp.mpcb) {
+		module_put (THIS_MODULE);
+		return -ENOBUFS;
+	}
 	dp->mpdccp.mpcb->meta_sk = sk;
 	mpdccp_pr_debug ("meta socket created\n");
 
@@ -955,6 +959,7 @@ static int _mpdccp_close_meta(struct sock *meta_sk)
 			}
 		}
 	}
+	module_put (THIS_MODULE);
 	return ret;
 }
 
