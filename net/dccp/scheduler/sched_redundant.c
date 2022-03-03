@@ -88,7 +88,7 @@ struct sock *mpdccp_redsched(struct mpdccp_cb *mpcb)
 			continue;
 		}
 		
-		if(!mpdccp_packet_fits_in_cwnd(sk)){
+		if(!mpdccp_packet_fits_in_cwnd(sk) && !dccp_ack_pending(sk)){
 			mpdccp_pr_debug("Packet does not fit in cwnd of %p. Continuing...\n", sk);
 			continue;
 		}

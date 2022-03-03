@@ -130,7 +130,7 @@ struct sock *mpdccp_return_single_flow(struct mpdccp_cb *mpcb)
 	}
 	
 	sk = my_sk->my_sk_sock;
-	if(!sk || !mpdccp_sk_can_send(sk) || !mpdccp_packet_fits_in_cwnd(sk)) {
+	if(!sk || !mpdccp_sk_can_send(sk) || (!mpdccp_packet_fits_in_cwnd(sk) && !dccp_ack_pending(sk))) {
 		rcu_read_unlock();
 		dccp_pr_debug("No free pipe available.\n");
 		return NULL;
