@@ -47,4 +47,6 @@ mpdccplink-$(CONFIG_SYSFS) += mpdccp_link_sysfs.o
 obj-$(CONFIG_IP_MPDCCP) += scheduler/
 obj-$(CONFIG_IP_MPDCCP) += reordering/
 obj-$(CONFIG_IP_MPDCCP) += pm/
+obj-$(CONFIG_IP_MPDCCP) += non_gpl_scheduler/
+obj-$(CONFIG_IP_MPDCCP) += non_gpl_reordering/
 

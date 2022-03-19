@@ -1,5 +1,5 @@
 
-menu "MP-DCCP scheduler selection"
+menu "MPDCCP scheduler selection"
 
 
 config MPDCCP_SCHED_SRTT

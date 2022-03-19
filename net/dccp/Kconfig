@@ -90,6 +90,9 @@ config IP_MPDCCP_DEBUG
 source net/dccp/pm/Kconfig
 source net/dccp/scheduler/Kconfig
 source net/dccp/reordering/Kconfig
+source net/dccp/non_gpl_scheduler/Kconfig
+source net/dccp/non_gpl_reordering/Kconfig
+
 
 
 config MPDCCP_STATS
