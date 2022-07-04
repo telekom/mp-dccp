@@ -247,10 +247,12 @@ struct mpdccp_cb *mpdccp_alloc_mpcb(void)
     INIT_LIST_HEAD(&mpcb->psubflow_list);
     INIT_LIST_HEAD(&mpcb->plisten_list);
     INIT_LIST_HEAD(&mpcb->prequest_list);
+    INIT_LIST_HEAD(&mpcb->premote_list);
     spin_lock_init(&mpcb->psubflow_list_lock);
     spin_lock_init(&mpcb->plisten_list_lock);
 
     mpcb->cnt_subflows      = 0;
+    mpcb->cnt_remote_addrs  = 0;
     mpcb->multipath_active  = 1;     //socket option; always active for now
     mpcb->dsn_local  = 0;
     mpcb->dsn_remote = 0;
@@ -266,6 +268,7 @@ struct mpdccp_cb *mpdccp_alloc_mpcb(void)
     mpcb->mpdccp_rem_key.type  = DCCPK_INVALID;
     mpcb->mpdccp_rem_key.size  = 0;
     mpcb->cur_key_idx = 0;
+    mpcb->master_addr_id = 0;
 
     mpdccp_init_path_manager(mpcb);
     mpdccp_init_scheduler(mpcb);
@@ -295,7 +298,10 @@ int mpdccp_destroy_mpcb(struct mpdccp_cb *mpcb)
 	list_del_rcu(&mpcb->connection_list);
 	INIT_LIST_HEAD(&mpcb->connection_list);
 	spin_unlock(&pconnection_list_lock);
-	
+
+	if(mpcb->pm_ops->free_remote_addr)
+		mpcb->pm_ops->free_remote_addr(mpcb);
+
 	/* close all subflows */
 	list_for_each_safe(pos, temp, &((mpcb)->psubflow_list)) {
 		mysk = list_entry(pos, struct my_sock, sk_list);
@@ -735,8 +741,25 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 		goto out;
 	}
 	if (local_address->sa_family == AF_INET) {
+        int loc_id = 0;
+        union inet_addr addr;
 		struct sockaddr_in 	*local_v4_address = (struct sockaddr_in*)local_address;
 		link_info = mpdccp_link_find_ip4 (&init_net, &local_v4_address->sin_addr, NULL);
+
+        addr.in = local_v4_address->sin_addr;
+        if(mpcb->pm_ops->get_local_id)
+            loc_id = mpcb->pm_ops->get_local_id(mpcb->meta_sk, AF_INET, &addr, 0);
+
+        if(loc_id < 0){
+            dccp_pr_debug("cant create subflow with unknown address id");
+		    sock_release(sock);
+		    goto out;
+        }
+        if(mpcb->master_addr_id == 0){
+            mpcb->master_addr_id = loc_id;
+            dccp_pr_debug("master_addr_id set %u", mpcb->master_addr_id);
+        }
+        mpdccp_my_sock(sk)->local_addr_id = loc_id;
 	} else if (local_address->sa_family == AF_INET6) {
 		struct sockaddr_in6 	*local_v6_address = (struct sockaddr_in6*)local_address;
 		link_info = mpdccp_link_find_ip6 (&init_net, &local_v6_address->sin6_addr, NULL);
@@ -746,6 +769,7 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	mpdccp_my_sock(sk)->link_info = link_info;
 	mpdccp_my_sock(sk)->link_cnt = mpdccp_link_cnt(link_info);
 	mpdccp_my_sock(sk)->link_iscpy = 0;
+	mpdccp_my_sock(sk)->remote_addr_id = 0;
 
 	/* Add socket to the request list */
 	spin_lock(&mpcb->psubflow_list_lock);

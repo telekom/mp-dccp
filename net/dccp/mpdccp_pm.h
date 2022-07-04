@@ -51,6 +51,8 @@ struct mpdccp_pm_ns {
 	
 	struct list_head	events;
 	struct delayed_work	address_worker;
+
+	u8 loc4_bits;
 	
 	struct net		*net;
 };
@@ -65,7 +67,11 @@ struct mpdccp_pm_ops {
 	struct list_head	list;
 	
 	int			(*add_init_server_conn) (struct mpdccp_cb*, int backlog);
-	int			(*add_init_client_conn) (struct mpdccp_cb*, struct sockaddr *, int);
+	int			(*add_init_client_conn) (struct mpdccp_cb*, struct sockaddr*, int);
+	int			(*get_local_id)         (const struct sock*, sa_family_t, union inet_addr*, int);
+	void		(*rm_remote_addr)       (u8);
+	void		(*add_remote_addr)      (struct mpdccp_cb*, sa_family_t, u8, union inet_addr*, u16);
+	void		(*free_remote_addr)     (struct mpdccp_cb*);
 	
 	char			name[MPDCCP_PM_NAME_MAX];
 	struct module		*owner;

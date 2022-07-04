@@ -143,6 +143,8 @@ unset_mpdccp(struct sock *sk) {
     list_for_each_entry_rcu(mpcb, &list, connection_list)
 
 
+#define chk_id(x,y) (x != y) ? x : 0
+
 /**
  * mpdccp_list_first_or_null_rcu - get the first element from a list
  * @ptr:        the list head to take the element from.
@@ -231,6 +233,8 @@ struct mpdccp_cb {
 	spinlock_t              plisten_list_lock;
 	/* Pointer to list of request sockets (client side) */
 	struct list_head __rcu  prequest_list;
+	/* Pointer to list of remote addresses (initial and learned) */
+	struct list_head __rcu  premote_list;
 	
 	int     multipath_active;
 	
@@ -254,7 +258,9 @@ struct mpdccp_cb {
 	int			    backlog;
 	int                     delpath;
 	int			up_reported;
-	
+	u8 			master_addr_id;
+	int  		cnt_remote_addrs;
+
 	/* Scheduler related data */
 	struct mpdccp_sched_ops *sched_ops;
 	int			    has_own_sched;
@@ -305,6 +311,10 @@ struct my_sock
 	int			link_cnt;
 	int			link_iscpy;
 	int			up_reported;
+	
+	/* Address ID related data */
+	u8 local_addr_id;
+	u8 remote_addr_id;
 	
 	/* Path manager related data */
 	int     if_idx; /* Interface ID, used for event handling */
