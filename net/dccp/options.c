@@ -237,6 +237,27 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 
 			case DCCPO_MP_CONFIRM:
 			case DCCPO_MP_JOIN:
+				if (len != 9) {
+					goto out_invalid_option;
+				}
+				opt_recv->saw_mpjoin = 1;
+				opt_recv->dccpor_join_ip_local = be32_to_cpu(ip_hdr(skb)->daddr);
+				opt_recv->dccpor_join_ip_remote = be32_to_cpu(ip_hdr(skb)->saddr);
+				opt_recv->dccpor_join_port = dccp_hdr(skb)->dccph_sport;
+				opt_recv->dccpor_join_id = dccp_decode_value_var(value, 1);
+				value += 1;
+				opt_recv->dccpor_mp_token = get_unaligned_be32(value);
+				value += 4;
+				opt_recv->dccpor_mp_nonce = get_unaligned_be32(value);
+
+				dccp_pr_debug("%s rx opt: DCCPO_MP_JOIN = addrID %u on %pI4:%u from " \
+								"%pI4:%u, token %x nonce %x, sk %p dreq %p",
+								dccp_role(sk), opt_recv->dccpor_join_id,
+								&ip_hdr(skb)->daddr, htons(dccp_hdr(skb)->dccph_dport),
+								&ip_hdr(skb)->saddr, htons(dccp_hdr(skb)->dccph_sport),
+								opt_recv->dccpor_mp_token,
+								opt_recv->dccpor_mp_nonce, sk, dreq);
+				break;
 			case DCCPO_MP_FAST_CLOSE:
 			case DCCPO_MP_KEY:
 				if (len < 2) {
@@ -707,13 +728,18 @@ static int dccp_insert_option_multipath(struct sk_buff *skb, const unsigned char
 /*static int dccp_insert_option_mp_confirm(struct sk_buff *skb)
 {
 	return 0;
-}
+}*/
 
-static int dccp_insert_option_mp_join(struct sk_buff *skb)
+static int dccp_insert_option_mp_join(struct sk_buff *skb, u8 addr_id, u32 token, u32 nonce)
 {
-	return 0;
+	u8 buf[9];
+	buf[0] = addr_id;
+	put_unaligned_be32(token, &buf[1]);
+	put_unaligned_be32(nonce, &buf[5]);
+	return dccp_insert_option_multipath(skb, DCCPO_MP_JOIN, &buf, sizeof(buf));
 }
 
+/*
 static int dccp_insert_option_mp_fast_close(struct sk_buff *skb)
 {
 	return 0;
@@ -860,11 +886,12 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 		return -1;
 
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
-	/* Role dependent option required status. MPDCCP Server does not have 
-	 * to add delay values since MPDCCP Client knows delays due to its 
+	/* Role dependent option required status. MPDCCP Server does not have
+	 * to add delay values since MPDCCP Client knows delays due to its
 	 * congestion control */
 	if (is_mpdccp(sk)) {
 		struct mpdccp_cb *mpcb = get_mpcb(sk);
+		u8 mp_addr_id = get_id(sk);
 
 		/* Skip if fallback to sp DCCP */
 		if (mpcb && mpcb->fallback_sp)
@@ -883,11 +910,9 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 					dccp_insert_option_mp_key(skb, mpcb, NULL);
 				} else {
 					/* Insert token and nonce */
-					dccp_pr_debug("(%s) REQ insert opt MP_JOIN tk:%x nc:%x",
-									dccp_role(sk),
-									mpcb->mpdccp_rem_token,
-									dccp_sk(sk)->mpdccp_loc_nonce);
-					dccp_insert_option_mp_join(skb, mpcb->mpdccp_rem_token, dccp_sk(sk)->mpdccp_loc_nonce);
+					dccp_pr_debug("(%s) REQ insert opt MP_JOIN id:%u tk:%x nc:%x",
+							dccp_role(sk), mp_addr_id, mpcb->mpdccp_rem_token, dccp_sk(sk)->mpdccp_loc_nonce);
+					dccp_insert_option_mp_join(skb, mp_addr_id, mpcb->mpdccp_rem_token, dccp_sk(sk)->mpdccp_loc_nonce);
 				}
 				break;
 			case DCCP_PKT_ACK:
@@ -944,17 +969,32 @@ int dccp_insert_options_rsk_mp(const struct sock *sk, struct dccp_request_sock *
 	struct dccp_options_received *opt_recv = &dp->dccps_options_received;
 
 	if (opt_recv->saw_mpjoin) {
-		mpcb = get_mpcb(dreq->meta_sk);
+		union inet_addr addr;
+		struct mpdccp_cb *mpcb = get_mpcb(dreq->meta_sk);
+		u8 loc_id = 0;
+
 		if (!mpcb) {
 			dccp_pr_debug("(%s) invalid MPCB", dccp_role(sk));
 			return -1;
 		}
-		/* Insert token and nonce */
-		dccp_pr_debug("(%s) RES insert opt MP_JOIN tk:%x nc:%x", dccp_role(sk), mpcb->mpdccp_loc_token, dreq->mpdccp_loc_nonce);
-		dccp_insert_option_mp_join(skb, mpcb->mpdccp_loc_token, dreq->mpdccp_loc_nonce);
+
+		if(mpcb->pm_ops->get_local_id){
+			/* Get local addr_id for response */
+			addr.ip = cpu_to_be32(opt_recv->dccpor_join_ip_local);
+			loc_id = mpcb->pm_ops->get_local_id(mpcb->meta_sk, AF_INET, &addr, 0);
+		}
+		if(mpcb->pm_ops->add_remote_addr){
+			/* Store remote addr and id */
+			addr.ip = cpu_to_be32(opt_recv->dccpor_join_ip_remote);
+			mpcb->pm_ops->add_remote_addr(mpcb, AF_INET, opt_recv->dccpor_join_id, &addr, opt_recv->dccpor_join_port);
+		}
+
 		/* Insert HMAC */
 		dccp_pr_debug("(%s) RES insert opt MP_HMAC %llx", dccp_role(sk), be64_to_cpu(*((u64 *)dreq->mpdccp_loc_hmac)));
 		dccp_insert_option_mp_hmac(skb, dreq->mpdccp_loc_hmac);
+		/* Insert token and nonce */
+		dccp_pr_debug("(%s) RES insert opt MP_JOIN id:%u tk:%x nc:%x", dccp_role(sk), chk_id(loc_id, mpcb->master_addr_id), mpcb->mpdccp_loc_token, dreq->mpdccp_loc_nonce);
+		dccp_insert_option_mp_join(skb, chk_id(loc_id, mpcb->master_addr_id), mpcb->mpdccp_loc_token, dreq->mpdccp_loc_nonce);
 	} else if (opt_recv->saw_mpkey) {
 		dccp_pr_debug("(%s) RES insert opt MP_KEY %llx", dccp_role(sk), be64_to_cpu(*((__be64 *)dreq->mpdccp_loc_key.value)));
 		/* Insert local key */

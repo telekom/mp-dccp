@@ -944,14 +944,17 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 		if(mpcb->pm_ops->get_local_id && mpcb->pm_ops->get_remote_id){
 			addr.ip = ip_hdr(skb)->daddr;
 			loc_id = mpcb->pm_ops->get_local_id(mpcb->meta_sk, AF_INET, &addr, 0);
-			if(loc_id < 0){
+			addr.ip = ip_hdr(skb)->saddr;
+			rem_id = mpcb->pm_ops->get_remote_id(mpcb, &addr, AF_INET);
+
+			if(loc_id < 0 || rem_id < 0){
 				mpdccp_pr_debug("cant create subflow with unknown address id");
 				return -1;
 			}
 		}
 		/* Now add the subflow to the mpcb */
 
-		ret = create_subflow(newsk, meta_sk, skb, req, 0, (u8)loc_id, 0);//_mpdccp_listen(newsk, 1);
+		ret = create_subflow(newsk, meta_sk, skb, req, 0, (u8)loc_id, (u8)rem_id);
 		if (ret) {
 			mpdccp_pr_debug("error mpdccp_create_master_sub %d", ret);
 			return -1;
