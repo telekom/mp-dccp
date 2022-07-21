@@ -252,7 +252,6 @@ struct mpdccp_cb {
 	int                     remaddr_len;	// length of mpdccp_remote_addr;
 	u16			    server_port;	// Server only 
 	int			    backlog;
-	int                     delpath;
 	int			up_reported;
 	
 	/* Scheduler related data */
