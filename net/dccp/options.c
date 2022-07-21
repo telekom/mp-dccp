@@ -447,6 +447,21 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 				if ((pkt_type == DCCP_PKT_ACK) && dccp_sk(sk)->auth_done) {
 					dccp_send_ack(sk);
 				}
+			case DCCPO_MP_RTT:
+				if (len != 9) { //if not 9 byte
+					goto out_invalid_option;
+				}
+
+				opt_recv->dccpor_rtt_type = dccp_decode_value_var(value, 1);
+				value += 1;
+				opt_recv->dccpor_rtt_value = get_unaligned_be32(value);
+				value += 4;
+				opt_recv->dccpor_rtt_age = get_unaligned_be32(value);
+				dccp_pr_debug("rx opt: DCCPO_MP_RTT = type %u, value %d, age %d, sk %p dreq %p", opt_recv->dccpor_rtt_type,
+									opt_recv->dccpor_rtt_value, opt_recv->dccpor_rtt_age, sk, dreq);
+				break;
+
+				dccp_pr_debug("rem addr_id %u is copy? %i", mpdccp_my_sock(sk)->remote_addr_id, mpdccp_my_sock(sk)->link_iscpy);
 				break;
 			default:
 				DCCP_CRIT("DCCP(%p): mp option %d(len=%d) not "
@@ -923,6 +938,16 @@ static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_cb *mpcb
 	}
 	return ret;
 }
+
+
+static int dccp_insert_option_mp_rtt(struct sk_buff *skb, u8 mp_rtt_type, u32 mp_rtt_value, u32 mp_rtt_age)
+{
+    u8 buf[9];
+	buf[0] = mp_rtt_type;
+	put_unaligned_be32(mp_rtt_value, &buf[1]);
+	put_unaligned_be32(mp_rtt_age, &buf[5]);
+	return dccp_insert_option_multipath(skb, DCCPO_MP_RTT, &buf, 9);
+}
 #endif
 
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
@@ -1000,6 +1025,14 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 			case DCCP_PKT_DATA:
 			case DCCP_PKT_DATAACK:
 				dccp_insert_option_mp_seq(skb, &mpdccp_my_sock(sk)->mpcb->mp_oall_seqno);
+				if(!(mpdccp_my_sock(sk)->mpcb->mp_oall_seqno % 2)){						//send with every second dataack	
+					struct tcp_info info;
+					u8 rtt_type;
+					u32 rtt_value = get_delay_valn(sk, &info, &rtt_type);
+					u32 rtt_age = jiffies_to_msecs(info.tcpi_last_ack_recv);
+					dccp_insert_option_mp_rtt(skb, rtt_type, rtt_value, rtt_age);
+					dccp_pr_debug("delay = %u age %u on socket (0x%p) loc_id: %u rem_id: %u", rtt_value, rtt_age, sk, mp_addr_id, mpdccp_my_sock(sk)->remote_addr_id);
+				}
 				//dccp_insert_option_mp_delay(skb, get_delay_val(hc)); // use MRTT as delay value
 				dccp_insert_option_mp_delay(skb, get_delay_valn(sk, &info));
 				dccp_pr_debug("delay = %u  on socket (0x%p)", get_delay_valn(sk, &info), sk); 

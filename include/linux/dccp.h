@@ -210,11 +210,10 @@ struct dccp_options_received {
 	u32	dccpor_elapsed_time;
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 	u64 dccpor_oall_seq:48;		/* MPDCCP overall sequence number */
-	u32 dccpor_delay;			/* MPDCCP delay transmission */
-	u32 dccpor_path_id;			/* MPDCCP delay transmission */
-#endif
-	u32 dccpor_delpath_rcv;
-#if IS_ENABLED(CONFIG_IP_MPDCCP)
+
+	u8 dccpor_rtt_type;         /* MP_RTT type */
+	u32 dccpor_rtt_value;
+	u32 dccpor_rtt_age;
 	u8 dccpor_mp_suppkeys;			/* MPDCCP supported key types */
 	u32 dccpor_mp_token;			/* MPDCCP path token */
 	u32 dccpor_mp_nonce;			/* MPDCCP path nonce */
