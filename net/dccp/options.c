@@ -27,6 +27,7 @@
 #include "feat.h"
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 #  include "mpdccp.h"
+#  include "mpdccp_pm.h"
 #  include <net/mpdccp.h>
 #endif
 
