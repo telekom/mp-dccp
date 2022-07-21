@@ -50,12 +50,13 @@ static int redsched_transmit_on_flow(struct mpdccp_cb *mpcb, struct sock *sk)
 
 	meta_sk = mpcb->meta_sk;
 	skb2 = dccp_qpolicy_top (meta_sk);
-
+	printk(KERN_INFO "inred skb2 %p", skb2);
 	skb = pskb_copy (skb2, GFP_KERNEL);
 	if (!skb) {
 		mpdccp_pr_debug ("cannot copy skb - dropping packet\n");
 		return -ENOMEM;
 	}
+	DCCP_SKB_CB(skb)->dccpd_mpseq = mpcb->mp_oall_seqno;
 	ret = mpdccp_xmit_to_sk (sk, skb);
 	if (ret < 0) {
 		mpdccp_pr_debug ("error in xmit: %d - dropping packet\n", ret);
@@ -74,6 +75,7 @@ struct sock *mpdccp_redsched(struct mpdccp_cb *mpcb)
 	struct sock	*sk, *best_sk = NULL;
 	
 	/* if there is only 1 subflow, we bypass scheduling */
+	mpcb->do_incr_oallseq = false;
 	if(mpcb->cnt_subflows == 1) {
 		mpdccp_pr_debug("Only 1 socket available. Skipping selection.\n");
 		return mpdccp_return_single_flow(mpcb);
@@ -98,14 +100,14 @@ struct sock *mpdccp_redsched(struct mpdccp_cb *mpcb)
 			best_sk = sk;
 			continue;
 		}
-		
+
 		ret = redsched_transmit_on_flow(mpcb, sk);
-		if(!ret){
+		if(ret){
 			mpdccp_pr_debug("Transmit failed on sk %p with error %d\n", sk, ret);
-		}
+		} 
 	}
+
 	rcu_read_unlock();
-	
 	return best_sk;
 }
 

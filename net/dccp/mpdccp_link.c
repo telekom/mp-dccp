@@ -732,8 +732,10 @@ mpdccp_link_get (
 {
 	if (!link) return;
 	kref_get (&link->kref);
-#if 0
-	mpdccp_pr_debug ("mpdccp_link:: ref counter (%s) incremented to %d\n",
+#if 1
+	//mpdccp_pr_debug ("mpdccp_link:: ref counter (%s) incremented to %d\n",
+	//	MPDCCP_LINK_NAME(link), MPDCCP_LINK_REFCOUNT(link));
+	printk ("mpdccp_link:: ref counter (%s) incremented to %d\n",
 		MPDCCP_LINK_NAME(link), MPDCCP_LINK_REFCOUNT(link));
 #endif
 #ifdef CONFIG_MPDCCP_STATS
@@ -747,8 +749,10 @@ mpdccp_link_put (
 	struct mpdccp_link_info	*link)
 {
 	if (!link) return;
-#if 0
-	mpdccp_pr_debug ("mpdccp_link:: ref counter (%s) decremented from %d\n",
+#if 1
+	//mpdccp_pr_debug ("mpdccp_link:: ref counter (%s) decremented from %d\n",
+	//	MPDCCP_LINK_NAME(link), MPDCCP_LINK_REFCOUNT(link));
+	printk ("mpdccp_link:: ref counter (%s) decremented from %d\n",
 		MPDCCP_LINK_NAME(link), MPDCCP_LINK_REFCOUNT(link));
 #endif
 	kref_put (&link->kref, link_ref_release);
@@ -780,6 +784,7 @@ mpdccp_link_free (
 	if (!link) return;
 	//mlk_lock;
 	if (!link->is_released) {
+printk ("mpdccp_link:: link not released yet (%s)\n",  MPDCCP_LINK_NAME(link));
 		mpdccp_link_get (link);
 		//mlk_unlock;
 		return;

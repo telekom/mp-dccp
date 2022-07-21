@@ -592,12 +592,19 @@ static int dccp_insert_option_multipath(struct sk_buff *skb, const unsigned char
 }
 
 /* Insert overall sequence number option */
-static int dccp_insert_option_mp_seq(struct sk_buff *skb, u64 *mp_oall_seq)
+static int dccp_insert_option_mp_seq(struct sk_buff *skb, u64 *mp_oall_seq, bool do_incr_oallseq)
 {	
 	__be64 be_oall_seq;
 
-	be_oall_seq = cpu_to_be64((*mp_oall_seq << 16)); // convert to big endian // << 16
-	dccp_inc_seqno(mp_oall_seq); // increment overall sequence number
+	if (do_incr_oallseq){
+		be_oall_seq = cpu_to_be64((*mp_oall_seq << 16));
+		dccp_inc_seqno(mp_oall_seq); // increment overall sequence number
+		//printk(KERN_INFO "insrt skb %p mp_seq %lu", skb, *mp_oall_seq);
+	}
+	else {
+		be_oall_seq = cpu_to_be64((DCCP_SKB_CB(skb)->dccpd_mpseq)<<16);
+		//printk(KERN_INFO "insrt_red skb %p mp_seq %lu", skb, DCCP_SKB_CB(skb)->dccpd_mpseq);
+	}
 	return dccp_insert_option_multipath(skb, DCCPO_MP_SEQ, &be_oall_seq, 6);
 }
 
@@ -999,8 +1006,8 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 		switch(DCCP_SKB_CB(skb)->dccpd_type){
 			case DCCP_PKT_DATA:
 			case DCCP_PKT_DATAACK:
-				dccp_insert_option_mp_seq(skb, &mpdccp_my_sock(sk)->mpcb->mp_oall_seqno);
-				//dccp_insert_option_mp_delay(skb, get_delay_val(hc)); // use MRTT as delay value
+				//printk(KERN_INFO "insert mpseq, sk %p skb %p", sk, skb);
+				dccp_insert_option_mp_seq(skb, &mpdccp_my_sock(sk)->mpcb->mp_oall_seqno, mpdccp_my_sock(sk)->mpcb->do_incr_oallseq);
 				dccp_insert_option_mp_delay(skb, get_delay_valn(sk, &info));
 				dccp_pr_debug("delay = %u  on socket (0x%p)", get_delay_valn(sk, &info), sk); 
 				//dccp_pr_debug("delay = %u on socket (0x%p)", get_delay_val(hc), sk);

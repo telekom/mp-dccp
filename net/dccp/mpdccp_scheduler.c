@@ -264,6 +264,7 @@ void mpdccp_init_scheduler(struct mpdccp_cb *mpcb)
 	if (!mpcb) return;
 	rcu_read_lock();
 	sched = sched_default;
+	mpcb->do_incr_oallseq = true;
 	if (try_module_get(sched->owner)) {
 		mpcb->sched_ops = sched;
 		if (sched->init_conn)

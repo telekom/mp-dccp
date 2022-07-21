@@ -231,6 +231,9 @@ struct mpdccp_cb {
 	spinlock_t              plisten_list_lock;
 	/* Pointer to list of request sockets (client side) */
 	struct list_head __rcu  prequest_list;
+	/* kref for freeing */
+	struct kref             kref;
+	int			to_be_closed;
 	
 	int     multipath_active;
 	
@@ -261,6 +264,7 @@ struct mpdccp_cb {
 	struct sk_buff          *next_skb;      // for schedulers sending the skb on >1 flow
 	int    cnt_subflows;                    // Total number of flows we can use
 	int    cnt_listensocks;
+	bool 	do_incr_oallseq;
 	
 	/* Reordering related data */
 	struct mpdccp_reorder_ops *reorder_ops; 
@@ -349,6 +353,7 @@ int mpdccp_report_alldown (struct sock*);
 
 
 int mpdccp_add_client_conn (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx, struct sockaddr *rem, int rlen);
+int mpdccp_reconnect_client (struct sock*, int destroy, struct sockaddr*, int addrlen, int ifidx);
 int mpdccp_add_listen_sock (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx);
 int mpdccp_close_subflow (struct mpdccp_cb*, struct sock*, int destroy);
 void mpdccp_handle_rem_addr (u32 del_path);
