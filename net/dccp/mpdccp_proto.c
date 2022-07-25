@@ -639,6 +639,9 @@ static int _mpdccp_rcv_respond_partopen_state_process(struct sock *sk, int type)
 			WARN_ON(sk->sk_send_head == NULL);
 			kfree_skb(sk->sk_send_head);
 			sk->sk_send_head = NULL;
+
+			if(mpdccp_get_prio(sk) != 3)				// dont announce if prio = 3 (default value)
+				mpdccp_init_announce_prio(sk);			// announce prio values for all subflows after creation
 		}
 
 		/* Authentication complete, send an additional ACK if required */

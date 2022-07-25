@@ -218,6 +218,61 @@ static void pm_handle_rm_addr(u8 id_to_rm)
 	rcu_read_unlock();
 }
 
+static void pm_handle_rcv_prio(struct mpdccp_cb *mpcb, u8 prio, u8 id)
+{
+	struct sock *sk;
+	rcu_read_lock();
+	mpdccp_for_each_sk(mpcb, sk) {
+		if(mpdccp_my_sock(sk)->remote_addr_id == id){
+			struct mpdccp_link_info *link;
+			link = mpdccp_ctrl_getcpylink(sk);
+			if (!link){
+				rcu_read_unlock();
+				return;
+			}
+
+			mpdccp_pr_debug("assigning prio %u - old prio %u to addr id %u sk (%p) is_copy: %i",
+				    prio, link->mpdccp_prio, id, sk, mpdccp_my_sock(sk)->link_iscpy);
+			mpdccp_my_sock(sk)->link_iscpy = 1;
+			mpdccp_set_prio(sk, prio);
+			mpdccp_link_put(link);
+		}
+	}
+	rcu_read_unlock();
+}
+
+static int pm_handle_link_event(struct notifier_block *this,
+				   unsigned long event, void *ptr)
+{
+	if (event != MPDCCP_LINK_CHANGE_PRIO)
+		return NOTIFY_DONE;
+	else {
+		struct mpdccp_link_notifier_info *lni = ptr;
+		struct mpdccp_link_info *link = lni->link_info;
+		struct sock *sk;
+		struct mpdccp_cb *mpcb;
+
+		rcu_read_lock();
+		mpdccp_for_each_conn(pconnection_list, mpcb) {
+			mpdccp_for_each_sk(mpcb, sk) {
+				if(!mpdccp_my_sock(sk)->link_iscpy && 
+					    mpdccp_my_sock(sk)->link_info->id == link->id){
+					mpdccp_init_announce_prio(sk);
+					rcu_read_unlock();
+					return NOTIFY_DONE;
+				}
+			}
+		}
+		rcu_read_unlock();
+		return NOTIFY_DONE;
+	}
+}
+
+static struct notifier_block mpdccp_pm_link_notifier = {
+	.notifier_call = pm_handle_link_event,
+};
+
+
 /* loops through plocal_addr_list and looks for matching address */
 static int mpdccp_find_address(struct mpdccp_pm_ns *pm_ns,
 				  sa_family_t family, const union inet_addr *addr, int if_idx, int *id)
@@ -1028,6 +1083,12 @@ static int mpdccp_pm_init(void)
         goto err_reg_inetaddr;
     }
 
+    ret = register_mpdccp_link_notifier(&mpdccp_pm_link_notifier);
+    if (ret) {
+        mpdccp_pr_debug("Failed to register mpdccp_link notifier.\n");
+        goto err_reg_prio;
+    }
+
 #if IS_ENABLED(CONFIG_IPV6)
     ret = register_inet6addr_notifier(&mpdccp_pm_inet6addr_notifier);
     if (ret) {
@@ -1064,6 +1125,8 @@ err_reg_inet6addr:
     unregister_inetaddr_notifier(&mpdccp_pm_inetaddr_notifier);
 err_reg_inetaddr:
     unregister_pernet_subsys(&mpdccp_pm_net_ops);
+err_reg_prio:
+	unregister_mpdccp_link_notifier(&mpdccp_pm_link_notifier);
 err_reg_pernet_subsys:
 	kmem_cache_destroy(mpdccp_pm_addr_cache);
 goto out;
@@ -1078,6 +1141,7 @@ static void mpdccp_pm_exit(void)
 #if IS_ENABLED(CONFIG_IPV6)
     unregister_inet6addr_notifier(&mpdccp_pm_inet6addr_notifier);
 #endif
+    unregister_mpdccp_link_notifier(&mpdccp_pm_link_notifier);
     unregister_inetaddr_notifier(&mpdccp_pm_inetaddr_notifier);
     unregister_pernet_subsys(&mpdccp_pm_net_ops);
 
@@ -1256,6 +1320,7 @@ static struct mpdccp_pm_ops mpdccp_pm_default = {
 	.add_remote_addr = pm_add_remote_addr,
 	.get_remote_id = pm_get_remote_id,
 	.free_remote_addr = pm_free_remote_addr_list,
+	.handle_rcv_prio = pm_handle_rcv_prio,
 	.name 			= "default",
 	.owner 			= THIS_MODULE,
 };
