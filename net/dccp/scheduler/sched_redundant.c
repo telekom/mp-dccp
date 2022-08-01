@@ -50,7 +50,7 @@ static int redsched_transmit_on_flow(struct mpdccp_cb *mpcb, struct sock *sk)
 
 	meta_sk = mpcb->meta_sk;
 	skb2 = dccp_qpolicy_top (meta_sk);
-	printk(KERN_INFO "inred skb2 %p", skb2);
+	//printk(KERN_INFO "inred skb2 %p", skb2);
 	skb = pskb_copy (skb2, GFP_KERNEL);
 	if (!skb) {
 		mpdccp_pr_debug ("cannot copy skb - dropping packet\n");

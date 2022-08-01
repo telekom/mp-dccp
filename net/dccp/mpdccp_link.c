@@ -732,7 +732,7 @@ mpdccp_link_get (
 {
 	if (!link) return;
 	kref_get (&link->kref);
-#if 1
+#if 0
 	//mpdccp_pr_debug ("mpdccp_link:: ref counter (%s) incremented to %d\n",
 	//	MPDCCP_LINK_NAME(link), MPDCCP_LINK_REFCOUNT(link));
 	printk ("mpdccp_link:: ref counter (%s) incremented to %d\n",
@@ -749,7 +749,7 @@ mpdccp_link_put (
 	struct mpdccp_link_info	*link)
 {
 	if (!link) return;
-#if 1
+#if 0
 	//mpdccp_pr_debug ("mpdccp_link:: ref counter (%s) decremented from %d\n",
 	//	MPDCCP_LINK_NAME(link), MPDCCP_LINK_REFCOUNT(link));
 	printk ("mpdccp_link:: ref counter (%s) decremented from %d\n",
