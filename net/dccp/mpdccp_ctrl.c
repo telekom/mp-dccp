@@ -964,16 +964,15 @@ EXPORT_SYMBOL (mpdccp_handle_rem_addr);
 
 /*select sk to announce data*/
 
-struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb)
+struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb, u8 id)
 {
 
     struct sock *sk, *avsk = NULL;
-    /*returns the first avilable socket - can be improved to 
+    /*returns the first avilable socket that is not id - can be improved to 
      *the latest used or lowest rtt as in mptcp mptcp_select_ack_sock */
 
     mpdccp_for_each_sk(mpcb, sk) {
-
-        if (!mpdccp_sk_can_send(sk))
+        if (!mpdccp_sk_can_send(sk) || mpdccp_my_sock(sk)->local_addr_id == id)
             continue;
         avsk = sk;
         goto avfound;

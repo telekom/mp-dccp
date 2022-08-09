@@ -73,6 +73,7 @@ struct mpdccp_pm_ops {
 	void		(*add_remote_addr)      (struct mpdccp_cb*, sa_family_t, u8, union inet_addr*, u16);
 	int			(*get_remote_id)		(struct mpdccp_cb*, union inet_addr*, sa_family_t);
 	void		(*free_remote_addr)     (struct mpdccp_cb*);
+	int 		(*pm_hmac)				(struct mpdccp_cb*, u8, sa_family_t, union inet_addr*, u16, bool, u8*);
 	
 	char			name[MPDCCP_PM_NAME_MAX];
 	struct module		*owner;

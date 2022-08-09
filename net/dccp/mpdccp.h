@@ -257,6 +257,11 @@ struct mpdccp_cb {
 	int                     remaddr_len;	// length of mpdccp_remote_addr;
 	u16			    server_port;	// Server only 
 	int			    backlog;
+	u8              delpath_id;
+	u8			    addpath_id;
+	sa_family_t		addpath_family;
+	union inet_addr	addpath_addr;
+	u16			addpath_port;
 	int			up_reported;
 	u8 			master_addr_id;
 	int  		cnt_remote_addrs;
@@ -361,8 +366,7 @@ int mpdccp_report_alldown (struct sock*);
 int mpdccp_add_client_conn (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx, struct sockaddr *rem, int rlen);
 int mpdccp_add_listen_sock (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx);
 int mpdccp_close_subflow (struct mpdccp_cb*, struct sock*, int destroy);
-void mpdccp_handle_rem_addr (u32 del_path);
-struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb);
+struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb, u8 id);
 
 struct mpdccp_cb *mpdccp_alloc_mpcb(void);
 
