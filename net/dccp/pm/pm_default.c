@@ -541,23 +541,18 @@ static int mpdccp_pm_dccp_event(struct notifier_block *this,
 	if_idx = sk_closed->__sk_common.skc_bound_dev_if;
 	if (event == DCCP_EVENT_CLOSE){
 		mpdccp_for_each_conn(pconnection_list, mpcb) {
+			if (mpcb->to_be_closed) continue;
 			mpdccp_for_each_sk(mpcb, sk) {
+#if 0
 				/* Handle close events for both the subflow and meta sockets */
 				if (mpcb->meta_sk == sk_closed) {
 					mpdccp_close_subflow(mpcb, sk, 0);
 					mpdccp_pr_debug("close dccp sk %p", sk_closed);
 				}
-				else if(sk == sk_closed) {
-					mpdccp_close_subflow(mpcb, sk, 0);
-					mpdccp_pr_debug("close dccp sk %p", sk_closed);
-					//attempt reconnect
-					if (mpcb->meta_sk->sk_state == DCCP_OPEN && mpcb->role == MPDCCP_CLIENT){
-						mpdccp_pr_debug("try to reconnect sk address %pI4. if %d \n", &sk->__sk_common.skc_rcv_saddr, if_idx);
-							mpdccp_add_client_conn(mpcb, local, locaddr_len, if_idx, 
-							(struct sockaddr*)&mpcb->mpdccp_remote_addr,
-							mpcb->remaddr_len);
-					}
-
+				else
+#endif
+				if(sk == sk_closed) {
+					mpdccp_reconnect_client (sk, 0, local, locaddr_len, if_idx);
 					break;
 				}
 			}
