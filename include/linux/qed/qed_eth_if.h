@@ -1,33 +1,7 @@
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause) */
 /* QLogic qed NIC Driver
  * Copyright (c) 2015-2017  QLogic Corporation
- *
- * This software is available to you under a choice of one of two
- * licenses.  You may choose to be licensed under the terms of the GNU
- * General Public License (GPL) Version 2, available from the file
- * COPYING in the main directory of this source tree, or the
- * OpenIB.org BSD license below:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      - Redistributions of source code must retain the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer.
- *
- *      - Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and /or other materials
- *        provided with the distribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright (c) 2019-2020 Marvell International Ltd.
  */
 
 #ifndef _QED_ETH_IF_H
@@ -39,6 +13,10 @@
 #include <linux/qed/qed_if.h>
 #include <linux/qed/qed_iov_if.h>
 
+/* 64 max queues * (1 rx + 4 tx-cos + 1 xdp) */
+#define QED_MIN_L2_CONS (2 + NUM_PHYS_TCS_4PORT_K2)
+#define QED_MAX_L2_CONS (64 * (QED_MIN_L2_CONS))
+
 struct qed_queue_start_common_params {
 	/* Should always be relative to entity sending this. */
 	u8 vport_id;
@@ -49,6 +27,8 @@ struct qed_queue_start_common_params {
 
 	struct qed_sb_info *p_sb;
 	u8 sb_idx;
+
+	u8 tc;
 };
 
 struct qed_rxq_start_ret_params {
@@ -59,6 +39,39 @@ struct qed_rxq_start_ret_params {
 struct qed_txq_start_ret_params {
 	void __iomem *p_doorbell;
 	void *p_handle;
+};
+
+enum qed_filter_config_mode {
+	QED_FILTER_CONFIG_MODE_DISABLE,
+	QED_FILTER_CONFIG_MODE_5_TUPLE,
+	QED_FILTER_CONFIG_MODE_L4_PORT,
+	QED_FILTER_CONFIG_MODE_IP_DEST,
+	QED_FILTER_CONFIG_MODE_IP_SRC,
+};
+
+struct qed_ntuple_filter_params {
+	/* Physically mapped address containing header of buffer to be used
+	 * as filter.
+	 */
+	dma_addr_t addr;
+
+	/* Length of header in bytes */
+	u16 length;
+
+	/* Relative queue-id to receive classified packet */
+#define QED_RFS_NTUPLE_QID_RSS ((u16)-1)
+	u16 qid;
+
+	/* Identifier can either be according to vport-id or vfid */
+	bool b_is_vf;
+	u8 vport_id;
+	u8 vf_id;
+
+	/* true iff this filter is to be added. Else to be removed */
+	bool b_is_add;
+
+	/* If flow needs to be dropped */
+	bool b_is_drop;
 };
 
 struct qed_dev_eth_info {
@@ -316,14 +329,14 @@ struct qed_eth_ops {
 	int (*tunn_config)(struct qed_dev *cdev,
 			   struct qed_tunn_params *params);
 
-	int (*ntuple_filter_config)(struct qed_dev *cdev, void *cookie,
-				    dma_addr_t mapping, u16 length,
-				    u16 vport_id, u16 rx_queue_id,
-				    bool add_filter);
+	int (*ntuple_filter_config)(struct qed_dev *cdev,
+				    void *cookie,
+				    struct qed_ntuple_filter_params *params);
 
 	int (*configure_arfs_searcher)(struct qed_dev *cdev,
-				       bool en_searcher);
+				       enum qed_filter_config_mode mode);
 	int (*get_coalesce)(struct qed_dev *cdev, u16 *coal, void *handle);
+	int (*req_bulletin_update_mac)(struct qed_dev *cdev, u8 *mac);
 };
 
 const struct qed_eth_ops *qed_get_eth_ops(void);

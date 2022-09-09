@@ -34,29 +34,37 @@ enum {
 	TRACE_FUNC_OPT_STACK	= 0x1,
 };
 
-static int allocate_ftrace_ops(struct trace_array *tr)
+int ftrace_allocate_ftrace_ops(struct trace_array *tr)
 {
 	struct ftrace_ops *ops;
+
+	/* The top level array uses the "global_ops" */
+	if (tr->flags & TRACE_ARRAY_FL_GLOBAL)
+		return 0;
 
 	ops = kzalloc(sizeof(*ops), GFP_KERNEL);
 	if (!ops)
 		return -ENOMEM;
 
-	/* Currently only the non stack verision is supported */
+	/* Currently only the non stack version is supported */
 	ops->func = function_trace_call;
 	ops->flags = FTRACE_OPS_FL_RECURSION_SAFE | FTRACE_OPS_FL_PID;
 
 	tr->ops = ops;
 	ops->private = tr;
+
 	return 0;
 }
 
+void ftrace_free_ftrace_ops(struct trace_array *tr)
+{
+	kfree(tr->ops);
+	tr->ops = NULL;
+}
 
 int ftrace_create_function_files(struct trace_array *tr,
 				 struct dentry *parent)
 {
-	int ret;
-
 	/*
 	 * The top level array uses the "global_ops", and the files are
 	 * created on boot up.
@@ -64,9 +72,8 @@ int ftrace_create_function_files(struct trace_array *tr,
 	if (tr->flags & TRACE_ARRAY_FL_GLOBAL)
 		return 0;
 
-	ret = allocate_ftrace_ops(tr);
-	if (ret)
-		return ret;
+	if (!tr->ops)
+		return -EINVAL;
 
 	ftrace_create_filter_files(tr->ops, parent);
 
@@ -76,8 +83,7 @@ int ftrace_create_function_files(struct trace_array *tr,
 void ftrace_destroy_function_files(struct trace_array *tr)
 {
 	ftrace_destroy_filter_files(tr->ops);
-	kfree(tr->ops);
-	tr->ops = NULL;
+	ftrace_free_ftrace_ops(tr);
 }
 
 static int function_trace_init(struct trace_array *tr)
@@ -101,7 +107,7 @@ static int function_trace_init(struct trace_array *tr)
 
 	ftrace_init_array_ops(tr, func);
 
-	tr->trace_buffer.cpu = get_cpu();
+	tr->array_buffer.cpu = get_cpu();
 	put_cpu();
 
 	tracing_start_cmdline_record();
@@ -118,7 +124,7 @@ static void function_trace_reset(struct trace_array *tr)
 
 static void function_trace_start(struct trace_array *tr)
 {
-	tracing_reset_online_cpus(&tr->trace_buffer);
+	tracing_reset_online_cpus(&tr->array_buffer);
 }
 
 static void
@@ -138,12 +144,12 @@ function_trace_call(unsigned long ip, unsigned long parent_ip,
 	pc = preempt_count();
 	preempt_disable_notrace();
 
-	bit = trace_test_and_set_recursion(TRACE_FTRACE_START, TRACE_FTRACE_MAX);
+	bit = trace_test_and_set_recursion(TRACE_FTRACE_START);
 	if (bit < 0)
 		goto out;
 
 	cpu = smp_processor_id();
-	data = per_cpu_ptr(tr->trace_buffer.data, cpu);
+	data = per_cpu_ptr(tr->array_buffer.data, cpu);
 	if (!atomic_read(&data->disabled)) {
 		local_save_flags(flags);
 		trace_function(tr, ip, parent_ip, flags, pc);
@@ -153,6 +159,24 @@ function_trace_call(unsigned long ip, unsigned long parent_ip,
  out:
 	preempt_enable_notrace();
 }
+
+#ifdef CONFIG_UNWINDER_ORC
+/*
+ * Skip 2:
+ *
+ *   function_stack_trace_call()
+ *   ftrace_call()
+ */
+#define STACK_SKIP 2
+#else
+/*
+ * Skip 3:
+ *   __trace_stack()
+ *   function_stack_trace_call()
+ *   ftrace_call()
+ */
+#define STACK_SKIP 3
+#endif
 
 static void
 function_stack_trace_call(unsigned long ip, unsigned long parent_ip,
@@ -174,21 +198,13 @@ function_stack_trace_call(unsigned long ip, unsigned long parent_ip,
 	 */
 	local_irq_save(flags);
 	cpu = raw_smp_processor_id();
-	data = per_cpu_ptr(tr->trace_buffer.data, cpu);
+	data = per_cpu_ptr(tr->array_buffer.data, cpu);
 	disabled = atomic_inc_return(&data->disabled);
 
 	if (likely(disabled == 1)) {
 		pc = preempt_count();
 		trace_function(tr, ip, parent_ip, flags, pc);
-		/*
-		 * skip over 5 funcs:
-		 *    __ftrace_trace_stack,
-		 *    __trace_stack,
-		 *    function_stack_trace_call
-		 *    ftrace_list_func
-		 *    ftrace_call
-		 */
-		__trace_stack(tr, flags, 5, pc);
+		__trace_stack(tr, flags, STACK_SKIP, pc);
 	}
 
 	atomic_dec(&data->disabled);
@@ -367,14 +383,27 @@ ftrace_traceoff(unsigned long ip, unsigned long parent_ip,
 	tracer_tracing_off(tr);
 }
 
+#ifdef CONFIG_UNWINDER_ORC
 /*
- * Skip 4:
- *   ftrace_stacktrace()
+ * Skip 3:
+ *
  *   function_trace_probe_call()
- *   ftrace_ops_list_func()
+ *   ftrace_ops_assist_func()
  *   ftrace_call()
  */
-#define STACK_SKIP 4
+#define FTRACE_STACK_SKIP 3
+#else
+/*
+ * Skip 5:
+ *
+ *   __trace_stack()
+ *   ftrace_stacktrace()
+ *   function_trace_probe_call()
+ *   ftrace_ops_assist_func()
+ *   ftrace_call()
+ */
+#define FTRACE_STACK_SKIP 5
+#endif
 
 static __always_inline void trace_stack(struct trace_array *tr)
 {
@@ -384,7 +413,7 @@ static __always_inline void trace_stack(struct trace_array *tr)
 	local_save_flags(flags);
 	pc = preempt_count();
 
-	__trace_stack(tr, flags, STACK_SKIP, pc);
+	__trace_stack(tr, flags, FTRACE_STACK_SKIP, pc);
 }
 
 static void

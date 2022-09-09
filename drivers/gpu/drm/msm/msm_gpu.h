@@ -1,39 +1,30 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __MSM_GPU_H__
 #define __MSM_GPU_H__
 
+#include <linux/adreno-smmu-priv.h>
 #include <linux/clk.h>
+#include <linux/interconnect.h>
+#include <linux/pm_opp.h>
 #include <linux/regulator/consumer.h>
 
 #include "msm_drv.h"
 #include "msm_fence.h"
 #include "msm_ringbuffer.h"
+#include "msm_gem.h"
 
 struct msm_gem_submit;
 struct msm_gpu_perfcntr;
+struct msm_gpu_state;
 
 struct msm_gpu_config {
 	const char *ioname;
-	const char *irqname;
-	uint64_t va_start;
-	uint64_t va_end;
-	unsigned int ringsz;
+	unsigned int nr_rings;
 };
 
 /* So far, with hardware that I've seen to date, we can have:
@@ -55,17 +46,29 @@ struct msm_gpu_funcs {
 	int (*hw_init)(struct msm_gpu *gpu);
 	int (*pm_suspend)(struct msm_gpu *gpu);
 	int (*pm_resume)(struct msm_gpu *gpu);
-	void (*submit)(struct msm_gpu *gpu, struct msm_gem_submit *submit,
-			struct msm_file_private *ctx);
-	void (*flush)(struct msm_gpu *gpu);
+	void (*submit)(struct msm_gpu *gpu, struct msm_gem_submit *submit);
+	void (*flush)(struct msm_gpu *gpu, struct msm_ringbuffer *ring);
 	irqreturn_t (*irq)(struct msm_gpu *irq);
-	uint32_t (*last_fence)(struct msm_gpu *gpu);
+	struct msm_ringbuffer *(*active_ring)(struct msm_gpu *gpu);
 	void (*recover)(struct msm_gpu *gpu);
 	void (*destroy)(struct msm_gpu *gpu);
-#ifdef CONFIG_DEBUG_FS
+#if defined(CONFIG_DEBUG_FS) || defined(CONFIG_DEV_COREDUMP)
 	/* show GPU status in debugfs: */
-	void (*show)(struct msm_gpu *gpu, struct seq_file *m);
+	void (*show)(struct msm_gpu *gpu, struct msm_gpu_state *state,
+			struct drm_printer *p);
+	/* for generation specific debugfs: */
+	void (*debugfs_init)(struct msm_gpu *gpu, struct drm_minor *minor);
 #endif
+	unsigned long (*gpu_busy)(struct msm_gpu *gpu);
+	struct msm_gpu_state *(*gpu_state_get)(struct msm_gpu *gpu);
+	int (*gpu_state_put)(struct msm_gpu_state *state);
+	unsigned long (*gpu_get_freq)(struct msm_gpu *gpu);
+	void (*gpu_set_freq)(struct msm_gpu *gpu, struct dev_pm_opp *opp);
+	struct msm_gem_address_space *(*create_address_space)
+		(struct msm_gpu *gpu, struct platform_device *pdev);
+	struct msm_gem_address_space *(*create_private_address_space)
+		(struct msm_gpu *gpu);
+	uint32_t (*get_rptr)(struct msm_gpu *gpu, struct msm_ringbuffer *ring);
 };
 
 struct msm_gpu {
@@ -73,6 +76,8 @@ struct msm_gpu {
 	struct drm_device *dev;
 	struct platform_device *pdev;
 	const struct msm_gpu_funcs *funcs;
+
+	struct adreno_smmu_priv adreno_smmu;
 
 	/* performance counters (hw & sw): */
 	spinlock_t perf_lock;
@@ -86,18 +91,17 @@ struct msm_gpu {
 	const struct msm_gpu_perfcntr *perfcntrs;
 	uint32_t num_perfcntrs;
 
-	/* ringbuffer: */
-	struct msm_ringbuffer *rb;
-	uint64_t rb_iova;
+	struct msm_ringbuffer *rb[MSM_GPU_MAX_RINGS];
+	int nr_rings;
 
 	/* list of GEM active objects: */
 	struct list_head active_list;
 
-	/* fencing: */
-	struct msm_fence_context *fctx;
-
 	/* does gpu need hw_init? */
 	bool needs_hw_init;
+
+	/* number of GPU hangs (for all contexts) */
+	int global_faults;
 
 	/* worker for handling active-list retiring: */
 	struct work_struct retire_work;
@@ -109,15 +113,19 @@ struct msm_gpu {
 
 	/* Power Control: */
 	struct regulator *gpu_reg, *gpu_cx;
-	struct clk **grp_clks;
+	struct clk_bulk_data *grp_clks;
 	int nr_clocks;
 	struct clk *ebi1_clk, *core_clk, *rbbmtimer_clk;
-	uint32_t fast_rate, bus_freq;
+	uint32_t fast_rate;
 
-#ifdef DOWNSTREAM_CONFIG_MSM_BUS_SCALING
-	struct msm_bus_scale_pdata *bus_scale_table;
-	uint32_t bsc;
-#endif
+	/* The gfx-mem interconnect path that's used by all GPU types. */
+	struct icc_path *icc_path;
+
+	/*
+	 * Second interconnect path for some A3xx and all A4xx GPUs to the
+	 * On Chip MEMory (OCMEM).
+	 */
+	struct icc_path *ocmem_icc_path;
 
 	/* Hang and Inactivity Detection:
 	 */
@@ -126,15 +134,47 @@ struct msm_gpu {
 #define DRM_MSM_HANGCHECK_PERIOD 500 /* in ms */
 #define DRM_MSM_HANGCHECK_JIFFIES msecs_to_jiffies(DRM_MSM_HANGCHECK_PERIOD)
 	struct timer_list hangcheck_timer;
-	uint32_t hangcheck_fence;
 	struct work_struct recover_work;
 
-	struct list_head submit_list;
+	struct drm_gem_object *memptrs_bo;
+
+	struct {
+		struct devfreq *devfreq;
+		u64 busy_cycles;
+		ktime_t time;
+	} devfreq;
+
+	struct msm_gpu_state *crashstate;
+	/* True if the hardware supports expanded apriv (a650 and newer) */
+	bool hw_apriv;
 };
+
+static inline struct msm_gpu *dev_to_gpu(struct device *dev)
+{
+	struct adreno_smmu_priv *adreno_smmu = dev_get_drvdata(dev);
+	return container_of(adreno_smmu, struct msm_gpu, adreno_smmu);
+}
+
+/* It turns out that all targets use the same ringbuffer size */
+#define MSM_GPU_RINGBUFFER_SZ SZ_32K
+#define MSM_GPU_RINGBUFFER_BLKSIZE 32
+
+#define MSM_GPU_RB_CNTL_DEFAULT \
+		(AXXX_CP_RB_CNTL_BUFSZ(ilog2(MSM_GPU_RINGBUFFER_SZ / 8)) | \
+		AXXX_CP_RB_CNTL_BLKSZ(ilog2(MSM_GPU_RINGBUFFER_BLKSIZE / 8)))
 
 static inline bool msm_gpu_active(struct msm_gpu *gpu)
 {
-	return gpu->fctx->last_fence > gpu->funcs->last_fence(gpu);
+	int i;
+
+	for (i = 0; i < gpu->nr_rings; i++) {
+		struct msm_ringbuffer *ring = gpu->rb[i];
+
+		if (ring->seqno > ring->memptrs->fence)
+			return true;
+	}
+
+	return false;
 }
 
 /* Perf-Counters:
@@ -148,6 +188,50 @@ struct msm_gpu_perfcntr {
 	uint32_t sample_reg;
 	uint32_t select_val;
 	const char *name;
+};
+
+struct msm_gpu_submitqueue {
+	int id;
+	u32 flags;
+	u32 prio;
+	int faults;
+	struct msm_file_private *ctx;
+	struct list_head node;
+	struct kref ref;
+};
+
+struct msm_gpu_state_bo {
+	u64 iova;
+	size_t size;
+	void *data;
+	bool encoded;
+};
+
+struct msm_gpu_state {
+	struct kref ref;
+	struct timespec64 time;
+
+	struct {
+		u64 iova;
+		u32 fence;
+		u32 seqno;
+		u32 rptr;
+		u32 wptr;
+		void *data;
+		int data_size;
+		bool encoded;
+	} ring[MSM_GPU_MAX_RINGS];
+
+	int nr_registers;
+	u32 *registers;
+
+	u32 rbbm_status;
+
+	char *comm;
+	char *cmd;
+
+	int nr_bos;
+	struct msm_gpu_state_bo *bos;
 };
 
 static inline void gpu_write(struct msm_gpu *gpu, u32 reg, u32 data)
@@ -201,6 +285,7 @@ static inline void gpu_write64(struct msm_gpu *gpu, u32 lo, u32 hi, u64 val)
 
 int msm_gpu_pm_suspend(struct msm_gpu *gpu);
 int msm_gpu_pm_resume(struct msm_gpu *gpu);
+void msm_gpu_resume_devfreq(struct msm_gpu *gpu);
 
 int msm_gpu_hw_init(struct msm_gpu *gpu);
 
@@ -210,17 +295,61 @@ int msm_gpu_perfcntr_sample(struct msm_gpu *gpu, uint32_t *activetime,
 		uint32_t *totaltime, uint32_t ncntrs, uint32_t *cntrs);
 
 void msm_gpu_retire(struct msm_gpu *gpu);
-void msm_gpu_submit(struct msm_gpu *gpu, struct msm_gem_submit *submit,
-		struct msm_file_private *ctx);
+void msm_gpu_submit(struct msm_gpu *gpu, struct msm_gem_submit *submit);
 
 int msm_gpu_init(struct drm_device *drm, struct platform_device *pdev,
 		struct msm_gpu *gpu, const struct msm_gpu_funcs *funcs,
 		const char *name, struct msm_gpu_config *config);
+
+struct msm_gem_address_space *
+msm_gpu_create_private_address_space(struct msm_gpu *gpu, struct task_struct *task);
 
 void msm_gpu_cleanup(struct msm_gpu *gpu);
 
 struct msm_gpu *adreno_load_gpu(struct drm_device *dev);
 void __init adreno_register(void);
 void __exit adreno_unregister(void);
+
+static inline void msm_submitqueue_put(struct msm_gpu_submitqueue *queue)
+{
+	if (queue)
+		kref_put(&queue->ref, msm_submitqueue_destroy);
+}
+
+static inline struct msm_gpu_state *msm_gpu_crashstate_get(struct msm_gpu *gpu)
+{
+	struct msm_gpu_state *state = NULL;
+
+	mutex_lock(&gpu->dev->struct_mutex);
+
+	if (gpu->crashstate) {
+		kref_get(&gpu->crashstate->ref);
+		state = gpu->crashstate;
+	}
+
+	mutex_unlock(&gpu->dev->struct_mutex);
+
+	return state;
+}
+
+static inline void msm_gpu_crashstate_put(struct msm_gpu *gpu)
+{
+	mutex_lock(&gpu->dev->struct_mutex);
+
+	if (gpu->crashstate) {
+		if (gpu->funcs->gpu_state_put(gpu->crashstate))
+			gpu->crashstate = NULL;
+	}
+
+	mutex_unlock(&gpu->dev->struct_mutex);
+}
+
+/*
+ * Simple macro to semi-cleanly add the MAP_PRIV flag for targets that can
+ * support expanded privileges
+ */
+#define check_apriv(gpu, flags) \
+	(((gpu)->hw_apriv ? MSM_BO_MAP_PRIV : 0) | (flags))
+
 
 #endif /* __MSM_GPU_H__ */

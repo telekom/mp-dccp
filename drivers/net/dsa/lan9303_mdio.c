@@ -1,18 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2017 Pengutronix, Juergen Borleis <kernel@pengutronix.de>
  *
  * Partially based on a patch from
  * Copyright (c) 2014 Stefan Roese <sr@denx.de>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -67,14 +58,15 @@ static int lan9303_mdio_read(void *ctx, uint32_t reg, uint32_t *val)
 	return 0;
 }
 
-int lan9303_mdio_phy_write(struct lan9303 *chip, int phy, int reg, u16 val)
+static int lan9303_mdio_phy_write(struct lan9303 *chip, int phy, int reg,
+				  u16 val)
 {
 	struct lan9303_mdio *sw_dev = dev_get_drvdata(chip->dev);
 
 	return mdiobus_write_nested(sw_dev->device->bus, phy, reg, val);
 }
 
-int lan9303_mdio_phy_read(struct lan9303 *chip, int phy,  int reg)
+static int lan9303_mdio_phy_read(struct lan9303 *chip, int phy,  int reg)
 {
 	struct lan9303_mdio *sw_dev = dev_get_drvdata(chip->dev);
 
@@ -115,7 +107,7 @@ static int lan9303_mdio_probe(struct mdio_device *mdiodev)
 		return -ENOMEM;
 
 	sw_dev->chip.regmap = devm_regmap_init(&mdiodev->dev, NULL, sw_dev,
-						&lan9303_mdio_regmap_config);
+					       &lan9303_mdio_regmap_config);
 	if (IS_ERR(sw_dev->chip.regmap)) {
 		ret = PTR_ERR(sw_dev->chip.regmap);
 		dev_err(&mdiodev->dev, "regmap init failed: %d\n", ret);

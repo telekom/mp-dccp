@@ -1,7 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) STMicroelectronics SA 2015
  * Author: Hugues Fruchet <hugues.fruchet@st.com> for STMicroelectronics.
- * License terms:  GNU General Public License (GPL), version 2
  */
 
 #include <linux/rpmsg.h>
@@ -220,10 +220,8 @@ int delta_ipc_open(struct delta_ctx *pctx, const char *name,
 
 err:
 	pctx->sys_errors++;
-	if (ctx->ipc_buf) {
-		hw_free(pctx, ctx->ipc_buf);
-		ctx->ipc_buf = NULL;
-	}
+	hw_free(pctx, ctx->ipc_buf);
+	ctx->ipc_buf = NULL;
 
 	return ret;
 };

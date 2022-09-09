@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * USB Serial Converter driver
  *
@@ -6,14 +7,10 @@
  * Copyright (C) 2000 Peter Berger (pberger@brimson.com)
  * Copyright (C) 2000 Al Borchers (borchers@steinerpoint.com)
  *
- *	This program is free software; you can redistribute it and/or
- *	modify it under the terms of the GNU General Public License version
- *	2 as published by the Free Software Foundation.
- *
  * This driver was originally based on the ACM driver by Armin Fuerst (which was
  * based on a driver by Brad Keryan)
  *
- * See Documentation/usb/usb-serial.txt for more information on using this
+ * See Documentation/usb/usb-serial.rst for more information on using this
  * driver
  */
 
@@ -167,9 +164,9 @@ void usb_serial_put(struct usb_serial *serial)
  * @driver: the driver (USB in our case)
  * @tty: the tty being created
  *
- * Create the termios objects for this tty.  We use the default
+ * Initialise the termios structure for this tty.  We use the default
  * USB serial settings but permit them to be overridden by
- * serial->type->init_termios.
+ * serial->type->init_termios on first open.
  *
  * This is the first place a new tty gets used.  Hence this is where we
  * acquire references to the usb_serial structure and the driver module,
@@ -181,6 +178,7 @@ static int serial_install(struct tty_driver *driver, struct tty_struct *tty)
 	int idx = tty->index;
 	struct usb_serial *serial;
 	struct usb_serial_port *port;
+	bool init_termios;
 	int retval = -ENODEV;
 
 	port = usb_serial_port_get_by_minor(idx);
@@ -195,14 +193,16 @@ static int serial_install(struct tty_driver *driver, struct tty_struct *tty)
 	if (retval)
 		goto error_get_interface;
 
-	retval = tty_port_install(&port->port, driver, tty);
+	init_termios = (driver->termios[idx] == NULL);
+
+	retval = tty_standard_install(driver, tty);
 	if (retval)
 		goto error_init_termios;
 
 	mutex_unlock(&serial->disc_mutex);
 
-	/* allow the driver to update the settings */
-	if (serial->type->init_termios)
+	/* allow the driver to update the initial settings */
+	if (init_termios && serial->type->init_termios)
 		serial->type->init_termios(tty);
 
 	tty->driver_data = port;
@@ -288,7 +288,7 @@ static void serial_close(struct tty_struct *tty, struct file *filp)
 
 /**
  * serial_cleanup - free resources post close/hangup
- * @port: port to free up
+ * @tty: tty to clean up
  *
  * Do the resource freeing and refcount dropping for the port.
  * Avoid freeing the console.
@@ -314,10 +314,7 @@ static void serial_cleanup(struct tty_struct *tty)
 	serial = port->serial;
 	owner = serial->type->driver.owner;
 
-	mutex_lock(&serial->disc_mutex);
-	if (!serial->disconnected)
-		usb_autopm_put_interface(serial->interface);
-	mutex_unlock(&serial->disc_mutex);
+	usb_autopm_put_interface(serial->interface);
 
 	usb_serial_put(serial);
 	module_put(owner);
@@ -399,6 +396,24 @@ static void serial_unthrottle(struct tty_struct *tty)
 		port->serial->type->unthrottle(tty);
 }
 
+static int serial_get_serial(struct tty_struct *tty, struct serial_struct *ss)
+{
+	struct usb_serial_port *port = tty->driver_data;
+
+	if (port->serial->type->get_serial)
+		return port->serial->type->get_serial(tty, ss);
+	return -ENOTTY;
+}
+
+static int serial_set_serial(struct tty_struct *tty, struct serial_struct *ss)
+{
+	struct usb_serial_port *port = tty->driver_data;
+
+	if (port->serial->type->set_serial)
+		return port->serial->type->set_serial(tty, ss);
+	return -ENOTTY;
+}
+
 static int serial_ioctl(struct tty_struct *tty,
 					unsigned int cmd, unsigned long arg)
 {
@@ -478,19 +493,6 @@ static int serial_proc_show(struct seq_file *m, void *v)
 	}
 	return 0;
 }
-
-static int serial_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, serial_proc_show, NULL);
-}
-
-static const struct file_operations serial_proc_fops = {
-	.owner		= THIS_MODULE,
-	.open		= serial_proc_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
 
 static int serial_tiocmget(struct tty_struct *tty)
 {
@@ -1193,24 +1195,15 @@ static const struct tty_operations serial_ops = {
 	.tiocmget =		serial_tiocmget,
 	.tiocmset =		serial_tiocmset,
 	.get_icount =		serial_get_icount,
+	.set_serial =		serial_set_serial,
+	.get_serial =		serial_get_serial,
 	.cleanup =		serial_cleanup,
 	.install =		serial_install,
-	.proc_fops =		&serial_proc_fops,
+	.proc_show =		serial_proc_show,
 };
 
 
 struct tty_driver *usb_serial_tty_driver;
-
-/* Driver structure we register with the USB core */
-static struct usb_driver usb_serial_driver = {
-	.name =		"usbserial",
-	.probe =	usb_serial_probe,
-	.disconnect =	usb_serial_disconnect,
-	.suspend =	usb_serial_suspend,
-	.resume =	usb_serial_resume,
-	.no_dynamic_id =	1,
-	.supports_autosuspend =	1,
-};
 
 static int __init usb_serial_init(void)
 {
@@ -1247,13 +1240,6 @@ static int __init usb_serial_init(void)
 		goto exit_reg_driver;
 	}
 
-	/* register the USB driver */
-	result = usb_register(&usb_serial_driver);
-	if (result < 0) {
-		pr_err("%s - usb_register failed\n", __func__);
-		goto exit_tty;
-	}
-
 	/* register the generic driver, if we should */
 	result = usb_serial_generic_register();
 	if (result < 0) {
@@ -1264,9 +1250,6 @@ static int __init usb_serial_init(void)
 	return result;
 
 exit_generic:
-	usb_deregister(&usb_serial_driver);
-
-exit_tty:
 	tty_unregister_driver(usb_serial_tty_driver);
 
 exit_reg_driver:
@@ -1285,7 +1268,6 @@ static void __exit usb_serial_exit(void)
 
 	usb_serial_generic_deregister();
 
-	usb_deregister(&usb_serial_driver);
 	tty_unregister_driver(usb_serial_tty_driver);
 	put_tty_driver(usb_serial_tty_driver);
 	bus_unregister(&usb_serial_bus_type);
@@ -1334,6 +1316,9 @@ static int usb_serial_register(struct usb_serial_driver *driver)
 				driver->description);
 		return -EINVAL;
 	}
+
+	/* Prevent individual ports from being unbound. */
+	driver->driver.suppress_bind_attrs = true;
 
 	usb_serial_operations_init(driver);
 
@@ -1460,4 +1445,4 @@ EXPORT_SYMBOL_GPL(usb_serial_deregister_drivers);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

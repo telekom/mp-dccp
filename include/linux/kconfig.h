@@ -2,6 +2,8 @@
 #ifndef __LINUX_KCONFIG_H
 #define __LINUX_KCONFIG_H
 
+/* CONFIG_CC_VERSION_TEXT (Do not delete this comment. See help in Kconfig) */
+
 #include <generated/autoconf.h>
 
 #ifdef CONFIG_CPU_BIG_ENDIAN
@@ -69,8 +71,5 @@
  * 0 otherwise.
  */
 #define IS_ENABLED(option) __or(IS_BUILTIN(option), IS_MODULE(option))
-
-/* Make sure we always have all types and struct attributes defined. */
-#include <linux/compiler_types.h>
 
 #endif /* __LINUX_KCONFIG_H */

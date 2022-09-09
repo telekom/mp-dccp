@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * CXL Flash Device Driver
  *
@@ -5,11 +6,6 @@
  *             Matthew R. Ochs <mrochs@linux.vnet.ibm.com>, IBM Corporation
  *
  * Copyright (C) 2015 IBM Corporation
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #ifndef _CXLFLASH_SUPERPIPE_H
@@ -96,15 +92,15 @@ struct ctx_info {
 	struct llun_info **rht_lun;       /* Mapping of RHT entries to LUNs */
 	u8 *rht_needs_ws;	/* User-desired write-same function per RHTE */
 
-	struct cxl_ioctl_start_work work;
 	u64 ctxid;
+	u64 irqs; /* Number of interrupts requested for context */
 	pid_t pid;
 	bool initialized;
 	bool unavail;
 	bool err_recovery_active;
 	struct mutex mutex; /* Context protection */
 	struct kref kref;
-	struct cxl_context *ctx;
+	void *ctx;
 	struct cxlflash_cfg *cfg;
 	struct list_head luns;	/* LUNs attached to this context */
 	const struct vm_operations_struct *cxl_mmap_vmops;

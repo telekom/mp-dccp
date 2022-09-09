@@ -1,29 +1,21 @@
-/*  SPDX-License-Identifier: GNU General Public License v2 only (GPL-2.0-only)
+/*
+ * MPDCCP - Path manager architecture
  *
- * Copyright (C) 2018 by Andreas Philipp Matz, Deutsche Telekom AG
- * Copyright (C) 2018 by Markus Amend, Deutsche Telekom AG
- * Copyright (C) 2020 by Nathalie Romo, Deutsche Telekom AG
- * Copyright (C) 2020 by Frank Reker, Deutsche Telekom AG
- *
- * MPDCCP - Path manager default
+ * A flexible architecture to load arbitrary path managers. The
+ * default path manager does nothing.
  *
  * The code in this file is partly derived from the MPTCP project's 
  * mptcp_pm.c and mptcp_fullmesh.c. Derived code is Copyright (C) 
  * the original authors Christoph Paasch et al.
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
-
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
-
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
+ * Copyright (C) 2018 Andreas Philipp Matz <info@andreasmatz.de>
+ * Copyright (C) 2020 Frank Reker <frank@reker.net>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ */
 
 #include <linux/module.h>
 #include <linux/inetdevice.h>
@@ -573,7 +565,7 @@ struct mpdccp_dad_data {
 	struct inet6_ifaddr *ifa;
 };
 
-static void dad_callback(unsigned long arg);
+static void dad_callback(struct timer_list *t);
 static int inet6_addr_event(struct notifier_block *this,
 				     unsigned long event, void *ptr);
 
@@ -587,7 +579,7 @@ static void dad_init_timer(struct mpdccp_dad_data *data,
 				 struct inet6_ifaddr *ifa)
 {
 	data->ifa = ifa;
-	data->timer.data = (unsigned long)data;
+	//data->timer.data = (unsigned long)data;
 	data->timer.function = dad_callback;
 	if (ifa->idev->cnf.rtr_solicit_delay)
 		data->timer.expires = jiffies + ifa->idev->cnf.rtr_solicit_delay;
@@ -595,9 +587,11 @@ static void dad_init_timer(struct mpdccp_dad_data *data,
 		data->timer.expires = jiffies + (HZ/10);
 }
 
-static void dad_callback(unsigned long arg)
+//static void dad_callback(unsigned long arg)
+static void dad_callback(struct timer_list *t)
 {
-	struct mpdccp_dad_data *data = (struct mpdccp_dad_data *)arg;
+	//struct mpdccp_dad_data *data = (struct mpdccp_dad_data *)arg;
+	struct mpdccp_dad_data *data = from_timer(data, t, timer);
 
 	/* DAD failed or IP brought down? */
 	if (data->ifa->state == INET6_IFADDR_STATE_ERRDAD ||
@@ -626,7 +620,8 @@ static inline void dad_setup_timer(struct inet6_ifaddr *ifa)
 	if (!data)
 		return;
 
-	init_timer(&data->timer);
+	//init_timer(&data->timer);
+	timer_setup(&data->timer, NULL, 0);
 	dad_init_timer(data, ifa);
 	add_timer(&data->timer);
 	in6_ifa_hold(ifa);
@@ -774,6 +769,7 @@ static int netdev_event(struct notifier_block *this, unsigned long event,
 {
 	const struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 	struct in_device *in_dev;
+	const struct in_ifaddr *ifa;
 #if IS_ENABLED(CONFIG_IPV6)
 	struct inet6_dev *in6_dev;
 #endif
@@ -786,9 +782,11 @@ static int netdev_event(struct notifier_block *this, unsigned long event,
 	in_dev = __in_dev_get_rtnl(dev);
 
 	if (in_dev) {
-		for_ifa(in_dev) {
+		//for_ifa(in_dev) {
+		in_dev_for_each_ifa_rcu(ifa, in_dev) {
 			mpdccp_pm_inetaddr_event(NULL, event, ifa);
-		} endfor_ifa(in_dev);
+		//} endfor_ifa(in_dev);
+		}
 	}
 
 #if IS_ENABLED(CONFIG_IPV6)
@@ -1074,4 +1072,6 @@ void mpdccp_pm_default_unregister (void)
 	mpdccp_pm_exit();
 	mpdccp_unregister_path_manager(&mpdccp_pm_default);
 }
+
+
 

@@ -1,16 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * COMEDI ISA DMA support functions
  * Copyright (c) 2014 H Hartley Sweeten <hsweeten@visionengravers.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #ifndef _COMEDI_ISADMA_H
@@ -19,6 +10,7 @@
 #include <linux/types.h>
 
 struct comedi_device;
+struct device;
 
 /*
  * These are used to avoid issues when <asm/dma.h> and the DMA_MODE_
@@ -47,6 +39,7 @@ struct comedi_isadma_desc {
 
 /**
  * struct comedi_isadma - ISA DMA data
+ * @dev:	device to allocate non-coherent memory for
  * @desc:	cookie for each DMA buffer
  * @n_desc:	the number of cookies
  * @cur_dma:	the current cookie in use
@@ -54,6 +47,7 @@ struct comedi_isadma_desc {
  * @chan2:	the second DMA channel requested
  */
 struct comedi_isadma {
+	struct device *dev;
 	struct comedi_isadma_desc *desc;
 	int n_desc;
 	int cur_dma;

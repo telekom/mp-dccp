@@ -1,17 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2016 Avago Technologies.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful.
- * ALL EXPRESS OR IMPLIED CONDITIONS, REPRESENTATIONS AND WARRANTIES,
- * INCLUDING ANY IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A
- * PARTICULAR PURPOSE, OR NON-INFRINGEMENT, ARE DISCLAIMED, EXCEPT TO
- * THE EXTENT THAT SUCH DISCLAIMERS ARE HELD TO BE LEGALLY INVALID.
- * See the GNU General Public License for more details, a copy of which
- * can be found in the file COPYING included with this package
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/module.h>
@@ -54,6 +43,17 @@ static const match_table_t opt_tokens = {
 	{ NVMF_OPT_ERR,		NULL		}
 };
 
+static int fcloop_verify_addr(substring_t *s)
+{
+	size_t blen = s->to - s->from + 1;
+
+	if (strnlen(s->from, blen) != NVME_FC_TRADDR_HEXNAMELEN + 2 ||
+	    strncmp(s->from, "0x", 2))
+		return -EINVAL;
+
+	return 0;
+}
+
 static int
 fcloop_parse_options(struct fcloop_ctrl_options *opts,
 		const char *buf)
@@ -75,14 +75,16 @@ fcloop_parse_options(struct fcloop_ctrl_options *opts,
 		opts->mask |= token;
 		switch (token) {
 		case NVMF_OPT_WWNN:
-			if (match_u64(args, &token64)) {
+			if (fcloop_verify_addr(args) ||
+			    match_u64(args, &token64)) {
 				ret = -EINVAL;
 				goto out_free_options;
 			}
 			opts->wwnn = token64;
 			break;
 		case NVMF_OPT_WWPN:
-			if (match_u64(args, &token64)) {
+			if (fcloop_verify_addr(args) ||
+			    match_u64(args, &token64)) {
 				ret = -EINVAL;
 				goto out_free_options;
 			}
@@ -103,14 +105,16 @@ fcloop_parse_options(struct fcloop_ctrl_options *opts,
 			opts->fcaddr = token;
 			break;
 		case NVMF_OPT_LPWWNN:
-			if (match_u64(args, &token64)) {
+			if (fcloop_verify_addr(args) ||
+			    match_u64(args, &token64)) {
 				ret = -EINVAL;
 				goto out_free_options;
 			}
 			opts->lpwwnn = token64;
 			break;
 		case NVMF_OPT_LPWWPN:
-			if (match_u64(args, &token64)) {
+			if (fcloop_verify_addr(args) ||
+			    match_u64(args, &token64)) {
 				ret = -EINVAL;
 				goto out_free_options;
 			}
@@ -152,14 +156,16 @@ fcloop_parse_nm_options(struct device *dev, u64 *nname, u64 *pname,
 		token = match_token(p, opt_tokens, args);
 		switch (token) {
 		case NVMF_OPT_WWNN:
-			if (match_u64(args, &token64)) {
+			if (fcloop_verify_addr(args) ||
+			    match_u64(args, &token64)) {
 				ret = -EINVAL;
 				goto out_free_options;
 			}
 			*nname = token64;
 			break;
 		case NVMF_OPT_WWPN:
-			if (match_u64(args, &token64)) {
+			if (fcloop_verify_addr(args) ||
+			    match_u64(args, &token64)) {
 				ret = -EINVAL;
 				goto out_free_options;
 			}
@@ -209,17 +215,23 @@ struct fcloop_lport_priv {
 };
 
 struct fcloop_rport {
-	struct nvme_fc_remote_port *remoteport;
-	struct nvmet_fc_target_port *targetport;
-	struct fcloop_nport *nport;
-	struct fcloop_lport *lport;
+	struct nvme_fc_remote_port	*remoteport;
+	struct nvmet_fc_target_port	*targetport;
+	struct fcloop_nport		*nport;
+	struct fcloop_lport		*lport;
+	spinlock_t			lock;
+	struct list_head		ls_list;
+	struct work_struct		ls_work;
 };
 
 struct fcloop_tport {
-	struct nvmet_fc_target_port *targetport;
-	struct nvme_fc_remote_port *remoteport;
-	struct fcloop_nport *nport;
-	struct fcloop_lport *lport;
+	struct nvmet_fc_target_port	*targetport;
+	struct nvme_fc_remote_port	*remoteport;
+	struct fcloop_nport		*nport;
+	struct fcloop_lport		*lport;
+	spinlock_t			lock;
+	struct list_head		ls_list;
+	struct work_struct		ls_work;
 };
 
 struct fcloop_nport {
@@ -235,11 +247,23 @@ struct fcloop_nport {
 };
 
 struct fcloop_lsreq {
-	struct fcloop_tport		*tport;
 	struct nvmefc_ls_req		*lsreq;
-	struct work_struct		work;
-	struct nvmefc_tgt_ls_req	tgt_ls_req;
+	struct nvmefc_ls_rsp		ls_rsp;
+	int				lsdir;	/* H2T or T2H */
 	int				status;
+	struct list_head		ls_list; /* fcloop_rport->ls_list */
+};
+
+struct fcloop_rscn {
+	struct fcloop_tport		*tport;
+	struct work_struct		work;
+};
+
+enum {
+	INI_IO_START		= 0,
+	INI_IO_ACTIVE		= 1,
+	INI_IO_ABORTED		= 2,
+	INI_IO_COMPLETED	= 3,
 };
 
 struct fcloop_fcpreq {
@@ -247,22 +271,26 @@ struct fcloop_fcpreq {
 	struct nvmefc_fcp_req		*fcpreq;
 	spinlock_t			reqlock;
 	u16				status;
+	u32				inistate;
 	bool				active;
 	bool				aborted;
-	struct work_struct		work;
+	struct kref			ref;
+	struct work_struct		fcp_rcv_work;
+	struct work_struct		abort_rcv_work;
+	struct work_struct		tio_done_work;
 	struct nvmefc_tgt_fcp_req	tgt_fcp_req;
 };
 
 struct fcloop_ini_fcpreq {
 	struct nvmefc_fcp_req		*fcpreq;
 	struct fcloop_fcpreq		*tfcp_req;
-	struct work_struct		iniwork;
+	spinlock_t			inilock;
 };
 
 static inline struct fcloop_lsreq *
-tgt_ls_req_to_lsreq(struct nvmefc_tgt_ls_req *tgt_lsreq)
+ls_rsp_to_lsreq(struct nvmefc_ls_rsp *lsrsp)
 {
-	return container_of(tgt_lsreq, struct fcloop_lsreq, tgt_ls_req);
+	return container_of(lsrsp, struct fcloop_lsreq, ls_rsp);
 }
 
 static inline struct fcloop_fcpreq *
@@ -287,25 +315,36 @@ fcloop_delete_queue(struct nvme_fc_local_port *localport,
 {
 }
 
-
-/*
- * Transmit of LS RSP done (e.g. buffers all set). call back up
- * initiator "done" flows.
- */
 static void
-fcloop_tgt_lsrqst_done_work(struct work_struct *work)
+fcloop_rport_lsrqst_work(struct work_struct *work)
 {
-	struct fcloop_lsreq *tls_req =
-		container_of(work, struct fcloop_lsreq, work);
-	struct fcloop_tport *tport = tls_req->tport;
-	struct nvmefc_ls_req *lsreq = tls_req->lsreq;
+	struct fcloop_rport *rport =
+		container_of(work, struct fcloop_rport, ls_work);
+	struct fcloop_lsreq *tls_req;
 
-	if (!tport || tport->remoteport)
-		lsreq->done(lsreq, tls_req->status);
+	spin_lock(&rport->lock);
+	for (;;) {
+		tls_req = list_first_entry_or_null(&rport->ls_list,
+				struct fcloop_lsreq, ls_list);
+		if (!tls_req)
+			break;
+
+		list_del(&tls_req->ls_list);
+		spin_unlock(&rport->lock);
+
+		tls_req->lsreq->done(tls_req->lsreq, tls_req->status);
+		/*
+		 * callee may free memory containing tls_req.
+		 * do not reference lsreq after this.
+		 */
+
+		spin_lock(&rport->lock);
+	}
+	spin_unlock(&rport->lock);
 }
 
 static int
-fcloop_ls_req(struct nvme_fc_local_port *localport,
+fcloop_h2t_ls_req(struct nvme_fc_local_port *localport,
 			struct nvme_fc_remote_port *remoteport,
 			struct nvmefc_ls_req *lsreq)
 {
@@ -314,51 +353,292 @@ fcloop_ls_req(struct nvme_fc_local_port *localport,
 	int ret = 0;
 
 	tls_req->lsreq = lsreq;
-	INIT_WORK(&tls_req->work, fcloop_tgt_lsrqst_done_work);
+	INIT_LIST_HEAD(&tls_req->ls_list);
 
 	if (!rport->targetport) {
 		tls_req->status = -ECONNREFUSED;
-		tls_req->tport = NULL;
-		schedule_work(&tls_req->work);
+		spin_lock(&rport->lock);
+		list_add_tail(&rport->ls_list, &tls_req->ls_list);
+		spin_unlock(&rport->lock);
+		schedule_work(&rport->ls_work);
 		return ret;
 	}
 
 	tls_req->status = 0;
-	tls_req->tport = rport->targetport->private;
-	ret = nvmet_fc_rcv_ls_req(rport->targetport, &tls_req->tgt_ls_req,
+	ret = nvmet_fc_rcv_ls_req(rport->targetport, rport,
+				  &tls_req->ls_rsp,
+				  lsreq->rqstaddr, lsreq->rqstlen);
+
+	return ret;
+}
+
+static int
+fcloop_h2t_xmt_ls_rsp(struct nvmet_fc_target_port *targetport,
+			struct nvmefc_ls_rsp *lsrsp)
+{
+	struct fcloop_lsreq *tls_req = ls_rsp_to_lsreq(lsrsp);
+	struct nvmefc_ls_req *lsreq = tls_req->lsreq;
+	struct fcloop_tport *tport = targetport->private;
+	struct nvme_fc_remote_port *remoteport = tport->remoteport;
+	struct fcloop_rport *rport;
+
+	memcpy(lsreq->rspaddr, lsrsp->rspbuf,
+		((lsreq->rsplen < lsrsp->rsplen) ?
+				lsreq->rsplen : lsrsp->rsplen));
+
+	lsrsp->done(lsrsp);
+
+	if (remoteport) {
+		rport = remoteport->private;
+		spin_lock(&rport->lock);
+		list_add_tail(&rport->ls_list, &tls_req->ls_list);
+		spin_unlock(&rport->lock);
+		schedule_work(&rport->ls_work);
+	}
+
+	return 0;
+}
+
+static void
+fcloop_tport_lsrqst_work(struct work_struct *work)
+{
+	struct fcloop_tport *tport =
+		container_of(work, struct fcloop_tport, ls_work);
+	struct fcloop_lsreq *tls_req;
+
+	spin_lock(&tport->lock);
+	for (;;) {
+		tls_req = list_first_entry_or_null(&tport->ls_list,
+				struct fcloop_lsreq, ls_list);
+		if (!tls_req)
+			break;
+
+		list_del(&tls_req->ls_list);
+		spin_unlock(&tport->lock);
+
+		tls_req->lsreq->done(tls_req->lsreq, tls_req->status);
+		/*
+		 * callee may free memory containing tls_req.
+		 * do not reference lsreq after this.
+		 */
+
+		spin_lock(&tport->lock);
+	}
+	spin_unlock(&tport->lock);
+}
+
+static int
+fcloop_t2h_ls_req(struct nvmet_fc_target_port *targetport, void *hosthandle,
+			struct nvmefc_ls_req *lsreq)
+{
+	struct fcloop_lsreq *tls_req = lsreq->private;
+	struct fcloop_tport *tport = targetport->private;
+	int ret = 0;
+
+	/*
+	 * hosthandle should be the dst.rport value.
+	 * hosthandle ignored as fcloop currently is
+	 * 1:1 tgtport vs remoteport
+	 */
+	tls_req->lsreq = lsreq;
+	INIT_LIST_HEAD(&tls_req->ls_list);
+
+	if (!tport->remoteport) {
+		tls_req->status = -ECONNREFUSED;
+		spin_lock(&tport->lock);
+		list_add_tail(&tport->ls_list, &tls_req->ls_list);
+		spin_unlock(&tport->lock);
+		schedule_work(&tport->ls_work);
+		return ret;
+	}
+
+	tls_req->status = 0;
+	ret = nvme_fc_rcv_ls_req(tport->remoteport, &tls_req->ls_rsp,
 				 lsreq->rqstaddr, lsreq->rqstlen);
 
 	return ret;
 }
 
 static int
-fcloop_xmt_ls_rsp(struct nvmet_fc_target_port *tport,
-			struct nvmefc_tgt_ls_req *tgt_lsreq)
+fcloop_t2h_xmt_ls_rsp(struct nvme_fc_local_port *localport,
+			struct nvme_fc_remote_port *remoteport,
+			struct nvmefc_ls_rsp *lsrsp)
 {
-	struct fcloop_lsreq *tls_req = tgt_ls_req_to_lsreq(tgt_lsreq);
+	struct fcloop_lsreq *tls_req = ls_rsp_to_lsreq(lsrsp);
 	struct nvmefc_ls_req *lsreq = tls_req->lsreq;
+	struct fcloop_rport *rport = remoteport->private;
+	struct nvmet_fc_target_port *targetport = rport->targetport;
+	struct fcloop_tport *tport;
 
-	memcpy(lsreq->rspaddr, tgt_lsreq->rspbuf,
-		((lsreq->rsplen < tgt_lsreq->rsplen) ?
-				lsreq->rsplen : tgt_lsreq->rsplen));
-	tgt_lsreq->done(tgt_lsreq);
+	memcpy(lsreq->rspaddr, lsrsp->rspbuf,
+		((lsreq->rsplen < lsrsp->rsplen) ?
+				lsreq->rsplen : lsrsp->rsplen));
+	lsrsp->done(lsrsp);
 
-	schedule_work(&tls_req->work);
+	if (targetport) {
+		tport = targetport->private;
+		spin_lock(&tport->lock);
+		list_add_tail(&tport->ls_list, &tls_req->ls_list);
+		spin_unlock(&tport->lock);
+		schedule_work(&tport->ls_work);
+	}
 
 	return 0;
 }
 
+static void
+fcloop_t2h_host_release(void *hosthandle)
+{
+	/* host handle ignored for now */
+}
+
 /*
- * FCP IO operation done by initiator abort.
- * call back up initiator "done" flows.
+ * Simulate reception of RSCN and converting it to a initiator transport
+ * call to rescan a remote port.
  */
 static void
-fcloop_tgt_fcprqst_ini_done_work(struct work_struct *work)
+fcloop_tgt_rscn_work(struct work_struct *work)
 {
-	struct fcloop_ini_fcpreq *inireq =
-		container_of(work, struct fcloop_ini_fcpreq, iniwork);
+	struct fcloop_rscn *tgt_rscn =
+		container_of(work, struct fcloop_rscn, work);
+	struct fcloop_tport *tport = tgt_rscn->tport;
 
-	inireq->fcpreq->done(inireq->fcpreq);
+	if (tport->remoteport)
+		nvme_fc_rescan_remoteport(tport->remoteport);
+	kfree(tgt_rscn);
+}
+
+static void
+fcloop_tgt_discovery_evt(struct nvmet_fc_target_port *tgtport)
+{
+	struct fcloop_rscn *tgt_rscn;
+
+	tgt_rscn = kzalloc(sizeof(*tgt_rscn), GFP_KERNEL);
+	if (!tgt_rscn)
+		return;
+
+	tgt_rscn->tport = tgtport->private;
+	INIT_WORK(&tgt_rscn->work, fcloop_tgt_rscn_work);
+
+	schedule_work(&tgt_rscn->work);
+}
+
+static void
+fcloop_tfcp_req_free(struct kref *ref)
+{
+	struct fcloop_fcpreq *tfcp_req =
+		container_of(ref, struct fcloop_fcpreq, ref);
+
+	kfree(tfcp_req);
+}
+
+static void
+fcloop_tfcp_req_put(struct fcloop_fcpreq *tfcp_req)
+{
+	kref_put(&tfcp_req->ref, fcloop_tfcp_req_free);
+}
+
+static int
+fcloop_tfcp_req_get(struct fcloop_fcpreq *tfcp_req)
+{
+	return kref_get_unless_zero(&tfcp_req->ref);
+}
+
+static void
+fcloop_call_host_done(struct nvmefc_fcp_req *fcpreq,
+			struct fcloop_fcpreq *tfcp_req, int status)
+{
+	struct fcloop_ini_fcpreq *inireq = NULL;
+
+	if (fcpreq) {
+		inireq = fcpreq->private;
+		spin_lock(&inireq->inilock);
+		inireq->tfcp_req = NULL;
+		spin_unlock(&inireq->inilock);
+
+		fcpreq->status = status;
+		fcpreq->done(fcpreq);
+	}
+
+	/* release original io reference on tgt struct */
+	fcloop_tfcp_req_put(tfcp_req);
+}
+
+static void
+fcloop_fcp_recv_work(struct work_struct *work)
+{
+	struct fcloop_fcpreq *tfcp_req =
+		container_of(work, struct fcloop_fcpreq, fcp_rcv_work);
+	struct nvmefc_fcp_req *fcpreq = tfcp_req->fcpreq;
+	int ret = 0;
+	bool aborted = false;
+
+	spin_lock_irq(&tfcp_req->reqlock);
+	switch (tfcp_req->inistate) {
+	case INI_IO_START:
+		tfcp_req->inistate = INI_IO_ACTIVE;
+		break;
+	case INI_IO_ABORTED:
+		aborted = true;
+		break;
+	default:
+		spin_unlock_irq(&tfcp_req->reqlock);
+		WARN_ON(1);
+		return;
+	}
+	spin_unlock_irq(&tfcp_req->reqlock);
+
+	if (unlikely(aborted))
+		ret = -ECANCELED;
+	else
+		ret = nvmet_fc_rcv_fcp_req(tfcp_req->tport->targetport,
+				&tfcp_req->tgt_fcp_req,
+				fcpreq->cmdaddr, fcpreq->cmdlen);
+	if (ret)
+		fcloop_call_host_done(fcpreq, tfcp_req, ret);
+
+	return;
+}
+
+static void
+fcloop_fcp_abort_recv_work(struct work_struct *work)
+{
+	struct fcloop_fcpreq *tfcp_req =
+		container_of(work, struct fcloop_fcpreq, abort_rcv_work);
+	struct nvmefc_fcp_req *fcpreq;
+	bool completed = false;
+
+	spin_lock_irq(&tfcp_req->reqlock);
+	fcpreq = tfcp_req->fcpreq;
+	switch (tfcp_req->inistate) {
+	case INI_IO_ABORTED:
+		break;
+	case INI_IO_COMPLETED:
+		completed = true;
+		break;
+	default:
+		spin_unlock_irq(&tfcp_req->reqlock);
+		WARN_ON(1);
+		return;
+	}
+	spin_unlock_irq(&tfcp_req->reqlock);
+
+	if (unlikely(completed)) {
+		/* remove reference taken in original abort downcall */
+		fcloop_tfcp_req_put(tfcp_req);
+		return;
+	}
+
+	if (tfcp_req->tport->targetport)
+		nvmet_fc_rcv_fcp_abort(tfcp_req->tport->targetport,
+					&tfcp_req->tgt_fcp_req);
+
+	spin_lock_irq(&tfcp_req->reqlock);
+	tfcp_req->fcpreq = NULL;
+	spin_unlock_irq(&tfcp_req->reqlock);
+
+	fcloop_call_host_done(fcpreq, tfcp_req, -ECANCELED);
+	/* call_host_done releases reference for abort downcall */
 }
 
 /*
@@ -369,21 +649,15 @@ static void
 fcloop_tgt_fcprqst_done_work(struct work_struct *work)
 {
 	struct fcloop_fcpreq *tfcp_req =
-		container_of(work, struct fcloop_fcpreq, work);
-	struct fcloop_tport *tport = tfcp_req->tport;
+		container_of(work, struct fcloop_fcpreq, tio_done_work);
 	struct nvmefc_fcp_req *fcpreq;
 
-	spin_lock(&tfcp_req->reqlock);
+	spin_lock_irq(&tfcp_req->reqlock);
 	fcpreq = tfcp_req->fcpreq;
-	tfcp_req->fcpreq = NULL;
-	spin_unlock(&tfcp_req->reqlock);
+	tfcp_req->inistate = INI_IO_COMPLETED;
+	spin_unlock_irq(&tfcp_req->reqlock);
 
-	if (tport->remoteport && fcpreq) {
-		fcpreq->status = tfcp_req->status;
-		fcpreq->done(fcpreq);
-	}
-
-	kfree(tfcp_req);
+	fcloop_call_host_done(fcpreq, tfcp_req, tfcp_req->status);
 }
 
 
@@ -396,27 +670,30 @@ fcloop_fcp_req(struct nvme_fc_local_port *localport,
 	struct fcloop_rport *rport = remoteport->private;
 	struct fcloop_ini_fcpreq *inireq = fcpreq->private;
 	struct fcloop_fcpreq *tfcp_req;
-	int ret = 0;
 
 	if (!rport->targetport)
 		return -ECONNREFUSED;
 
-	tfcp_req = kzalloc(sizeof(*tfcp_req), GFP_KERNEL);
+	tfcp_req = kzalloc(sizeof(*tfcp_req), GFP_ATOMIC);
 	if (!tfcp_req)
 		return -ENOMEM;
 
 	inireq->fcpreq = fcpreq;
 	inireq->tfcp_req = tfcp_req;
-	INIT_WORK(&inireq->iniwork, fcloop_tgt_fcprqst_ini_done_work);
+	spin_lock_init(&inireq->inilock);
+
 	tfcp_req->fcpreq = fcpreq;
 	tfcp_req->tport = rport->targetport->private;
+	tfcp_req->inistate = INI_IO_START;
 	spin_lock_init(&tfcp_req->reqlock);
-	INIT_WORK(&tfcp_req->work, fcloop_tgt_fcprqst_done_work);
+	INIT_WORK(&tfcp_req->fcp_rcv_work, fcloop_fcp_recv_work);
+	INIT_WORK(&tfcp_req->abort_rcv_work, fcloop_fcp_abort_recv_work);
+	INIT_WORK(&tfcp_req->tio_done_work, fcloop_tgt_fcprqst_done_work);
+	kref_init(&tfcp_req->ref);
 
-	ret = nvmet_fc_rcv_fcp_req(rport->targetport, &tfcp_req->tgt_fcp_req,
-				 fcpreq->cmdaddr, fcpreq->cmdlen);
+	schedule_work(&tfcp_req->fcp_rcv_work);
 
-	return ret;
+	return 0;
 }
 
 static void
@@ -483,12 +760,12 @@ fcloop_fcp_op(struct nvmet_fc_target_port *tgtport,
 	int fcp_err = 0, active, aborted;
 	u8 op = tgt_fcpreq->op;
 
-	spin_lock(&tfcp_req->reqlock);
+	spin_lock_irq(&tfcp_req->reqlock);
 	fcpreq = tfcp_req->fcpreq;
 	active = tfcp_req->active;
 	aborted = tfcp_req->aborted;
 	tfcp_req->active = true;
-	spin_unlock(&tfcp_req->reqlock);
+	spin_unlock_irq(&tfcp_req->reqlock);
 
 	if (unlikely(active))
 		/* illegal - call while i/o active */
@@ -496,9 +773,9 @@ fcloop_fcp_op(struct nvmet_fc_target_port *tgtport,
 
 	if (unlikely(aborted)) {
 		/* target transport has aborted i/o prior */
-		spin_lock(&tfcp_req->reqlock);
+		spin_lock_irq(&tfcp_req->reqlock);
 		tfcp_req->active = false;
-		spin_unlock(&tfcp_req->reqlock);
+		spin_unlock_irq(&tfcp_req->reqlock);
 		tgt_fcpreq->transferred_length = 0;
 		tgt_fcpreq->fcp_error = -ECANCELED;
 		tgt_fcpreq->done(tgt_fcpreq);
@@ -535,6 +812,7 @@ fcloop_fcp_op(struct nvmet_fc_target_port *tgtport,
 			break;
 
 		/* Fall-Thru to RSP handling */
+		fallthrough;
 
 	case NVMET_FCOP_RSP:
 		if (fcpreq) {
@@ -554,9 +832,9 @@ fcloop_fcp_op(struct nvmet_fc_target_port *tgtport,
 		break;
 	}
 
-	spin_lock(&tfcp_req->reqlock);
+	spin_lock_irq(&tfcp_req->reqlock);
 	tfcp_req->active = false;
-	spin_unlock(&tfcp_req->reqlock);
+	spin_unlock_irq(&tfcp_req->reqlock);
 
 	tgt_fcpreq->transferred_length = xfrlen;
 	tgt_fcpreq->fcp_error = fcp_err;
@@ -576,9 +854,9 @@ fcloop_tgt_fcp_abort(struct nvmet_fc_target_port *tgtport,
 	 * (one doing io, other doing abort) and only kills ops posted
 	 * after the abort request
 	 */
-	spin_lock(&tfcp_req->reqlock);
+	spin_lock_irq(&tfcp_req->reqlock);
 	tfcp_req->aborted = true;
-	spin_unlock(&tfcp_req->reqlock);
+	spin_unlock_irq(&tfcp_req->reqlock);
 
 	tfcp_req->status = NVME_SC_INTERNAL;
 
@@ -595,13 +873,19 @@ fcloop_fcp_req_release(struct nvmet_fc_target_port *tgtport,
 {
 	struct fcloop_fcpreq *tfcp_req = tgt_fcp_req_to_fcpreq(tgt_fcpreq);
 
-	schedule_work(&tfcp_req->work);
+	schedule_work(&tfcp_req->tio_done_work);
 }
 
 static void
-fcloop_ls_abort(struct nvme_fc_local_port *localport,
+fcloop_h2t_ls_abort(struct nvme_fc_local_port *localport,
 			struct nvme_fc_remote_port *remoteport,
 				struct nvmefc_ls_req *lsreq)
+{
+}
+
+static void
+fcloop_t2h_ls_abort(struct nvmet_fc_target_port *targetport,
+			void *hosthandle, struct nvmefc_ls_req *lsreq)
 {
 }
 
@@ -611,28 +895,47 @@ fcloop_fcp_abort(struct nvme_fc_local_port *localport,
 			void *hw_queue_handle,
 			struct nvmefc_fcp_req *fcpreq)
 {
-	struct fcloop_rport *rport = remoteport->private;
 	struct fcloop_ini_fcpreq *inireq = fcpreq->private;
-	struct fcloop_fcpreq *tfcp_req = inireq->tfcp_req;
+	struct fcloop_fcpreq *tfcp_req;
+	bool abortio = true;
+
+	spin_lock(&inireq->inilock);
+	tfcp_req = inireq->tfcp_req;
+	if (tfcp_req)
+		fcloop_tfcp_req_get(tfcp_req);
+	spin_unlock(&inireq->inilock);
 
 	if (!tfcp_req)
 		/* abort has already been called */
-		goto finish;
+		return;
 
 	/* break initiator/target relationship for io */
-	spin_lock(&tfcp_req->reqlock);
-	inireq->tfcp_req = NULL;
-	tfcp_req->fcpreq = NULL;
-	spin_unlock(&tfcp_req->reqlock);
+	spin_lock_irq(&tfcp_req->reqlock);
+	switch (tfcp_req->inistate) {
+	case INI_IO_START:
+	case INI_IO_ACTIVE:
+		tfcp_req->inistate = INI_IO_ABORTED;
+		break;
+	case INI_IO_COMPLETED:
+		abortio = false;
+		break;
+	default:
+		spin_unlock_irq(&tfcp_req->reqlock);
+		WARN_ON(1);
+		return;
+	}
+	spin_unlock_irq(&tfcp_req->reqlock);
 
-	if (rport->targetport)
-		nvmet_fc_rcv_fcp_abort(rport->targetport,
-					&tfcp_req->tgt_fcp_req);
-
-finish:
-	/* post the aborted io completion */
-	fcpreq->status = -ECANCELED;
-	schedule_work(&inireq->iniwork);
+	if (abortio)
+		/* leave the reference while the work item is scheduled */
+		WARN_ON(!schedule_work(&tfcp_req->abort_rcv_work));
+	else  {
+		/*
+		 * as the io has already had the done callback made,
+		 * nothing more to do. So release the reference taken above
+		 */
+		fcloop_tfcp_req_put(tfcp_req);
+	}
 }
 
 static void
@@ -676,6 +979,7 @@ fcloop_remoteport_delete(struct nvme_fc_remote_port *remoteport)
 {
 	struct fcloop_rport *rport = remoteport->private;
 
+	flush_work(&rport->ls_work);
 	fcloop_nport_put(rport->nport);
 }
 
@@ -684,6 +988,7 @@ fcloop_targetport_delete(struct nvmet_fc_target_port *targetport)
 {
 	struct fcloop_tport *tport = targetport->private;
 
+	flush_work(&tport->ls_work);
 	fcloop_nport_put(tport->nport);
 }
 
@@ -696,10 +1001,11 @@ static struct nvme_fc_port_template fctemplate = {
 	.remoteport_delete	= fcloop_remoteport_delete,
 	.create_queue		= fcloop_create_queue,
 	.delete_queue		= fcloop_delete_queue,
-	.ls_req			= fcloop_ls_req,
+	.ls_req			= fcloop_h2t_ls_req,
 	.fcp_io			= fcloop_fcp_req,
-	.ls_abort		= fcloop_ls_abort,
+	.ls_abort		= fcloop_h2t_ls_abort,
 	.fcp_abort		= fcloop_fcp_abort,
+	.xmt_ls_rsp		= fcloop_t2h_xmt_ls_rsp,
 	.max_hw_queues		= FCLOOP_HW_QUEUES,
 	.max_sgl_segments	= FCLOOP_SGL_SEGS,
 	.max_dif_sgl_segments	= FCLOOP_SGL_SEGS,
@@ -713,19 +1019,23 @@ static struct nvme_fc_port_template fctemplate = {
 
 static struct nvmet_fc_target_template tgttemplate = {
 	.targetport_delete	= fcloop_targetport_delete,
-	.xmt_ls_rsp		= fcloop_xmt_ls_rsp,
+	.xmt_ls_rsp		= fcloop_h2t_xmt_ls_rsp,
 	.fcp_op			= fcloop_fcp_op,
 	.fcp_abort		= fcloop_tgt_fcp_abort,
 	.fcp_req_release	= fcloop_fcp_req_release,
+	.discovery_event	= fcloop_tgt_discovery_evt,
+	.ls_req			= fcloop_t2h_ls_req,
+	.ls_abort		= fcloop_t2h_ls_abort,
+	.host_release		= fcloop_t2h_host_release,
 	.max_hw_queues		= FCLOOP_HW_QUEUES,
 	.max_sgl_segments	= FCLOOP_SGL_SEGS,
 	.max_dif_sgl_segments	= FCLOOP_SGL_SEGS,
 	.dma_boundary		= FCLOOP_DMABOUND_4G,
 	/* optional features */
-	.target_features	= NVMET_FCTGTFEAT_CMD_IN_ISR |
-				  NVMET_FCTGTFEAT_OPDONE_IN_ISR,
+	.target_features	= 0,
 	/* sizes of additional private data for data structures */
 	.target_priv_sz		= sizeof(struct fcloop_tport),
+	.lsrqst_priv_sz		= sizeof(struct fcloop_lsreq),
 };
 
 static ssize_t
@@ -977,6 +1287,9 @@ fcloop_create_remote_port(struct device *dev, struct device_attribute *attr,
 	rport->nport = nport;
 	rport->lport = nport->lport;
 	nport->rport = rport;
+	spin_lock_init(&rport->lock);
+	INIT_WORK(&rport->ls_work, fcloop_rport_lsrqst_work);
+	INIT_LIST_HEAD(&rport->ls_list);
 
 	return count;
 }
@@ -1072,6 +1385,9 @@ fcloop_create_target_port(struct device *dev, struct device_attribute *attr,
 	tport->nport = nport;
 	tport->lport = nport->lport;
 	nport->tport = tport;
+	spin_lock_init(&tport->lock);
+	INIT_WORK(&tport->ls_work, fcloop_tport_lsrqst_work);
+	INIT_LIST_HEAD(&tport->ls_list);
 
 	return count;
 }
@@ -1103,7 +1419,7 @@ fcloop_delete_target_port(struct device *dev, struct device_attribute *attr,
 		const char *buf, size_t count)
 {
 	struct fcloop_nport *nport = NULL, *tmpport;
-	struct fcloop_tport *tport;
+	struct fcloop_tport *tport = NULL;
 	u64 nodename, portname;
 	unsigned long flags;
 	int ret;

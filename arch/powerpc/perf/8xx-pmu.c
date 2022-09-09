@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Performance event support - PPC 8xx
  *
  * Copyright 2016 Christophe Leroy, CS Systemes d'Information
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/kernel.h>
@@ -18,6 +14,8 @@
 #include <asm/machdep.h>
 #include <asm/firmware.h>
 #include <asm/ptrace.h>
+#include <asm/code-patching.h>
+#include <asm/inst.h>
 
 #define PERF_8xx_ID_CPU_CYCLES		1
 #define PERF_8xx_ID_HW_INSTRUCTIONS	2
@@ -32,6 +30,8 @@ extern unsigned long itlb_miss_counter, dtlb_miss_counter;
 extern atomic_t instruction_counter;
 
 static atomic_t insn_ctr_ref;
+static atomic_t itlb_miss_ref;
+static atomic_t dtlb_miss_ref;
 
 static s64 get_insn_ctr(void)
 {
@@ -96,9 +96,19 @@ static int mpc8xx_pmu_add(struct perf_event *event, int flags)
 		val = get_insn_ctr();
 		break;
 	case PERF_8xx_ID_ITLB_LOAD_MISS:
+		if (atomic_inc_return(&itlb_miss_ref) == 1) {
+			unsigned long target = patch_site_addr(&patch__itlbmiss_perf);
+
+			patch_branch_site(&patch__itlbmiss_exit_1, target, 0);
+		}
 		val = itlb_miss_counter;
 		break;
 	case PERF_8xx_ID_DTLB_LOAD_MISS:
+		if (atomic_inc_return(&dtlb_miss_ref) == 1) {
+			unsigned long target = patch_site_addr(&patch__dtlbmiss_perf);
+
+			patch_branch_site(&patch__dtlbmiss_exit_1, target, 0);
+		}
 		val = dtlb_miss_counter;
 		break;
 	}
@@ -144,12 +154,34 @@ static void mpc8xx_pmu_read(struct perf_event *event)
 static void mpc8xx_pmu_del(struct perf_event *event, int flags)
 {
 	mpc8xx_pmu_read(event);
-	if (event_type(event) != PERF_8xx_ID_HW_INSTRUCTIONS)
-		return;
 
 	/* If it was the last user, stop counting to avoid useles overhead */
-	if (atomic_dec_return(&insn_ctr_ref) == 0)
-		mtspr(SPRN_ICTRL, 7);
+	switch (event_type(event)) {
+	case PERF_8xx_ID_CPU_CYCLES:
+		break;
+	case PERF_8xx_ID_HW_INSTRUCTIONS:
+		if (atomic_dec_return(&insn_ctr_ref) == 0)
+			mtspr(SPRN_ICTRL, 7);
+		break;
+	case PERF_8xx_ID_ITLB_LOAD_MISS:
+		if (atomic_dec_return(&itlb_miss_ref) == 0) {
+			/* mfspr r10, SPRN_SPRG_SCRATCH0 */
+			struct ppc_inst insn = ppc_inst(PPC_INST_MFSPR | __PPC_RS(R10) |
+					    __PPC_SPR(SPRN_SPRG_SCRATCH0));
+
+			patch_instruction_site(&patch__itlbmiss_exit_1, insn);
+		}
+		break;
+	case PERF_8xx_ID_DTLB_LOAD_MISS:
+		if (atomic_dec_return(&dtlb_miss_ref) == 0) {
+			/* mfspr r10, SPRN_DAR */
+			struct ppc_inst insn = ppc_inst(PPC_INST_MFSPR | __PPC_RS(R10) |
+					    __PPC_SPR(SPRN_DAR));
+
+			patch_instruction_site(&patch__dtlbmiss_exit_1, insn);
+		}
+		break;
+	}
 }
 
 static struct pmu mpc8xx_pmu = {

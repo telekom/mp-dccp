@@ -1,18 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Driver for the Auvitek USB bridge
  *
  *  Copyright (c) 2008 Steven Toth <stoth@linuxtv.org>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *
- *  GNU General Public License for more details.
  */
 
 #include "au0828.h"
@@ -105,9 +95,9 @@ static struct tda18271_config hauppauge_woodbury_tunerconfig = {
 
 static void au0828_restart_dvb_streaming(struct work_struct *work);
 
-static void au0828_bulk_timeout(unsigned long data)
+static void au0828_bulk_timeout(struct timer_list *t)
 {
-	struct au0828_dev *dev = (struct au0828_dev *) data;
+	struct au0828_dev *dev = from_timer(dev, t, bulk_timeout);
 
 	dprintk(1, "%s called\n", __func__);
 	dev->bulk_timeout_running = 0;
@@ -566,7 +556,7 @@ void au0828_dvb_unregister(struct au0828_dev *dev)
 	dvb->frontend = NULL;
 }
 
-/* All the DVB attach calls go here, this function get's modified
+/* All the DVB attach calls go here, this function gets modified
  * for each new card. No other function in this file needs
  * to change.
  */
@@ -648,9 +638,7 @@ int au0828_dvb_register(struct au0828_dev *dev)
 		return ret;
 	}
 
-	dev->bulk_timeout.function = au0828_bulk_timeout;
-	dev->bulk_timeout.data = (unsigned long) dev;
-	init_timer(&dev->bulk_timeout);
+	timer_setup(&dev->bulk_timeout, au0828_bulk_timeout, 0);
 
 	return 0;
 }

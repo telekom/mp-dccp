@@ -530,7 +530,7 @@ static int set_protocol(struct cm4000_dev *dev, struct ptsreq *ptsreq)
 			DEBUGP(5, dev, "NumRecBytes is valid\n");
 			break;
 		}
-		mdelay(10);
+		usleep_range(10000, 11000);
 	}
 	if (i == 100) {
 		DEBUGP(5, dev, "Timeout waiting for NumRecBytes getting "
@@ -544,9 +544,13 @@ static int set_protocol(struct cm4000_dev *dev, struct ptsreq *ptsreq)
 		io_read_num_rec_bytes(iobase, &num_bytes_read);
 		if (num_bytes_read >= 4) {
 			DEBUGP(2, dev, "NumRecBytes = %i\n", num_bytes_read);
+			if (num_bytes_read > 4) {
+				rc = -EIO;
+				goto exit_setprotocol;
+			}
 			break;
 		}
-		mdelay(10);
+		usleep_range(10000, 11000);
 	}
 
 	/* check whether it is a short PTS reply? */
@@ -659,9 +663,9 @@ static void terminate_monitor(struct cm4000_dev *dev)
  * is already doing that for you.
  */
 
-static void monitor_card(unsigned long p)
+static void monitor_card(struct timer_list *t)
 {
-	struct cm4000_dev *dev = (struct cm4000_dev *) p;
+	struct cm4000_dev *dev = from_timer(dev, t, timer);
 	unsigned int iobase = dev->p_dev->resource[0]->start;
 	unsigned short s;
 	struct ptsreq ptsreq;
@@ -731,8 +735,9 @@ static void monitor_card(unsigned long p)
 	}
 
 	switch (dev->mstate) {
+	case M_CARDOFF: {
 		unsigned char flags0;
-	case M_CARDOFF:
+
 		DEBUGP(4, dev, "M_CARDOFF\n");
 		flags0 = inb(REG_FLAGS0(iobase));
 		if (flags0 & 0x02) {
@@ -755,6 +760,7 @@ static void monitor_card(unsigned long p)
 			dev->mdelay = T_50MSEC;
 		}
 		break;
+	}
 	case M_FETCH_ATR:
 		DEBUGP(4, dev, "M_FETCH_ATR\n");
 		xoutb(0x80, REG_FLAGS0(iobase));
@@ -1374,7 +1380,7 @@ static void start_monitor(struct cm4000_dev *dev)
 	DEBUGP(3, dev, "-> start_monitor\n");
 	if (!dev->monitor_running) {
 		DEBUGP(5, dev, "create, init and add timer\n");
-		setup_timer(&dev->timer, monitor_card, (unsigned long)dev);
+		timer_setup(&dev->timer, monitor_card, 0);
 		dev->monitor_running = 1;
 		mod_timer(&dev->timer, jiffies);
 	} else
@@ -1402,7 +1408,6 @@ static long cmm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	unsigned int iobase = dev->p_dev->resource[0]->start;
 	struct inode *inode = file_inode(filp);
 	struct pcmcia_device *link;
-	int size;
 	int rc;
 	void __user *argp = (void __user *)arg;
 #ifdef CM4000_DEBUG
@@ -1438,19 +1443,6 @@ static long cmm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	if (_IOC_NR(cmd) > CM_IOC_MAXNR) {
 		DEBUGP(4, dev, "iocnr mismatch\n");
 		goto out;
-	}
-	size = _IOC_SIZE(cmd);
-	rc = -EFAULT;
-	DEBUGP(4, dev, "iocdir=%.4x iocr=%.4x iocw=%.4x iocsize=%d cmd=%.4x\n",
-	      _IOC_DIR(cmd), _IOC_READ, _IOC_WRITE, size, cmd);
-
-	if (_IOC_DIR(cmd) & _IOC_READ) {
-		if (!access_ok(VERIFY_WRITE, argp, size))
-			goto out;
-	}
-	if (_IOC_DIR(cmd) & _IOC_WRITE) {
-		if (!access_ok(VERIFY_READ, argp, size))
-			goto out;
 	}
 	rc = 0;
 
@@ -1682,7 +1674,7 @@ static int cmm_open(struct inode *inode, struct file *filp)
 	link->open = 1;		/* only one open per device */
 
 	DEBUGP(2, dev, "<- cmm_open\n");
-	ret = nonseekable_open(inode, filp);
+	ret = stream_open(inode, filp);
 out:
 	mutex_unlock(&cmm_mutex);
 	return ret;
@@ -1748,8 +1740,6 @@ static int cm4000_config_check(struct pcmcia_device *p_dev, void *priv_data)
 
 static int cm4000_config(struct pcmcia_device * link, int devno)
 {
-	struct cm4000_dev *dev;
-
 	link->config_flags |= CONF_AUTO_SET_IO;
 
 	/* read the config-tuples */
@@ -1758,8 +1748,6 @@ static int cm4000_config(struct pcmcia_device * link, int devno)
 
 	if (pcmcia_enable_device(link))
 		goto cs_release;
-
-	dev = link->priv;
 
 	return 0;
 

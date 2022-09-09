@@ -1,34 +1,9 @@
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause) */
 /* QLogic qed NIC Driver
  * Copyright (c) 2015-2017  QLogic Corporation
- *
- * This software is available to you under a choice of one of two
- * licenses.  You may choose to be licensed under the terms of the GNU
- * General Public License (GPL) Version 2, available from the file
- * COPYING in the main directory of this source tree, or the
- * OpenIB.org BSD license below:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      - Redistributions of source code must retain the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer.
- *
- *      - Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and /or other materials
- *        provided with the distribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright (c) 2019-2020 Marvell International Ltd.
  */
+
 #ifndef _QED_L2_H
 #define _QED_L2_H
 #include <linux/types.h>
@@ -183,6 +158,7 @@ struct qed_filter_accept_flags {
 #define QED_ACCEPT_MCAST_MATCHED        0x08
 #define QED_ACCEPT_MCAST_UNMATCHED      0x10
 #define QED_ACCEPT_BCAST                0x20
+#define QED_ACCEPT_ANY_VNI              0x40
 };
 
 struct qed_arfs_config_params {
@@ -190,7 +166,7 @@ struct qed_arfs_config_params {
 	bool udp;
 	bool ipv4;
 	bool ipv6;
-	bool arfs_enable;
+	enum qed_filter_config_mode mode;
 };
 
 struct qed_sp_vport_update_params {
@@ -279,6 +255,37 @@ qed_sp_eth_rx_queues_update(struct qed_hwfn *p_hwfn,
 void qed_get_vport_stats(struct qed_dev *cdev, struct qed_eth_stats *stats);
 
 void qed_reset_vport_stats(struct qed_dev *cdev);
+
+/**
+ * *@brief qed_arfs_mode_configure -
+ *
+ **Enable or disable rfs mode. It must accept atleast one of tcp or udp true
+ **and atleast one of ipv4 or ipv6 true to enable rfs mode.
+ *
+ **@param p_hwfn
+ **@param p_ptt
+ **@param p_cfg_params - arfs mode configuration parameters.
+ *
+ */
+void qed_arfs_mode_configure(struct qed_hwfn *p_hwfn,
+			     struct qed_ptt *p_ptt,
+			     struct qed_arfs_config_params *p_cfg_params);
+
+/**
+ * @brief - qed_configure_rfs_ntuple_filter
+ *
+ * This ramrod should be used to add or remove arfs hw filter
+ *
+ * @params p_hwfn
+ * @params p_cb - Used for QED_SPQ_MODE_CB,where client would initialize
+ *		  it with cookie and callback function address, if not
+ *		  using this mode then client must pass NULL.
+ * @params p_params
+ */
+int
+qed_configure_rfs_ntuple_filter(struct qed_hwfn *p_hwfn,
+				struct qed_spq_comp_cb *p_cb,
+				struct qed_ntuple_filter_params *p_params);
 
 #define MAX_QUEUES_PER_QZONE    (sizeof(unsigned long) * 8)
 #define QED_QUEUE_CID_SELF	(0xff)

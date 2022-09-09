@@ -26,7 +26,8 @@
 #define ATOM_H
 
 #include <linux/types.h>
-#include <drm/drmP.h>
+
+struct drm_device;
 
 #define ATOM_BIOS_MAGIC		0xAA55
 #define ATOM_ATI_MAGIC_PTR	0x30
@@ -140,6 +141,7 @@ struct atom_context {
 	int io_mode;
 	uint32_t *scratch;
 	int scratch_size_bytes;
+	char vbios_version[20];
 };
 
 extern int amdgpu_atom_debug;

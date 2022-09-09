@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (c) 2014 Redpine Signals Inc.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
@@ -59,7 +59,7 @@ static int rsi_sdio_stats_read(struct seq_file *seq, void *data)
 }
 
 /**
- * rsi_sdio_stats_open() - This funtion calls single open function of seq_file
+ * rsi_sdio_stats_open() - This function calls single open function of seq_file
  *			   to open file and read contents from it.
  * @inode: Pointer to the inode structure.
  * @file: Pointer to the file structure.
@@ -83,24 +83,17 @@ static int rsi_version_read(struct seq_file *seq, void *data)
 {
 	struct rsi_common *common = seq->private;
 
-	common->driver_ver.major = 0;
-	common->driver_ver.minor = 1;
-	common->driver_ver.release_num = 0;
-	common->driver_ver.patch_num = 0;
-	seq_printf(seq, "Driver : %x.%d.%d.%d\nLMAC   : %d.%d.%d.%d\n",
-		   common->driver_ver.major,
-		   common->driver_ver.minor,
-		   common->driver_ver.release_num,
-		   common->driver_ver.patch_num,
-		   common->fw_ver.major,
-		   common->fw_ver.minor,
-		   common->fw_ver.release_num,
-		   common->fw_ver.patch_num);
+	seq_printf(seq, "LMAC   : %d.%d.%d.%d\n",
+		   common->lmac_ver.major,
+		   common->lmac_ver.minor,
+		   common->lmac_ver.release_num,
+		   common->lmac_ver.patch_num);
+
 	return 0;
 }
 
 /**
- * rsi_version_open() - This funtion calls single open function of seq_file to
+ * rsi_version_open() - This function calls single open function of seq_file to
  *			open file and read contents from it.
  * @inode: Pointer to the inode structure.
  * @file: Pointer to the file structure.
@@ -185,7 +178,7 @@ static int rsi_stats_read(struct seq_file *seq, void *data)
 }
 
 /**
- * rsi_stats_open() - This funtion calls single open function of seq_file to
+ * rsi_stats_open() - This function calls single open function of seq_file to
  *		      open file and read contents from it.
  * @inode: Pointer to the inode structure.
  * @file: Pointer to the file structure.
@@ -214,7 +207,7 @@ static int rsi_debug_zone_read(struct seq_file *seq, void *data)
 }
 
 /**
- * rsi_debug_read() - This funtion calls single open function of seq_file to
+ * rsi_debug_read() - This function calls single open function of seq_file to
  *		      open file and read contents from it.
  * @inode: Pointer to the inode structure.
  * @file: Pointer to the file structure.
@@ -303,11 +296,6 @@ int rsi_init_dbgfs(struct rsi_hw *adapter)
 		 wiphy_name(adapter->hw->wiphy));
 
 	dev_dbgfs->subdir = debugfs_create_dir(devdir, NULL);
-
-	if (!dev_dbgfs->subdir) {
-		kfree(dev_dbgfs);
-		return -ENOMEM;
-	}
 
 	for (ii = 0; ii < adapter->num_debugfs_entries; ii++) {
 		files = &dev_debugfs_files[ii];

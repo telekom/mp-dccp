@@ -23,7 +23,7 @@
 #ifndef __MXGPU_VI_H__
 #define __MXGPU_VI_H__
 
-#define VI_MAILBOX_TIMEDOUT	5000
+#define VI_MAILBOX_TIMEDOUT	12000
 #define VI_MAILBOX_RESET_TIME	12
 
 /* VI mailbox messages request */
@@ -43,7 +43,8 @@ enum idh_event {
 	IDH_READY_TO_ACCESS_GPU,
 	IDH_FLR_NOTIFICATION,
 	IDH_FLR_NOTIFICATION_CMPL,
-	IDH_EVENT_MAX
+
+	IDH_TEXT_MESSAGE = 255
 };
 
 extern const struct amdgpu_virt_ops xgpu_vi_virt_ops;

@@ -200,10 +200,8 @@ static int pic32_sdhci_probe(struct platform_device *pdev)
 	}
 
 	ret = sdhci_add_host(host);
-	if (ret) {
-		dev_err(&pdev->dev, "error adding host\n");
+	if (ret)
 		goto err_base_clk;
-	}
 
 	dev_info(&pdev->dev, "Successfully added sdhci host\n");
 	return 0;
@@ -243,6 +241,7 @@ MODULE_DEVICE_TABLE(of, pic32_sdhci_id_table);
 static struct platform_driver pic32_sdhci_driver = {
 	.driver = {
 		.name	= "pic32-sdhci",
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = of_match_ptr(pic32_sdhci_id_table),
 	},
 	.probe		= pic32_sdhci_probe,

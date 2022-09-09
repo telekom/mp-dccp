@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AppArmor security module
  *
@@ -5,11 +6,6 @@
  *
  * Copyright (C) 1998-2008 Novell/SUSE
  * Copyright 2009-2017 Canonical Ltd.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation, version 2 of the
- * License.
  */
 
 #include <linux/gfp.h>
@@ -17,32 +13,30 @@
 
 #include "include/audit.h"
 #include "include/capability.h"
-#include "include/context.h"
+#include "include/cred.h"
 #include "include/policy.h"
 #include "include/ipc.h"
 #include "include/sig_names.h"
 
 /**
  * audit_ptrace_mask - convert mask to permission string
- * @buffer: buffer to write string to (NOT NULL)
  * @mask: permission mask to convert
+ *
+ * Returns: pointer to static string
  */
-static void audit_ptrace_mask(struct audit_buffer *ab, u32 mask)
+static const char *audit_ptrace_mask(u32 mask)
 {
 	switch (mask) {
 	case MAY_READ:
-		audit_log_string(ab, "read");
-		break;
+		return "read";
 	case MAY_WRITE:
-		audit_log_string(ab, "trace");
-		break;
+		return "trace";
 	case AA_MAY_BE_READ:
-		audit_log_string(ab, "readby");
-		break;
+		return "readby";
 	case AA_MAY_BE_TRACED:
-		audit_log_string(ab, "tracedby");
-		break;
+		return "tracedby";
 	}
+	return "";
 }
 
 /* call back to audit ptrace fields */
@@ -51,12 +45,12 @@ static void audit_ptrace_cb(struct audit_buffer *ab, void *va)
 	struct common_audit_data *sa = va;
 
 	if (aad(sa)->request & AA_PTRACE_PERM_MASK) {
-		audit_log_format(ab, " requested_mask=");
-		audit_ptrace_mask(ab, aad(sa)->request);
+		audit_log_format(ab, " requested_mask=\"%s\"",
+				 audit_ptrace_mask(aad(sa)->request));
 
 		if (aad(sa)->denied & AA_PTRACE_PERM_MASK) {
-			audit_log_format(ab, " denied_mask=");
-			audit_ptrace_mask(ab, aad(sa)->denied);
+			audit_log_format(ab, " denied_mask=\"%s\"",
+					 audit_ptrace_mask(aad(sa)->denied));
 		}
 	}
 	audit_log_format(ab, " peer=");
@@ -107,7 +101,8 @@ static int profile_tracer_perm(struct aa_profile *tracer,
 	aad(sa)->label = &tracer->label;
 	aad(sa)->peer = tracee;
 	aad(sa)->request = 0;
-	aad(sa)->error = aa_capable(&tracer->label, CAP_SYS_PTRACE, 1);
+	aad(sa)->error = aa_capable(&tracer->label, CAP_SYS_PTRACE,
+				    CAP_OPT_NONE);
 
 	return aa_audit(AUDIT_APPARMOR_AUTO, tracer, sa, audit_ptrace_cb);
 }
@@ -138,23 +133,25 @@ static inline int map_signal_num(int sig)
 	if (sig > SIGRTMAX)
 		return SIGUNKNOWN;
 	else if (sig >= SIGRTMIN)
-		return sig - SIGRTMIN + 128;	/* rt sigs mapped to 128 */
+		return sig - SIGRTMIN + SIGRT_BASE;
 	else if (sig < MAXMAPPED_SIG)
 		return sig_map[sig];
 	return SIGUNKNOWN;
 }
 
 /**
- * audit_file_mask - convert mask to permission string
- * @buffer: buffer to write string to (NOT NULL)
+ * audit_signal_mask - convert mask to permission string
  * @mask: permission mask to convert
+ *
+ * Returns: pointer to static string
  */
-static void audit_signal_mask(struct audit_buffer *ab, u32 mask)
+static const char *audit_signal_mask(u32 mask)
 {
 	if (mask & MAY_READ)
-		audit_log_string(ab, "receive");
+		return "receive";
 	if (mask & MAY_WRITE)
-		audit_log_string(ab, "send");
+		return "send";
+	return "";
 }
 
 /**
@@ -167,67 +164,55 @@ static void audit_signal_cb(struct audit_buffer *ab, void *va)
 	struct common_audit_data *sa = va;
 
 	if (aad(sa)->request & AA_SIGNAL_PERM_MASK) {
-		audit_log_format(ab, " requested_mask=");
-		audit_signal_mask(ab, aad(sa)->request);
+		audit_log_format(ab, " requested_mask=\"%s\"",
+				 audit_signal_mask(aad(sa)->request));
 		if (aad(sa)->denied & AA_SIGNAL_PERM_MASK) {
-			audit_log_format(ab, " denied_mask=");
-			audit_signal_mask(ab, aad(sa)->denied);
+			audit_log_format(ab, " denied_mask=\"%s\"",
+					 audit_signal_mask(aad(sa)->denied));
 		}
 	}
-	if (aad(sa)->signal < MAXMAPPED_SIGNAME)
+	if (aad(sa)->signal == SIGUNKNOWN)
+		audit_log_format(ab, "signal=unknown(%d)",
+				 aad(sa)->unmappedsig);
+	else if (aad(sa)->signal < MAXMAPPED_SIGNAME)
 		audit_log_format(ab, " signal=%s", sig_names[aad(sa)->signal]);
 	else
 		audit_log_format(ab, " signal=rtmin+%d",
-				 aad(sa)->signal - 128);
+				 aad(sa)->signal - SIGRT_BASE);
 	audit_log_format(ab, " peer=");
 	aa_label_xaudit(ab, labels_ns(aad(sa)->label), aad(sa)->peer,
 			FLAGS_NONE, GFP_ATOMIC);
 }
 
-/* TODO: update to handle compound name&name2, conditionals */
-static void profile_match_signal(struct aa_profile *profile, const char *label,
-				 int signal, struct aa_perms *perms)
-{
-	unsigned int state;
-
-	/* TODO: secondary cache check <profile, profile, perm> */
-	state = aa_dfa_next(profile->policy.dfa,
-			    profile->policy.start[AA_CLASS_SIGNAL],
-			    signal);
-	state = aa_dfa_match(profile->policy.dfa, state, label);
-	aa_compute_perms(profile->policy.dfa, state, perms);
-}
-
 static int profile_signal_perm(struct aa_profile *profile,
-			       struct aa_profile *peer, u32 request,
+			       struct aa_label *peer, u32 request,
 			       struct common_audit_data *sa)
 {
 	struct aa_perms perms;
+	unsigned int state;
 
 	if (profile_unconfined(profile) ||
 	    !PROFILE_MEDIATES(profile, AA_CLASS_SIGNAL))
 		return 0;
 
-	aad(sa)->peer = &peer->label;
-	profile_match_signal(profile, peer->base.hname, aad(sa)->signal,
-			     &perms);
+	aad(sa)->peer = peer;
+	/* TODO: secondary cache check <profile, profile, perm> */
+	state = aa_dfa_next(profile->policy.dfa,
+			    profile->policy.start[AA_CLASS_SIGNAL],
+			    aad(sa)->signal);
+	aa_label_match(profile, peer, state, false, request, &perms);
 	aa_apply_modes_to_perms(profile, &perms);
 	return aa_check_perms(profile, &perms, request, sa, audit_signal_cb);
 }
 
-static int aa_signal_cross_perm(struct aa_profile *sender,
-				struct aa_profile *target,
-				struct common_audit_data *sa)
-{
-	return xcheck(profile_signal_perm(sender, target, MAY_WRITE, sa),
-		      profile_signal_perm(target, sender, MAY_READ, sa));
-}
-
 int aa_may_signal(struct aa_label *sender, struct aa_label *target, int sig)
 {
+	struct aa_profile *profile;
 	DEFINE_AUDIT_DATA(sa, LSM_AUDIT_DATA_NONE, OP_SIGNAL);
 
 	aad(&sa)->signal = map_signal_num(sig);
-	return xcheck_labels_profiles(sender, target, aa_signal_cross_perm,
-				      &sa);
+	aad(&sa)->unmappedsig = sig;
+	return xcheck_labels(sender, target, profile,
+			profile_signal_perm(profile, target, MAY_WRITE, &sa),
+			profile_signal_perm(profile, sender, MAY_READ, &sa));
 }

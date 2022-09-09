@@ -30,6 +30,7 @@
 #include <linux/random.h>
 #include <linux/prctl.h>
 #include <linux/nmi.h>
+#include <linux/cpu.h>
 
 #include <asm/abi.h>
 #include <asm/asm.h>
@@ -41,7 +42,6 @@
 #include <asm/irq.h>
 #include <asm/mips-cps.h>
 #include <asm/msa.h>
-#include <asm/pgtable.h>
 #include <asm/mipsregs.h>
 #include <asm/processor.h>
 #include <asm/reg.h>
@@ -52,6 +52,7 @@
 #include <asm/inst.h>
 #include <asm/stacktrace.h>
 #include <asm/irq_regs.h>
+#include <asm/exec.h>
 
 #ifdef CONFIG_HOTPLUG_CPU
 void arch_cpu_idle_dead(void)
@@ -68,13 +69,15 @@ void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long sp)
 	unsigned long status;
 
 	/* New thread loses kernel privileges. */
-	status = regs->cp0_status & ~(ST0_CU0|ST0_CU1|ST0_FR|KU_MASK);
+	status = regs->cp0_status & ~(ST0_CU0|ST0_CU1|ST0_CU2|ST0_FR|KU_MASK);
 	status |= KU_USER;
 	regs->cp0_status = status;
 	lose_fpu(0);
 	clear_thread_flag(TIF_MSA_CTX_LIVE);
 	clear_used_math();
+#ifdef CONFIG_MIPS_FP_SUPPORT
 	atomic_set(&current->thread.bd_emu_frame, BD_EMUFRAME_NONE);
+#endif
 	init_dsp();
 	regs->cp0_epc = pc;
 	regs->regs[29] = sp;
@@ -117,8 +120,9 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 /*
  * Copy architecture-specific thread state
  */
-int copy_thread_tls(unsigned long clone_flags, unsigned long usp,
-	unsigned long kthread_arg, struct task_struct *p, unsigned long tls)
+int copy_thread(unsigned long clone_flags, unsigned long usp,
+		unsigned long kthread_arg, struct task_struct *p,
+		unsigned long tls)
 {
 	struct thread_info *ti = task_thread_info(p);
 	struct pt_regs *childregs, *regs = current_pt_regs();
@@ -130,7 +134,7 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long usp,
 	childregs = (struct pt_regs *) childksp - 1;
 	/*  Put the stack after the struct pt_regs.  */
 	childksp = (unsigned long) childregs;
-	p->thread.cp0_status = read_c0_status() & ~(ST0_CU2|ST0_CU1);
+	p->thread.cp0_status = (read_c0_status() & ~(ST0_CU2|ST0_CU1)) | ST0_KERNEL_CUMASK;
 	if (unlikely(p->flags & PF_KTHREAD)) {
 		/* kernel thread */
 		unsigned long status = p->thread.cp0_status;
@@ -175,7 +179,9 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long usp,
 	clear_tsk_thread_flag(p, TIF_FPUBOUND);
 #endif /* CONFIG_MIPS_MT_FPAFF */
 
+#ifdef CONFIG_MIPS_FP_SUPPORT
 	atomic_set(&p->thread.bd_emu_frame, BD_EMUFRAME_NONE);
+#endif
 
 	if (clone_flags & CLONE_SETTLS)
 		ti->tp_value = tls;
@@ -183,7 +189,7 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long usp,
 	return 0;
 }
 
-#ifdef CONFIG_CC_STACKPROTECTOR
+#ifdef CONFIG_STACKPROTECTOR
 #include <linux/stackprotector.h>
 unsigned long __stack_chk_guard __read_mostly;
 EXPORT_SYMBOL(__stack_chk_guard);
@@ -274,7 +280,21 @@ static inline int is_ra_save_ins(union mips_instruction *ip, int *poff)
 		*poff = ip->i_format.simmediate / sizeof(ulong);
 		return 1;
 	}
-
+#ifdef CONFIG_CPU_LOONGSON64
+	if ((ip->loongson3_lswc2_format.opcode == swc2_op) &&
+		      (ip->loongson3_lswc2_format.ls == 1) &&
+		      (ip->loongson3_lswc2_format.fr == 0) &&
+		      (ip->loongson3_lswc2_format.base == 29)) {
+		if (ip->loongson3_lswc2_format.rt == 31) {
+			*poff = ip->loongson3_lswc2_format.offset << 1;
+			return 1;
+		}
+		if (ip->loongson3_lswc2_format.rq == 31) {
+			*poff = (ip->loongson3_lswc2_format.offset << 1) + 1;
+			return 1;
+		}
+	}
+#endif
 	return 0;
 #endif
 }
@@ -489,7 +509,7 @@ arch_initcall(frame_info_init);
 /*
  * Return saved PC of a blocked thread.
  */
-unsigned long thread_saved_pc(struct task_struct *tsk)
+static unsigned long thread_saved_pc(struct task_struct *tsk)
 {
 	struct thread_struct *t = &tsk->thread;
 
@@ -649,8 +669,10 @@ unsigned long mips_stack_top(void)
 {
 	unsigned long top = TASK_SIZE & PAGE_MASK;
 
-	/* One page for branch delay slot "emulation" */
-	top -= PAGE_SIZE;
+	if (IS_ENABLED(CONFIG_MIPS_FP_SUPPORT)) {
+		/* One page for branch delay slot "emulation" */
+		top -= PAGE_SIZE;
+	}
 
 	/* Space for the VDSO, data page & GIC user page */
 	top -= PAGE_ALIGN(current->thread.abi->vdso->size);
@@ -730,19 +752,24 @@ int mips_get_process_fp_mode(struct task_struct *task)
 	return value;
 }
 
-static void prepare_for_fp_mode_switch(void *info)
+static long prepare_for_fp_mode_switch(void *unused)
 {
-	struct mm_struct *mm = info;
-
-	if (current->mm == mm)
-		lose_fpu(1);
+	/*
+	 * This is icky, but we use this to simply ensure that all CPUs have
+	 * context switched, regardless of whether they were previously running
+	 * kernel or user code. This ensures that no CPU that a mode-switching
+	 * program may execute on keeps its FPU enabled (& in the old mode)
+	 * throughout the mode switch.
+	 */
+	return 0;
 }
 
 int mips_set_process_fp_mode(struct task_struct *task, unsigned int value)
 {
 	const unsigned int known_bits = PR_FP_MODE_FR | PR_FP_MODE_FRE;
 	struct task_struct *t;
-	int max_users;
+	struct cpumask process_cpus;
+	int cpu;
 
 	/* If nothing to change, return right away, successfully.  */
 	if (value == mips_get_process_fp_mode(task))
@@ -775,35 +802,7 @@ int mips_set_process_fp_mode(struct task_struct *task, unsigned int value)
 	if (!(value & PR_FP_MODE_FR) && raw_cpu_has_fpu && cpu_has_mips_r6)
 		return -EOPNOTSUPP;
 
-	/* Proceed with the mode switch */
-	preempt_disable();
-
-	/* Save FP & vector context, then disable FPU & MSA */
-	if (task->signal == current->signal)
-		lose_fpu(1);
-
-	/* Prevent any threads from obtaining live FP context */
-	atomic_set(&task->mm->context.fp_mode_switching, 1);
-	smp_mb__after_atomic();
-
-	/*
-	 * If there are multiple online CPUs then force any which are running
-	 * threads in this process to lose their FPU context, which they can't
-	 * regain until fp_mode_switching is cleared later.
-	 */
-	if (num_online_cpus() > 1) {
-		/* No need to send an IPI for the local CPU */
-		max_users = (task->mm == current->mm) ? 1 : 0;
-
-		if (atomic_read(&current->mm->mm_users) > max_users)
-			smp_call_function(prepare_for_fp_mode_switch,
-					  (void *)current->mm, 1);
-	}
-
-	/*
-	 * There are now no threads of the process with live FP context, so it
-	 * is safe to proceed with the FP mode switch.
-	 */
+	/* Indicate the new FP mode in each thread */
 	for_each_thread(task, t) {
 		/* Update desired FP register width */
 		if (value & PR_FP_MODE_FR) {
@@ -820,9 +819,34 @@ int mips_set_process_fp_mode(struct task_struct *task, unsigned int value)
 			clear_tsk_thread_flag(t, TIF_HYBRID_FPREGS);
 	}
 
-	/* Allow threads to use FP again */
-	atomic_set(&task->mm->context.fp_mode_switching, 0);
-	preempt_enable();
+	/*
+	 * We need to ensure that all threads in the process have switched mode
+	 * before returning, in order to allow userland to not worry about
+	 * races. We can do this by forcing all CPUs that any thread in the
+	 * process may be running on to schedule something else - in this case
+	 * prepare_for_fp_mode_switch().
+	 *
+	 * We begin by generating a mask of all CPUs that any thread in the
+	 * process may be running on.
+	 */
+	cpumask_clear(&process_cpus);
+	for_each_thread(task, t)
+		cpumask_set_cpu(task_cpu(t), &process_cpus);
+
+	/*
+	 * Now we schedule prepare_for_fp_mode_switch() on each of those CPUs.
+	 *
+	 * The CPUs may have rescheduled already since we switched mode or
+	 * generated the cpumask, but that doesn't matter. If the task in this
+	 * process is scheduled out then our scheduling
+	 * prepare_for_fp_mode_switch() will simply be redundant. If it's
+	 * scheduled in then it will already have picked up the new FP mode
+	 * whilst doing so.
+	 */
+	get_online_cpus();
+	for_each_cpu_and(cpu, &process_cpus, cpu_online_mask)
+		work_on_cpu(cpu, prepare_for_fp_mode_switch, NULL);
+	put_online_cpus();
 
 	return 0;
 }

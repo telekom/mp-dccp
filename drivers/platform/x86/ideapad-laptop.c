@@ -1,23 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  ideapad-laptop.c - Lenovo IdeaPad ACPI Extras
  *
  *  Copyright © 2010 Intel Corporation
  *  Copyright © 2010 David Woodhouse <dwmw2@infradead.org>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- *  02110-1301, USA.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -43,6 +29,7 @@
 #define IDEAPAD_RFKILL_DEV_NUM	(3)
 
 #define BM_CONSERVATION_BIT (5)
+#define HA_FNLOCK_BIT       (10)
 
 #define CFG_BT_BIT	(16)
 #define CFG_3G_BIT	(17)
@@ -59,6 +46,8 @@ static const char *const ideapad_wmi_fnesc_events[] = {
 enum {
 	BMCMD_CONSERVATION_ON = 3,
 	BMCMD_CONSERVATION_OFF = 5,
+	HACMD_FNLOCK_ON = 0xe,
+	HACMD_FNLOCK_OFF = 0xf,
 };
 
 enum {
@@ -103,6 +92,7 @@ struct ideapad_private {
 	struct dentry *debug;
 	unsigned long cfg;
 	bool has_hw_rfkill_switch;
+	bool has_touchpad_switch;
 	const char *fnesc_guid;
 };
 
@@ -113,7 +103,7 @@ MODULE_PARM_DESC(no_bt_rfkill, "No rfkill for bluetooth.");
 /*
  * ACPI Helpers
  */
-#define IDEAPAD_EC_TIMEOUT (100) /* in ms */
+#define IDEAPAD_EC_TIMEOUT (200) /* in ms */
 
 static int read_method_int(acpi_handle handle, const char *method, int *val)
 {
@@ -124,10 +114,10 @@ static int read_method_int(acpi_handle handle, const char *method, int *val)
 	if (ACPI_FAILURE(status)) {
 		*val = -1;
 		return -1;
-	} else {
-		*val = result;
-		return 0;
 	}
+	*val = result;
+	return 0;
+
 }
 
 static int method_gbmd(acpi_handle handle, unsigned long *ret)
@@ -139,11 +129,11 @@ static int method_gbmd(acpi_handle handle, unsigned long *ret)
 	return result;
 }
 
-static int method_sbmc(acpi_handle handle, int cmd)
+static int method_int1(acpi_handle handle, char *method, int cmd)
 {
 	acpi_status status;
 
-	status = acpi_execute_simple_method(handle, "SBMC", cmd);
+	status = acpi_execute_simple_method(handle, method, cmd);
 	return ACPI_FAILURE(status) ? -1 : 0;
 }
 
@@ -164,10 +154,10 @@ static int method_vpcr(acpi_handle handle, int cmd, int *ret)
 	if (ACPI_FAILURE(status)) {
 		*ret = -1;
 		return -1;
-	} else {
-		*ret = result;
-		return 0;
 	}
+	*ret = result;
+	return 0;
+
 }
 
 static int method_vpcw(acpi_handle handle, int cmd, int data)
@@ -209,7 +199,7 @@ static int read_ec_data(acpi_handle handle, int cmd, unsigned long *data)
 			return 0;
 		}
 	}
-	pr_err("timeout in read_ec_cmd\n");
+	pr_err("timeout in %s\n", __func__);
 	return -1;
 }
 
@@ -231,7 +221,7 @@ static int write_ec_cmd(acpi_handle handle, int cmd, unsigned long data)
 		if (val == 0)
 			return 0;
 	}
-	pr_err("timeout in write_ec_cmd\n");
+	pr_err("timeout in %s\n", __func__);
 	return -1;
 }
 
@@ -284,19 +274,7 @@ static int debugfs_status_show(struct seq_file *s, void *data)
 
 	return 0;
 }
-
-static int debugfs_status_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, debugfs_status_show, inode->i_private);
-}
-
-static const struct file_operations debugfs_status_fops = {
-	.owner = THIS_MODULE,
-	.open = debugfs_status_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(debugfs_status);
 
 static int debugfs_cfg_show(struct seq_file *s, void *data)
 {
@@ -337,48 +315,17 @@ static int debugfs_cfg_show(struct seq_file *s, void *data)
 	}
 	return 0;
 }
+DEFINE_SHOW_ATTRIBUTE(debugfs_cfg);
 
-static int debugfs_cfg_open(struct inode *inode, struct file *file)
+static void ideapad_debugfs_init(struct ideapad_private *priv)
 {
-	return single_open(file, debugfs_cfg_show, inode->i_private);
-}
+	struct dentry *dir;
 
-static const struct file_operations debugfs_cfg_fops = {
-	.owner = THIS_MODULE,
-	.open = debugfs_cfg_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
+	dir = debugfs_create_dir("ideapad", NULL);
+	priv->debug = dir;
 
-static int ideapad_debugfs_init(struct ideapad_private *priv)
-{
-	struct dentry *node;
-
-	priv->debug = debugfs_create_dir("ideapad", NULL);
-	if (priv->debug == NULL) {
-		pr_err("failed to create debugfs directory");
-		goto errout;
-	}
-
-	node = debugfs_create_file("cfg", S_IRUGO, priv->debug, priv,
-				   &debugfs_cfg_fops);
-	if (!node) {
-		pr_err("failed to create cfg in debugfs");
-		goto errout;
-	}
-
-	node = debugfs_create_file("status", S_IRUGO, priv->debug, priv,
-				   &debugfs_status_fops);
-	if (!node) {
-		pr_err("failed to create status in debugfs");
-		goto errout;
-	}
-
-	return 0;
-
-errout:
-	return -ENOMEM;
+	debugfs_create_file("cfg", S_IRUGO, dir, priv, &debugfs_cfg_fops);
+	debugfs_create_file("status", S_IRUGO, dir, priv, &debugfs_status_fops);
 }
 
 static void ideapad_debugfs_exit(struct ideapad_private *priv)
@@ -511,7 +458,7 @@ static ssize_t conservation_mode_store(struct device *dev,
 	if (ret)
 		return ret;
 
-	ret = method_sbmc(priv->adev->handle, state ?
+	ret = method_int1(priv->adev->handle, "SBMC", state ?
 					      BMCMD_CONSERVATION_ON :
 					      BMCMD_CONSERVATION_OFF);
 	if (ret < 0)
@@ -521,11 +468,51 @@ static ssize_t conservation_mode_store(struct device *dev,
 
 static DEVICE_ATTR_RW(conservation_mode);
 
+static ssize_t fn_lock_show(struct device *dev,
+			    struct device_attribute *attr,
+			    char *buf)
+{
+	struct ideapad_private *priv = dev_get_drvdata(dev);
+	unsigned long result;
+	int hals;
+	int fail = read_method_int(priv->adev->handle, "HALS", &hals);
+
+	if (fail)
+		return sprintf(buf, "-1\n");
+
+	result = hals;
+	return sprintf(buf, "%u\n", test_bit(HA_FNLOCK_BIT, &result));
+}
+
+static ssize_t fn_lock_store(struct device *dev,
+			     struct device_attribute *attr,
+			     const char *buf, size_t count)
+{
+	struct ideapad_private *priv = dev_get_drvdata(dev);
+	bool state;
+	int ret;
+
+	ret = kstrtobool(buf, &state);
+	if (ret)
+		return ret;
+
+	ret = method_int1(priv->adev->handle, "SALS", state ?
+			  HACMD_FNLOCK_ON :
+			  HACMD_FNLOCK_OFF);
+	if (ret < 0)
+		return -EIO;
+	return count;
+}
+
+static DEVICE_ATTR_RW(fn_lock);
+
+
 static struct attribute *ideapad_attributes[] = {
 	&dev_attr_camera_power.attr,
 	&dev_attr_fan_mode.attr,
 	&dev_attr_touchpad.attr,
 	&dev_attr_conservation_mode.attr,
+	&dev_attr_fn_lock.attr,
 	NULL
 };
 
@@ -546,7 +533,12 @@ static umode_t ideapad_is_visible(struct kobject *kobj,
 	} else if (attr == &dev_attr_conservation_mode.attr) {
 		supported = acpi_has_method(priv->adev->handle, "GBMD") &&
 			    acpi_has_method(priv->adev->handle, "SBMC");
-	} else
+	} else if (attr == &dev_attr_fn_lock.attr) {
+		supported = acpi_has_method(priv->adev->handle, "HALS") &&
+			acpi_has_method(priv->adev->handle, "SALS");
+	} else if (attr == &dev_attr_touchpad.attr)
+		supported = priv->has_touchpad_switch;
+	else
 		supported = true;
 
 	return supported ? attr->mode : 0;
@@ -878,6 +870,9 @@ static void ideapad_sync_touchpad_state(struct ideapad_private *priv)
 {
 	unsigned long value;
 
+	if (!priv->has_touchpad_switch)
+		return;
+
 	/* Without reading from EC touchpad LED doesn't switch state */
 	if (!read_ec_data(priv->adev->handle, VPCCMD_R_TOUCHPAD, &value)) {
 		/* Some IdeaPads don't really turn off touchpad - they only
@@ -958,214 +953,21 @@ static void ideapad_wmi_notify(u32 value, void *context)
 #endif
 
 /*
- * Some ideapads don't have a hardware rfkill switch, reading VPCCMD_R_RF
- * always results in 0 on these models, causing ideapad_laptop to wrongly
- * report all radios as hardware-blocked.
+ * Some ideapads have a hardware rfkill switch, but most do not have one.
+ * Reading VPCCMD_R_RF always results in 0 on models without a hardware rfkill,
+ * switch causing ideapad_laptop to wrongly report all radios as hw-blocked.
+ * There used to be a long list of DMI ids for models without a hw rfkill
+ * switch here, but that resulted in playing whack a mole.
+ * More importantly wrongly reporting the wifi radio as hw-blocked, results in
+ * non working wifi. Whereas not reporting it hw-blocked, when it actually is
+ * hw-blocked results in an empty SSID list, which is a much more benign
+ * failure mode.
+ * So the default now is the much safer option of assuming there is no
+ * hardware rfkill switch. This default also actually matches most hardware,
+ * since having a hw rfkill switch is quite rare on modern hardware, so this
+ * also leads to a much shorter list.
  */
-static const struct dmi_system_id no_hw_rfkill_list[] = {
-	{
-		.ident = "Lenovo G40-30",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo G40-30"),
-		},
-	},
-	{
-		.ident = "Lenovo G50-30",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo G50-30"),
-		},
-	},
-	{
-		.ident = "Lenovo V310-14IKB",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo V310-14IKB"),
-		},
-	},
-	{
-		.ident = "Lenovo V310-14ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo V310-14ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo V310-15IKB",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo V310-15IKB"),
-		},
-	},
-	{
-		.ident = "Lenovo V310-15ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo V310-15ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo V510-15IKB",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo V510-15IKB"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad 300-15IBR",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad 300-15IBR"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad 300-15IKB",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad 300-15IKB"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad 300S-11IBR",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad 300S-11BR"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad 310-15ABR",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad 310-15ABR"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad 310-15IAP",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad 310-15IAP"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad 310-15IKB",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad 310-15IKB"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad 310-15ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad 310-15ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700-14ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700-14ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700-15ACZ",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700-15ACZ"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700-15ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700-15ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700 Touch-15ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700 Touch-15ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700-17ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700-17ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo Legion Y520-15IKB",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo Y520-15IKB"),
-		},
-	},
-	{
-		.ident = "Lenovo Legion Y720-15IKBN",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo Y720-15IKBN"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 2 11 / 13 / Pro",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo Yoga 2"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 2 11 / 13 / Pro",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_BOARD_NAME, "Yoga2"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 3 1170 / 1470",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo Yoga 3"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 3 Pro 1370",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo YOGA 3"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 700",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo YOGA 700"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 900",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo YOGA 900"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 900",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_BOARD_NAME, "VIUU4"),
-		},
-	},
-	{
-		.ident = "Lenovo YOGA 910-13IKB",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo YOGA 910-13IKB"),
-		},
-	},
+static const struct dmi_system_id hw_rfkill_list[] = {
 	{}
 };
 
@@ -1191,15 +993,16 @@ static int ideapad_acpi_add(struct platform_device *pdev)
 	priv->cfg = cfg;
 	priv->adev = adev;
 	priv->platform_device = pdev;
-	priv->has_hw_rfkill_switch = !dmi_check_system(no_hw_rfkill_list);
+	priv->has_hw_rfkill_switch = dmi_check_system(hw_rfkill_list);
+
+	/* Most ideapads with ELAN0634 touchpad don't use EC touchpad switch */
+	priv->has_touchpad_switch = !acpi_dev_present("ELAN0634", NULL, -1);
 
 	ret = ideapad_sysfs_init(priv);
 	if (ret)
 		return ret;
 
-	ret = ideapad_debugfs_init(priv);
-	if (ret)
-		goto debugfs_failed;
+	ideapad_debugfs_init(priv);
 
 	ret = ideapad_input_init(priv);
 	if (ret)
@@ -1211,6 +1014,10 @@ static int ideapad_acpi_add(struct platform_device *pdev)
 	 */
 	if (!priv->has_hw_rfkill_switch)
 		write_ec_cmd(priv->adev->handle, VPCCMD_W_RF, 1);
+
+	/* The same for Touchpad */
+	if (!priv->has_touchpad_switch)
+		write_ec_cmd(priv->adev->handle, VPCCMD_W_TOUCHPAD, 1);
 
 	for (i = 0; i < IDEAPAD_RFKILL_DEV_NUM; i++)
 		if (test_bit(ideapad_rfk_data[i].cfgbit, &priv->cfg))
@@ -1256,7 +1063,6 @@ backlight_failed:
 	ideapad_input_exit(priv);
 input_failed:
 	ideapad_debugfs_exit(priv);
-debugfs_failed:
 	ideapad_sysfs_exit(priv);
 	return ret;
 }

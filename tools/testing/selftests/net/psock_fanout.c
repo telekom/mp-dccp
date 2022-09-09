@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2013 Google Inc.
  * Author: Willem de Bruijn (willemb@google.com)
@@ -24,21 +25,6 @@
  *
  * Todo:
  * - functionality: PACKET_FANOUT_FLAG_DEFRAG
- *
- * License (GPLv2):
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. * See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #define _GNU_SOURCE		/* for sched_setaffinity */
@@ -50,6 +36,7 @@
 #include <linux/filter.h>
 #include <linux/bpf.h>
 #include <linux/if_packet.h>
+#include <net/if.h>
 #include <net/ethernet.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
@@ -73,11 +60,26 @@
  * @return -1 if mode is bad, a valid socket otherwise */
 static int sock_fanout_open(uint16_t typeflags, uint16_t group_id)
 {
+	struct sockaddr_ll addr = {0};
 	int fd, val;
 
-	fd = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_IP));
+	fd = socket(PF_PACKET, SOCK_RAW, 0);
 	if (fd < 0) {
 		perror("socket packet");
+		exit(1);
+	}
+
+	pair_udp_setfilter(fd);
+
+	addr.sll_family = AF_PACKET;
+	addr.sll_protocol = htons(ETH_P_IP);
+	addr.sll_ifindex = if_nametoindex("lo");
+	if (addr.sll_ifindex == 0) {
+		perror("if_nametoindex");
+		exit(1);
+	}
+	if (bind(fd, (void *) &addr, sizeof(addr))) {
+		perror("bind packet");
 		exit(1);
 	}
 
@@ -90,7 +92,6 @@ static int sock_fanout_open(uint16_t typeflags, uint16_t group_id)
 		return -1;
 	}
 
-	pair_udp_setfilter(fd);
 	return fd;
 }
 
@@ -229,7 +230,7 @@ static int sock_fanout_read(int fds[], char *rings[], const int expect[])
 
 	if ((!(ret[0] == expect[0] && ret[1] == expect[1])) &&
 	    (!(ret[0] == expect[1] && ret[1] == expect[0]))) {
-		fprintf(stderr, "ERROR: incorrect queue lengths\n");
+		fprintf(stderr, "warning: incorrect queue lengths\n");
 		return 1;
 	}
 
@@ -348,7 +349,9 @@ static int test_datapath(uint16_t typeflags, int port_off,
 	uint8_t type = typeflags & 0xFF;
 	int fds[2], fds_udp[2][2], ret;
 
-	fprintf(stderr, "test: datapath 0x%hx\n", typeflags);
+	fprintf(stderr, "\ntest: datapath 0x%hx ports %hu,%hu\n",
+		typeflags, (uint16_t)PORT_BASE,
+		(uint16_t)(PORT_BASE + port_off));
 
 	fds[0] = sock_fanout_open(typeflags, 0);
 	fds[1] = sock_fanout_open(typeflags, 0);
@@ -419,7 +422,7 @@ int main(int argc, char **argv)
 	const int expect_cpu1[2][2]	= { { 0, 20 },  { 0, 20 } };
 	const int expect_bpf[2][2]	= { { 15, 5 },  { 15, 20 } };
 	const int expect_uniqueid[2][2] = { { 20, 20},  { 20, 20 } };
-	int port_off = 2, tries = 5, ret;
+	int port_off = 2, tries = 20, ret;
 
 	test_control_single();
 	test_control_group();
@@ -428,10 +431,14 @@ int main(int argc, char **argv)
 	/* find a set of ports that do not collide onto the same socket */
 	ret = test_datapath(PACKET_FANOUT_HASH, port_off,
 			    expect_hash[0], expect_hash[1]);
-	while (ret && tries--) {
+	while (ret) {
 		fprintf(stderr, "info: trying alternate ports (%d)\n", tries);
 		ret = test_datapath(PACKET_FANOUT_HASH, ++port_off,
 				    expect_hash[0], expect_hash[1]);
+		if (!--tries) {
+			fprintf(stderr, "too many collisions\n");
+			return 1;
+		}
 	}
 
 	ret |= test_datapath(PACKET_FANOUT_HASH | PACKET_FANOUT_FLAG_ROLLOVER,

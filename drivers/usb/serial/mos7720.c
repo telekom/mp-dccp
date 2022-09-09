@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * mos7720.c
  *   Controls the Moschip 7720 usb to dual port serial converter
  *
  * Copyright 2006 Moschip Semiconductor Tech. Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, version 2 of the License.
  *
  * Developed by:
  * 	Vijaya Kumar <vijaykumar.gn@gmail.com>
@@ -229,8 +226,10 @@ static int read_mos_reg(struct usb_serial *serial, unsigned int serial_portnum,
 	int status;
 
 	buf = kmalloc(1, GFP_KERNEL);
-	if (!buf)
+	if (!buf) {
+		*data = 0;
 		return -ENOMEM;
+	}
 
 	status = usb_control_msg(usbdev, pipe, request, requesttype, value,
 				     index, buf, 1, MOS_WDR_TIMEOUT);
@@ -285,11 +284,12 @@ static void destroy_urbtracker(struct kref *kref)
  * port callback had to be deferred because the disconnect mutex could not be
  * obtained at the time.
  */
-static void send_deferred_urbs(unsigned long _mos_parport)
+static void send_deferred_urbs(struct tasklet_struct *t)
 {
 	int ret_val;
 	unsigned long flags;
-	struct mos7715_parport *mos_parport = (void *)_mos_parport;
+	struct mos7715_parport *mos_parport = from_tasklet(mos_parport, t,
+							   urb_tasklet);
 	struct urbtracker *urbtrack, *tmp;
 	struct list_head *cursor, *next;
 	struct device *dev;
@@ -343,14 +343,15 @@ static void async_complete(struct urb *urb)
 {
 	struct urbtracker *urbtrack = urb->context;
 	int status = urb->status;
+	unsigned long flags;
 
 	if (unlikely(status))
 		dev_dbg(&urb->dev->dev, "%s - nonzero urb status received: %d\n", __func__, status);
 
 	/* remove the urbtracker from the active_urbs list */
-	spin_lock(&urbtrack->mos_parport->listlock);
+	spin_lock_irqsave(&urbtrack->mos_parport->listlock, flags);
 	list_del(&urbtrack->urblist_entry);
-	spin_unlock(&urbtrack->mos_parport->listlock);
+	spin_unlock_irqrestore(&urbtrack->mos_parport->listlock, flags);
 	kref_put(&urbtrack->ref_count, destroy_urbtracker);
 }
 
@@ -521,7 +522,7 @@ static void parport_mos7715_write_control(struct parport *pp, unsigned char d)
 
 static unsigned char parport_mos7715_read_control(struct parport *pp)
 {
-	struct mos7715_parport *mos_parport = pp->private_data;
+	struct mos7715_parport *mos_parport;
 	__u8 dcr;
 
 	spin_lock(&release_lock);
@@ -557,7 +558,7 @@ static unsigned char parport_mos7715_frob_control(struct parport *pp,
 static unsigned char parport_mos7715_read_status(struct parport *pp)
 {
 	unsigned char status;
-	struct mos7715_parport *mos_parport = pp->private_data;
+	struct mos7715_parport *mos_parport;
 
 	spin_lock(&release_lock);
 	mos_parport = pp->private_data;
@@ -640,6 +641,8 @@ static void parport_mos7715_restore_state(struct parport *pp,
 		spin_unlock(&release_lock);
 		return;
 	}
+	mos_parport->shadowDCR = s->u.pc.ctr;
+	mos_parport->shadowECR = s->u.pc.ecr;
 	write_parport_reg_nonblock(mos_parport, MOS7720_DCR,
 				   mos_parport->shadowDCR);
 	write_parport_reg_nonblock(mos_parport, MOS7720_ECR,
@@ -718,8 +721,7 @@ static int mos7715_parport_init(struct usb_serial *serial)
 	INIT_LIST_HEAD(&mos_parport->deferred_urbs);
 	usb_set_serial_data(serial, mos_parport); /* hijack private pointer */
 	mos_parport->serial = serial;
-	tasklet_init(&mos_parport->urb_tasklet, send_deferred_urbs,
-		     (unsigned long) mos_parport);
+	tasklet_setup(&mos_parport->urb_tasklet, send_deferred_urbs);
 	init_completion(&mos_parport->syncmsg_compl);
 
 	/* cycle parallel port reset bit */
@@ -1250,8 +1252,10 @@ static int mos7720_write(struct tty_struct *tty, struct usb_serial_port *port,
 	if (urb->transfer_buffer == NULL) {
 		urb->transfer_buffer = kmalloc(URB_TRANSFER_BUFFER_SIZE,
 					       GFP_ATOMIC);
-		if (!urb->transfer_buffer)
+		if (!urb->transfer_buffer) {
+			bytes_sent = -ENOMEM;
 			goto exit;
+		}
 	}
 	transfer_size = min(count, URB_TRANSFER_BUFFER_SIZE);
 
@@ -1529,8 +1533,6 @@ static void change_port_settings(struct tty_struct *tty,
 	struct usb_serial *serial;
 	int baud;
 	unsigned cflag;
-	unsigned iflag;
-	__u8 mask = 0xff;
 	__u8 lData;
 	__u8 lParity;
 	__u8 lStop;
@@ -1554,23 +1556,19 @@ static void change_port_settings(struct tty_struct *tty,
 	lParity = 0x00;	/* No parity */
 
 	cflag = tty->termios.c_cflag;
-	iflag = tty->termios.c_iflag;
 
 	/* Change the number of bits */
 	switch (cflag & CSIZE) {
 	case CS5:
 		lData = UART_LCR_WLEN5;
-		mask = 0x1f;
 		break;
 
 	case CS6:
 		lData = UART_LCR_WLEN6;
-		mask = 0x3f;
 		break;
 
 	case CS7:
 		lData = UART_LCR_WLEN7;
-		mask = 0x7f;
 		break;
 	default:
 	case CS8:
@@ -1688,10 +1686,7 @@ static void mos7720_set_termios(struct tty_struct *tty,
 		struct usb_serial_port *port, struct ktermios *old_termios)
 {
 	int status;
-	struct usb_serial *serial;
 	struct moschip_port *mos7720_port;
-
-	serial = port->serial;
 
 	mos7720_port = usb_get_serial_port_data(port);
 
@@ -1797,69 +1792,20 @@ static int mos7720_tiocmset(struct tty_struct *tty,
 	return 0;
 }
 
-static int set_modem_info(struct moschip_port *mos7720_port, unsigned int cmd,
-			  unsigned int __user *value)
+static int get_serial_info(struct tty_struct *tty,
+			   struct serial_struct *ss)
 {
-	unsigned int mcr;
-	unsigned int arg;
+	struct usb_serial_port *port = tty->driver_data;
+	struct moschip_port *mos7720_port = usb_get_serial_port_data(port);
 
-	struct usb_serial_port *port;
-
-	if (mos7720_port == NULL)
-		return -1;
-
-	port = (struct usb_serial_port *)mos7720_port->port;
-	mcr = mos7720_port->shadowMCR;
-
-	if (copy_from_user(&arg, value, sizeof(int)))
-		return -EFAULT;
-
-	switch (cmd) {
-	case TIOCMBIS:
-		if (arg & TIOCM_RTS)
-			mcr |= UART_MCR_RTS;
-		if (arg & TIOCM_DTR)
-			mcr |= UART_MCR_RTS;
-		if (arg & TIOCM_LOOP)
-			mcr |= UART_MCR_LOOP;
-		break;
-
-	case TIOCMBIC:
-		if (arg & TIOCM_RTS)
-			mcr &= ~UART_MCR_RTS;
-		if (arg & TIOCM_DTR)
-			mcr &= ~UART_MCR_RTS;
-		if (arg & TIOCM_LOOP)
-			mcr &= ~UART_MCR_LOOP;
-		break;
-
-	}
-
-	mos7720_port->shadowMCR = mcr;
-	write_mos_reg(port->serial, port->port_number, MOS7720_MCR,
-		      mos7720_port->shadowMCR);
-
-	return 0;
-}
-
-static int get_serial_info(struct moschip_port *mos7720_port,
-			   struct serial_struct __user *retinfo)
-{
-	struct serial_struct tmp;
-
-	memset(&tmp, 0, sizeof(tmp));
-
-	tmp.type		= PORT_16550A;
-	tmp.line		= mos7720_port->port->minor;
-	tmp.port		= mos7720_port->port->port_number;
-	tmp.irq			= 0;
-	tmp.xmit_fifo_size	= NUM_URBS * URB_TRANSFER_BUFFER_SIZE;
-	tmp.baud_base		= 9600;
-	tmp.close_delay		= 5*HZ;
-	tmp.closing_wait	= 30*HZ;
-
-	if (copy_to_user(retinfo, &tmp, sizeof(*retinfo)))
-		return -EFAULT;
+	ss->type		= PORT_16550A;
+	ss->line		= mos7720_port->port->minor;
+	ss->port		= mos7720_port->port->port_number;
+	ss->irq			= 0;
+	ss->xmit_fifo_size	= NUM_URBS * URB_TRANSFER_BUFFER_SIZE;
+	ss->baud_base		= 9600;
+	ss->close_delay		= 5*HZ;
+	ss->closing_wait	= 30*HZ;
 	return 0;
 }
 
@@ -1878,18 +1824,6 @@ static int mos7720_ioctl(struct tty_struct *tty,
 		dev_dbg(&port->dev, "%s TIOCSERGETLSR\n", __func__);
 		return get_lsr_info(tty, mos7720_port,
 					(unsigned int __user *)arg);
-
-	/* FIXME: These should be using the mode methods */
-	case TIOCMBIS:
-	case TIOCMBIC:
-		dev_dbg(&port->dev, "%s TIOCMSET/TIOCMBIC/TIOCMSET\n", __func__);
-		return set_modem_info(mos7720_port, cmd,
-				      (unsigned int __user *)arg);
-
-	case TIOCGSERIAL:
-		dev_dbg(&port->dev, "%s TIOCGSERIAL\n", __func__);
-		return get_serial_info(mos7720_port,
-				       (struct serial_struct __user *)arg);
 	}
 
 	return -ENOIOCTLCMD;
@@ -1904,10 +1838,6 @@ static int mos7720_startup(struct usb_serial *serial)
 
 	product = le16_to_cpu(serial->dev->descriptor.idProduct);
 	dev = serial->dev;
-
-	/* setting configuration feature to one */
-	usb_control_msg(serial->dev, usb_sndctrlpipe(serial->dev, 0),
-			(__u8)0x03, 0x00, 0x01, 0x00, NULL, 0x00, 5000);
 
 	if (product == MOSCHIP_DEVICE_ID_7715) {
 		struct urb *urb = serial->port[0]->interrupt_in_urb;
@@ -2026,6 +1956,7 @@ static struct usb_serial_driver moschip7720_2port_driver = {
 	.ioctl			= mos7720_ioctl,
 	.tiocmget		= mos7720_tiocmget,
 	.tiocmset		= mos7720_tiocmset,
+	.get_serial		= get_serial_info,
 	.set_termios		= mos7720_set_termios,
 	.write			= mos7720_write,
 	.write_room		= mos7720_write_room,
@@ -2043,4 +1974,4 @@ module_usb_serial_driver(serial_drivers, id_table);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

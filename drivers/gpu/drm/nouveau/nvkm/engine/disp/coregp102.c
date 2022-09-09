@@ -21,29 +21,22 @@
  *
  * Authors: Ben Skeggs <bskeggs@redhat.com>
  */
-#include "dmacnv50.h"
-#include "rootnv50.h"
+#include "channv50.h"
 
 #include <subdev/timer.h>
 
-#include <nvif/class.h>
-
 static int
-gp102_disp_core_init(struct nv50_disp_dmac *chan)
+gp102_disp_core_init(struct nv50_disp_chan *chan)
 {
-	struct nv50_disp *disp = chan->base.root->disp;
-	struct nvkm_subdev *subdev = &disp->base.engine.subdev;
+	struct nvkm_subdev *subdev = &chan->disp->base.engine.subdev;
 	struct nvkm_device *device = subdev->device;
-
-	/* enable error reporting */
-	nvkm_mask(device, 0x6100a0, 0x00000001, 0x00000001);
 
 	/* initialise channel for dma command submission */
 	nvkm_wr32(device, 0x611494, chan->push);
 	nvkm_wr32(device, 0x611498, 0x00010000);
 	nvkm_wr32(device, 0x61149c, 0x00000001);
 	nvkm_mask(device, 0x610490, 0x00000010, 0x00000010);
-	nvkm_wr32(device, 0x640000, 0x00000000);
+	nvkm_wr32(device, 0x640000, chan->suspend_put);
 	nvkm_wr32(device, 0x610490, 0x01000013);
 
 	/* wait for it to go inactive */
@@ -59,20 +52,19 @@ gp102_disp_core_init(struct nv50_disp_dmac *chan)
 	return 0;
 }
 
-static const struct nv50_disp_dmac_func
+static const struct nv50_disp_chan_func
 gp102_disp_core_func = {
 	.init = gp102_disp_core_init,
 	.fini = gf119_disp_core_fini,
+	.intr = gf119_disp_chan_intr,
+	.user = nv50_disp_chan_user,
 	.bind = gf119_disp_dmac_bind,
 };
 
-const struct nv50_disp_dmac_oclass
-gp102_disp_core_oclass = {
-	.base.oclass = GP102_DISP_CORE_CHANNEL_DMA,
-	.base.minver = 0,
-	.base.maxver = 0,
-	.ctor = nv50_disp_core_new,
-	.func = &gp102_disp_core_func,
-	.mthd = &gk104_disp_core_chan_mthd,
-	.chid = 0,
-};
+int
+gp102_disp_core_new(const struct nvkm_oclass *oclass, void *argv, u32 argc,
+		    struct nv50_disp *disp, struct nvkm_object **pobject)
+{
+	return nv50_disp_core_new_(&gp102_disp_core_func, &gk104_disp_core_mthd,
+				   disp, 0, oclass, argv, argc, pobject);
+}

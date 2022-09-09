@@ -1,14 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Greybus Audio Device Class Protocol helpers
  *
  * Copyright 2015-2016 Google Inc.
- *
- * Released under the GPLv2 only.
  */
 
-#include "greybus.h"
-#include "greybus_protocols.h"
-#include "operation.h"
+#include <linux/greybus.h>
 #include "audio_codec.h"
 
 /* TODO: Split into separate calls */

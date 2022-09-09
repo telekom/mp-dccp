@@ -37,7 +37,7 @@
 struct srttsched_priv {
 	u8		socket_number;
 	u64		tx_bytepersecond;
-	__kernel_time_t	last_timestamp;
+	time64_t	last_timestamp;
 };
 
 static struct srttsched_priv *srttsched_get_priv(struct sock *sk)
@@ -58,7 +58,8 @@ static struct sock *mpdccp_srttsched(struct mpdccp_cb *mpcb)
 
 #if defined MPDCCP_SRTT_LOG_BW && 0
 	struct srttsched_priv	*srtt_priv;
-	struct timeval		tv;
+	//struct timeval		tv;
+	time64_t tstamp
 	struct sk_buff		*next_skb;
 #endif
 
@@ -107,14 +108,16 @@ static struct sock *mpdccp_srttsched(struct mpdccp_cb *mpcb)
 	// No best_sk = no socket available
 	if(best_sk) {
 		next_skb = mpcb && mpcbp->meta_sk ? dccp_qpolicy_top (mpcb->meta_sk) : NULL;
-		do_gettimeofday(&tv);
+		//do_gettimeofday(&tv);
+		tstamp = ktime_get_seconds();
+
 		
 		// For each socket, we log time stamp, bandwidth and srtt
 		rcu_read_lock();
 		mpdccp_for_each_sk(mpcb, sk) {
 			srtt_priv = srttsched_get_priv(sk);
 			
-			if (tv.tv_sec == srtt_priv->last_timestamp) {
+			if (tstamp == srtt_priv->last_timestamp) {
 				if (!next_skb)
 					return NULL;
 				
@@ -132,7 +135,7 @@ static struct sock *mpdccp_srttsched(struct mpdccp_cb *mpcb)
 				else
 					srtt_priv->tx_bytepersecond    = 0;
 				
-				srtt_priv->last_timestamp      = tv.tv_sec;
+				srtt_priv->last_timestamp      = tstamp;
 			}
 		}
 		rcu_read_unlock();
@@ -149,7 +152,7 @@ static void srttsched_init_conn(struct mpdccp_cb *mpcb)
 {
 #ifdef MPDCCP_SRTT_LOG_BW
 	struct sock		*sk;
-	struct timeval		tv;
+	time64_t tstamp;
 	struct srttsched_priv	*srtt_priv;
 	int			i = 0;
 
@@ -164,8 +167,9 @@ static void srttsched_init_conn(struct mpdccp_cb *mpcb)
 		
 		srtt_priv->tx_bytepersecond             = 0;
 		
-		do_gettimeofday(&tv);
-		srttsched_get_priv(sk)->last_timestamp  = tv.tv_sec;
+		//do_gettimeofday(&tv);
+		tstamp = ktime_get_seconds();
+		srttsched_get_priv(sk)->last_timestamp  = tstamp;
 	}
 	rcu_read_unlock();
 #endif

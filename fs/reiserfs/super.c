@@ -121,7 +121,7 @@ void reiserfs_schedule_old_flush(struct super_block *s)
 	 * Avoid scheduling flush when sb is being shut down. It can race
 	 * with journal shutdown and free still queued delayed work.
 	 */
-	if (sb_rdonly(s) || !(s->s_flags & MS_ACTIVE))
+	if (sb_rdonly(s) || !(s->s_flags & SB_ACTIVE))
 		return;
 
 	spin_lock(&sbi->old_work_lock);
@@ -252,11 +252,11 @@ static int finish_unfinished(struct super_block *s)
 
 #ifdef CONFIG_QUOTA
 	/* Needed for iput() to work correctly and not trash data */
-	if (s->s_flags & MS_ACTIVE) {
+	if (s->s_flags & SB_ACTIVE) {
 		ms_active_set = 0;
 	} else {
 		ms_active_set = 1;
-		s->s_flags |= MS_ACTIVE;
+		s->s_flags |= SB_ACTIVE;
 	}
 	/* Turn on quotas so that they are updated correctly */
 	for (i = 0; i < REISERFS_MAXQUOTAS; i++) {
@@ -411,7 +411,7 @@ static int finish_unfinished(struct super_block *s)
 	reiserfs_write_lock(s);
 	if (ms_active_set)
 		/* Restore the flag back */
-		s->s_flags &= ~MS_ACTIVE;
+		s->s_flags &= ~SB_ACTIVE;
 #endif
 	pathrelse(&path);
 	if (done)
@@ -629,6 +629,7 @@ static void reiserfs_put_super(struct super_block *s)
 	reiserfs_write_unlock(s);
 	mutex_destroy(&REISERFS_SB(s)->lock);
 	destroy_workqueue(REISERFS_SB(s)->commit_wq);
+	kfree(REISERFS_SB(s)->s_jdev);
 	kfree(s->s_fs_info);
 	s->s_fs_info = NULL;
 }
@@ -650,15 +651,9 @@ static struct inode *reiserfs_alloc_inode(struct super_block *sb)
 	return &ei->vfs_inode;
 }
 
-static void reiserfs_i_callback(struct rcu_head *head)
+static void reiserfs_free_inode(struct inode *inode)
 {
-	struct inode *inode = container_of(head, struct inode, i_rcu);
 	kmem_cache_free(reiserfs_inode_cachep, REISERFS_I(inode));
-}
-
-static void reiserfs_destroy_inode(struct inode *inode)
-{
-	call_rcu(&inode->i_rcu, reiserfs_i_callback);
 }
 
 static void init_once(void *foo)
@@ -815,7 +810,7 @@ static struct dquot **reiserfs_get_dquots(struct inode *inode)
 
 static const struct super_operations reiserfs_sops = {
 	.alloc_inode = reiserfs_alloc_inode,
-	.destroy_inode = reiserfs_destroy_inode,
+	.free_inode = reiserfs_free_inode,
 	.write_inode = reiserfs_write_inode,
 	.dirty_inode = reiserfs_dirty_inode,
 	.evict_inode = reiserfs_evict_inode,
@@ -1263,6 +1258,10 @@ static int reiserfs_parse_options(struct super_block *s,
 						 "turned on.");
 				return 0;
 			}
+			if (qf_names[qtype] !=
+			    REISERFS_SB(s)->s_qf_names[qtype])
+				kfree(qf_names[qtype]);
+			qf_names[qtype] = NULL;
 			if (*arg) {	/* Some filename specified? */
 				if (REISERFS_SB(s)->s_qf_names[qtype]
 				    && strcmp(REISERFS_SB(s)->s_qf_names[qtype],
@@ -1292,10 +1291,6 @@ static int reiserfs_parse_options(struct super_block *s,
 				else
 					*mount_options |= 1 << REISERFS_GRPQUOTA;
 			} else {
-				if (qf_names[qtype] !=
-				    REISERFS_SB(s)->s_qf_names[qtype])
-					kfree(qf_names[qtype]);
-				qf_names[qtype] = NULL;
 				if (qtype == USRQUOTA)
 					*mount_options &= ~(1 << REISERFS_USRQUOTA);
 				else
@@ -1521,7 +1516,7 @@ static int reiserfs_remount(struct super_block *s, int *mount_flags, char *arg)
 			goto out_err_unlock;
 	}
 
-	if (*mount_flags & MS_RDONLY) {
+	if (*mount_flags & SB_RDONLY) {
 		reiserfs_write_unlock(s);
 		reiserfs_xattr_init(s, *mount_flags);
 		/* remount read-only */
@@ -1567,7 +1562,7 @@ static int reiserfs_remount(struct super_block *s, int *mount_flags, char *arg)
 		REISERFS_SB(s)->s_mount_state = sb_umount_state(rs);
 
 		/* now it is safe to call journal_begin */
-		s->s_flags &= ~MS_RDONLY;
+		s->s_flags &= ~SB_RDONLY;
 		err = journal_begin(&th, s, 10);
 		if (err)
 			goto out_err_unlock;
@@ -1575,7 +1570,7 @@ static int reiserfs_remount(struct super_block *s, int *mount_flags, char *arg)
 		/* Mount a partition which is read-only, read-write */
 		reiserfs_prepare_for_journal(s, SB_BUFFER_WITH_SB(s), 1);
 		REISERFS_SB(s)->s_mount_state = sb_umount_state(rs);
-		s->s_flags &= ~MS_RDONLY;
+		s->s_flags &= ~SB_RDONLY;
 		set_sb_umount_state(rs, REISERFS_ERROR_FS);
 		if (!old_format_only(s))
 			set_sb_mnt_count(rs, sb_mnt_count(rs) + 1);
@@ -1590,7 +1585,7 @@ static int reiserfs_remount(struct super_block *s, int *mount_flags, char *arg)
 		goto out_err_unlock;
 
 	reiserfs_write_unlock(s);
-	if (!(*mount_flags & MS_RDONLY)) {
+	if (!(*mount_flags & SB_RDONLY)) {
 		dquot_resume(s, -1);
 		reiserfs_write_lock(s);
 		finish_unfinished(s);
@@ -1953,7 +1948,7 @@ static int reiserfs_fill_super(struct super_block *s, void *data, int silent)
 		if (!sbi->s_jdev) {
 			SWARN(silent, s, "", "Cannot allocate memory for "
 				"journal device name");
-			goto error;
+			goto error_unlocked;
 		}
 	}
 #ifdef CONFIG_QUOTA
@@ -1981,6 +1976,9 @@ static int reiserfs_fill_super(struct super_block *s, void *data, int silent)
 		      s->s_id);
 		goto error_unlocked;
 	}
+
+	s->s_time_min = 0;
+	s->s_time_max = U32_MAX;
 
 	rs = SB_DISK_SUPER_BLOCK(s);
 	/*
@@ -2052,10 +2050,12 @@ static int reiserfs_fill_super(struct super_block *s, void *data, int silent)
 	if (replay_only(s))
 		goto error_unlocked;
 
+	s->s_xattr = reiserfs_xattr_handlers;
+
 	if (bdev_read_only(s->s_bdev) && !sb_rdonly(s)) {
 		SWARN(silent, s, "clm-7000",
 		      "Detected readonly device, marking FS readonly");
-		s->s_flags |= MS_RDONLY;
+		s->s_flags |= SB_RDONLY;
 	}
 	args.objectid = REISERFS_ROOT_OBJECTID;
 	args.dirid = REISERFS_ROOT_PARENT_OBJECTID;
@@ -2080,6 +2080,14 @@ static int reiserfs_fill_super(struct super_block *s, void *data, int silent)
 	if (root_inode->i_state & I_NEW) {
 		reiserfs_read_locked_inode(root_inode, &args);
 		unlock_new_inode(root_inode);
+	}
+
+	if (!S_ISDIR(root_inode->i_mode) || !inode_get_bytes(root_inode) ||
+	    !root_inode->i_size) {
+		SWARN(silent, s, "", "corrupt root inode, run fsck");
+		iput(root_inode);
+		errval = -EUCLEAN;
+		goto error;
 	}
 
 	s->s_root = d_make_root(root_inode);
@@ -2241,6 +2249,7 @@ error_unlocked:
 			kfree(qf_names[j]);
 	}
 #endif
+	kfree(sbi->s_jdev);
 	kfree(sbi);
 
 	s->s_fs_info = NULL;

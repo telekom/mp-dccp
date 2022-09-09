@@ -38,8 +38,9 @@ struct flowi_common {
 #define FLOWI_FLAG_KNOWN_NH		0x02
 #define FLOWI_FLAG_SKIP_NH_OIF		0x04
 	__u32	flowic_secid;
-	struct flowi_tunnel flowic_tun_key;
 	kuid_t  flowic_uid;
+	struct flowi_tunnel flowic_tun_key;
+	__u32		flowic_multipath_hash;
 };
 
 union flowi_uli {
@@ -78,6 +79,7 @@ struct flowi4 {
 #define flowi4_secid		__fl_common.flowic_secid
 #define flowi4_tun_key		__fl_common.flowic_tun_key
 #define flowi4_uid		__fl_common.flowic_uid
+#define flowi4_multipath_hash	__fl_common.flowic_multipath_hash
 
 	/* (saddr,daddr) must be grouped, same order as in IP header */
 	__be32			saddr;
@@ -114,6 +116,7 @@ static inline void flowi4_init_output(struct flowi4 *fl4, int oif,
 	fl4->saddr = saddr;
 	fl4->fl4_dport = dport;
 	fl4->fl4_sport = sport;
+	fl4->flowi4_multipath_hash = 0;
 }
 
 /* Reset some input parameters after previous lookup */
@@ -125,7 +128,7 @@ static inline void flowi4_update_output(struct flowi4 *fl4, int oif, __u8 tos,
 	fl4->daddr = daddr;
 	fl4->saddr = saddr;
 }
-				      
+
 
 struct flowi6 {
 	struct flowi_common	__fl_common;
@@ -192,9 +195,19 @@ static inline struct flowi *flowi4_to_flowi(struct flowi4 *fl4)
 	return container_of(fl4, struct flowi, u.ip4);
 }
 
+static inline struct flowi_common *flowi4_to_flowi_common(struct flowi4 *fl4)
+{
+	return &(flowi4_to_flowi(fl4)->u.__fl_common);
+}
+
 static inline struct flowi *flowi6_to_flowi(struct flowi6 *fl6)
 {
 	return container_of(fl6, struct flowi, u.ip6);
+}
+
+static inline struct flowi_common *flowi6_to_flowi_common(struct flowi6 *fl6)
+{
+	return &(flowi6_to_flowi(fl6)->u.__fl_common);
 }
 
 static inline struct flowi *flowidn_to_flowi(struct flowidn *fldn)
@@ -202,40 +215,6 @@ static inline struct flowi *flowidn_to_flowi(struct flowidn *fldn)
 	return container_of(fldn, struct flowi, u.dn);
 }
 
-typedef unsigned long flow_compare_t;
-
-static inline unsigned int flow_key_size(u16 family)
-{
-	switch (family) {
-	case AF_INET:
-		BUILD_BUG_ON(sizeof(struct flowi4) % sizeof(flow_compare_t));
-		return sizeof(struct flowi4) / sizeof(flow_compare_t);
-	case AF_INET6:
-		BUILD_BUG_ON(sizeof(struct flowi6) % sizeof(flow_compare_t));
-		return sizeof(struct flowi6) / sizeof(flow_compare_t);
-	case AF_DECnet:
-		BUILD_BUG_ON(sizeof(struct flowidn) % sizeof(flow_compare_t));
-		return sizeof(struct flowidn) / sizeof(flow_compare_t);
-	}
-	return 0;
-}
-
 __u32 __get_hash_from_flowi6(const struct flowi6 *fl6, struct flow_keys *keys);
-
-static inline __u32 get_hash_from_flowi6(const struct flowi6 *fl6)
-{
-	struct flow_keys keys;
-
-	return __get_hash_from_flowi6(fl6, &keys);
-}
-
-__u32 __get_hash_from_flowi4(const struct flowi4 *fl4, struct flow_keys *keys);
-
-static inline __u32 get_hash_from_flowi4(const struct flowi4 *fl4)
-{
-	struct flow_keys keys;
-
-	return __get_hash_from_flowi4(fl4, &keys);
-}
 
 #endif

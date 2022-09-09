@@ -1,30 +1,7 @@
-/******************************************************************************
- *
- * Copyright(c) 2009-2014  Realtek Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * The full GNU General Public License is included in this distribution in the
- * file called LICENSE.
- *
- * Contact Information:
- * wlanfae <wlanfae@realtek.com>
- * Realtek Corporation, No. 2, Innovation Road II, Hsinchu Science Park,
- * Hsinchu 300, Taiwan.
- *
- * Created on  2010/ 5/18,  1:41
- *
- * Larry Finger <Larry.Finger@lwfinger.net>
- *
- *****************************************************************************/
+// SPDX-License-Identifier: GPL-2.0
+/* Copyright(c) 2009-2014  Realtek Corporation.*/
 
+#include <linux/kernel.h>
 #include "table.h"
 
 u32 RTL8723BEPHY_REG_1TARRAY[] = {
@@ -224,8 +201,7 @@ u32 RTL8723BEPHY_REG_1TARRAY[] = {
 
 };
 
-u32 RTL8723BEPHY_REG_1TARRAYLEN =
-	sizeof(RTL8723BEPHY_REG_1TARRAY) / sizeof(u32);
+u32 RTL8723BEPHY_REG_1TARRAYLEN = ARRAY_SIZE(RTL8723BEPHY_REG_1TARRAY);
 
 u32 RTL8723BEPHY_REG_ARRAY_PG[] = {
 	0, 0, 0, 0x00000e08, 0x0000ff00, 0x00003800,
@@ -236,8 +212,7 @@ u32 RTL8723BEPHY_REG_ARRAY_PG[] = {
 	0, 0, 0, 0x00000e14, 0xffffffff, 0x26303436
 };
 
-u32 RTL8723BEPHY_REG_ARRAY_PGLEN =
-		sizeof(RTL8723BEPHY_REG_ARRAY_PG) / sizeof(u32);
+u32 RTL8723BEPHY_REG_ARRAY_PGLEN = ARRAY_SIZE(RTL8723BEPHY_REG_ARRAY_PG);
 
 u32 RTL8723BE_RADIOA_1TARRAY[] = {
 		0x000, 0x00010000,
@@ -373,8 +348,7 @@ u32 RTL8723BE_RADIOA_1TARRAY[] = {
 
 };
 
-u32 RTL8723BE_RADIOA_1TARRAYLEN =
-	sizeof(RTL8723BE_RADIOA_1TARRAY) / sizeof(u32);
+u32 RTL8723BE_RADIOA_1TARRAYLEN = ARRAY_SIZE(RTL8723BE_RADIOA_1TARRAY);
 
 u32 RTL8723BEMAC_1T_ARRAY[] = {
 		0x02F, 0x00000030,
@@ -483,7 +457,7 @@ u32 RTL8723BEMAC_1T_ARRAY[] = {
 
 };
 
-u32 RTL8723BEMAC_1T_ARRAYLEN = sizeof(RTL8723BEMAC_1T_ARRAY) / sizeof(u32);
+u32 RTL8723BEMAC_1T_ARRAYLEN = ARRAY_SIZE(RTL8723BEMAC_1T_ARRAY);
 
 u32 RTL8723BEAGCTAB_1TARRAY[] = {
 		0xC78, 0xFD000001,
@@ -620,4 +594,4 @@ u32 RTL8723BEAGCTAB_1TARRAY[] = {
 
 };
 
-u32 RTL8723BEAGCTAB_1TARRAYLEN = sizeof(RTL8723BEAGCTAB_1TARRAY) / sizeof(u32);
+u32 RTL8723BEAGCTAB_1TARRAYLEN = ARRAY_SIZE(RTL8723BEAGCTAB_1TARRAY);

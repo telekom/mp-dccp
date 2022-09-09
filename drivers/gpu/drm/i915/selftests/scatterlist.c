@@ -24,7 +24,8 @@
 #include <linux/prime_numbers.h>
 #include <linux/random.h>
 
-#include "../i915_selftest.h"
+#include "i915_selftest.h"
+#include "i915_utils.h"
 
 #define PFN_BIAS (1 << 10)
 
@@ -189,6 +190,20 @@ static unsigned int random(unsigned long n,
 	return 1 + (prandom_u32_state(rnd) % 1024);
 }
 
+static unsigned int random_page_size_pages(unsigned long n,
+					   unsigned long count,
+					   struct rnd_state *rnd)
+{
+	/* 4K, 64K, 2M */
+	static unsigned int page_count[] = {
+		BIT(12) >> PAGE_SHIFT,
+		BIT(16) >> PAGE_SHIFT,
+		BIT(21) >> PAGE_SHIFT,
+	};
+
+	return page_count[(prandom_u32_state(rnd) % 3)];
+}
+
 static inline bool page_contiguous(struct page *first,
 				   struct page *last,
 				   unsigned long npages)
@@ -252,6 +267,7 @@ static const npages_fn_t npages_funcs[] = {
 	grow,
 	shrink,
 	random,
+	random_page_size_pages,
 	NULL,
 };
 

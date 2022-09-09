@@ -1,14 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * Samsung EXYNOS5 SoC series USB DRD PHY driver
+ * Samsung Exynos5 SoC series USB DRD PHY driver
  *
  * Phy provider for USB 3.0 DRD controller on Exynos5 SoC series
  *
  * Copyright (C) 2014 Samsung Electronics Co., Ltd.
  * Author: Vivek Gautam <gautam.vivek@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -19,6 +16,7 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_device.h>
+#include <linux/iopoll.h>
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
 #include <linux/mutex.h>
@@ -36,7 +34,7 @@
 #define EXYNOS5_FSEL_24MHZ		0x5
 #define EXYNOS5_FSEL_50MHZ		0x7
 
-/* EXYNOS5: USB 3.0 DRD PHY registers */
+/* Exynos5: USB 3.0 DRD PHY registers */
 #define EXYNOS5_DRD_LINKSYSTEM			0x04
 
 #define LINKSYSTEM_FLADJ_MASK			(0x3f << 1)
@@ -90,7 +88,17 @@
 #define PHYCLKRST_COMMONONN			BIT(0)
 
 #define EXYNOS5_DRD_PHYREG0			0x14
+#define PHYREG0_SSC_REF_CLK_SEL			BIT(21)
+#define PHYREG0_SSC_RANGE			BIT(20)
+#define PHYREG0_CR_WRITE			BIT(19)
+#define PHYREG0_CR_READ				BIT(18)
+#define PHYREG0_CR_DATA_IN(_x)			((_x) << 2)
+#define PHYREG0_CR_CAP_DATA			BIT(1)
+#define PHYREG0_CR_CAP_ADDR			BIT(0)
+
 #define EXYNOS5_DRD_PHYREG1			0x18
+#define PHYREG1_CR_DATA_OUT(_x)			((_x) << 1)
+#define PHYREG1_CR_ACK				BIT(0)
 
 #define EXYNOS5_DRD_PHYPARAM0			0x1c
 
@@ -118,6 +126,25 @@
 
 #define EXYNOS5_DRD_PHYRESUME			0x34
 #define EXYNOS5_DRD_LINKPORT			0x44
+
+/* USB 3.0 DRD PHY SS Function Control Reg; accessed by CR_PORT */
+#define EXYNOS5_DRD_PHYSS_LOSLEVEL_OVRD_IN		(0x15)
+#define LOSLEVEL_OVRD_IN_LOS_BIAS_5420			(0x5 << 13)
+#define LOSLEVEL_OVRD_IN_LOS_BIAS_DEFAULT		(0x0 << 13)
+#define LOSLEVEL_OVRD_IN_EN				(0x1 << 10)
+#define LOSLEVEL_OVRD_IN_LOS_LEVEL_DEFAULT		(0x9 << 0)
+
+#define EXYNOS5_DRD_PHYSS_TX_VBOOSTLEVEL_OVRD_IN	(0x12)
+#define TX_VBOOSTLEVEL_OVRD_IN_VBOOST_5420		(0x5 << 13)
+#define TX_VBOOSTLEVEL_OVRD_IN_VBOOST_DEFAULT		(0x4 << 13)
+
+#define EXYNOS5_DRD_PHYSS_LANE0_TX_DEBUG		(0x1010)
+#define LANE0_TX_DEBUG_RXDET_MEAS_TIME_19M2_20M		(0x4 << 4)
+#define LANE0_TX_DEBUG_RXDET_MEAS_TIME_24M		(0x8 << 4)
+#define LANE0_TX_DEBUG_RXDET_MEAS_TIME_25M_26M		(0x8 << 4)
+#define LANE0_TX_DEBUG_RXDET_MEAS_TIME_48M_50M_52M	(0x20 << 4)
+#define LANE0_TX_DEBUG_RXDET_MEAS_TIME_62M5		(0x20 << 4)
+#define LANE0_TX_DEBUG_RXDET_MEAS_TIME_96M_100M		(0x40 << 4)
 
 #define KHZ	1000
 #define MHZ	(KHZ * KHZ)
@@ -154,14 +181,14 @@ struct exynos5_usbdrd_phy_drvdata {
  * @utmiclk: clock for utmi+ phy
  * @itpclk: clock for ITP generation
  * @drv_data: pointer to SoC level driver data structure
- * @phys[]: array for 'EXYNOS5_DRDPHYS_NUM' number of PHY
+ * @phys: array for 'EXYNOS5_DRDPHYS_NUM' number of PHY
  *	    instances each with its 'phy' and 'phy_cfg'.
  * @extrefclk: frequency select settings when using 'separate
  *	       reference clocks' for SS and HS operations
  * @ref_clk: reference clock to PHY block from which PHY's
  *	     operational clocks are derived
- * vbus: VBUS regulator for phy
- * vbus_boost: Boost regulator for VBUS present on few Exynos boards
+ * @vbus: VBUS regulator for phy
+ * @vbus_boost: Boost regulator for VBUS present on few Exynos boards
  */
 struct exynos5_usbdrd_phy {
 	struct device *dev;
@@ -527,6 +554,135 @@ static int exynos5_usbdrd_phy_power_off(struct phy *phy)
 	return 0;
 }
 
+static int crport_handshake(struct exynos5_usbdrd_phy *phy_drd,
+			    u32 val, u32 cmd)
+{
+	unsigned int result;
+	int err;
+
+	writel(val | cmd, phy_drd->reg_phy + EXYNOS5_DRD_PHYREG0);
+
+	err = readl_poll_timeout(phy_drd->reg_phy + EXYNOS5_DRD_PHYREG1,
+				 result, (result & PHYREG1_CR_ACK), 1, 100);
+	if (err == -ETIMEDOUT) {
+		dev_err(phy_drd->dev, "CRPORT handshake timeout1 (0x%08x)\n", val);
+		return err;
+	}
+
+	writel(val, phy_drd->reg_phy + EXYNOS5_DRD_PHYREG0);
+
+	err = readl_poll_timeout(phy_drd->reg_phy + EXYNOS5_DRD_PHYREG1,
+				 result, !(result & PHYREG1_CR_ACK), 1, 100);
+	if (err == -ETIMEDOUT) {
+		dev_err(phy_drd->dev, "CRPORT handshake timeout2 (0x%08x)\n", val);
+		return err;
+	}
+
+	return 0;
+}
+
+static int crport_ctrl_write(struct exynos5_usbdrd_phy *phy_drd,
+			     u32 addr, u32 data)
+{
+	int ret;
+
+	/* Write Address */
+	writel(PHYREG0_CR_DATA_IN(addr),
+	       phy_drd->reg_phy + EXYNOS5_DRD_PHYREG0);
+	ret = crport_handshake(phy_drd, PHYREG0_CR_DATA_IN(addr),
+			       PHYREG0_CR_CAP_ADDR);
+	if (ret)
+		return ret;
+
+	/* Write Data */
+	writel(PHYREG0_CR_DATA_IN(data),
+	       phy_drd->reg_phy + EXYNOS5_DRD_PHYREG0);
+	ret = crport_handshake(phy_drd, PHYREG0_CR_DATA_IN(data),
+			       PHYREG0_CR_CAP_DATA);
+	if (ret)
+		return ret;
+
+	ret = crport_handshake(phy_drd, PHYREG0_CR_DATA_IN(data),
+			       PHYREG0_CR_WRITE);
+
+	return ret;
+}
+
+/*
+ * Calibrate few PHY parameters using CR_PORT register to meet
+ * SuperSpeed requirements on Exynos5420 and Exynos5800 systems,
+ * which have 28nm USB 3.0 DRD PHY.
+ */
+static int exynos5420_usbdrd_phy_calibrate(struct exynos5_usbdrd_phy *phy_drd)
+{
+	unsigned int temp;
+	int ret = 0;
+
+	/*
+	 * Change los_bias to (0x5) for 28nm PHY from a
+	 * default value (0x0); los_level is set as default
+	 * (0x9) as also reflected in los_level[30:26] bits
+	 * of PHYPARAM0 register.
+	 */
+	temp = LOSLEVEL_OVRD_IN_LOS_BIAS_5420 |
+		LOSLEVEL_OVRD_IN_EN |
+		LOSLEVEL_OVRD_IN_LOS_LEVEL_DEFAULT;
+	ret = crport_ctrl_write(phy_drd,
+				EXYNOS5_DRD_PHYSS_LOSLEVEL_OVRD_IN,
+				temp);
+	if (ret) {
+		dev_err(phy_drd->dev,
+			"Failed setting Loss-of-Signal level for SuperSpeed\n");
+		return ret;
+	}
+
+	/*
+	 * Set tx_vboost_lvl to (0x5) for 28nm PHY Tuning,
+	 * to raise Tx signal level from its default value of (0x4)
+	 */
+	temp = TX_VBOOSTLEVEL_OVRD_IN_VBOOST_5420;
+	ret = crport_ctrl_write(phy_drd,
+				EXYNOS5_DRD_PHYSS_TX_VBOOSTLEVEL_OVRD_IN,
+				temp);
+	if (ret) {
+		dev_err(phy_drd->dev,
+			"Failed setting Tx-Vboost-Level for SuperSpeed\n");
+		return ret;
+	}
+
+	/*
+	 * Set proper time to wait for RxDetect measurement, for
+	 * desired reference clock of PHY, by tuning the CR_PORT
+	 * register LANE0.TX_DEBUG which is internal to PHY.
+	 * This fixes issue with few USB 3.0 devices, which are
+	 * not detected (not even generate interrupts on the bus
+	 * on insertion) without this change.
+	 * e.g. Samsung SUM-TSB16S 3.0 USB drive.
+	 */
+	switch (phy_drd->extrefclk) {
+	case EXYNOS5_FSEL_50MHZ:
+		temp = LANE0_TX_DEBUG_RXDET_MEAS_TIME_48M_50M_52M;
+		break;
+	case EXYNOS5_FSEL_20MHZ:
+	case EXYNOS5_FSEL_19MHZ2:
+		temp = LANE0_TX_DEBUG_RXDET_MEAS_TIME_19M2_20M;
+		break;
+	case EXYNOS5_FSEL_24MHZ:
+	default:
+		temp = LANE0_TX_DEBUG_RXDET_MEAS_TIME_24M;
+		break;
+	}
+
+	ret = crport_ctrl_write(phy_drd,
+				EXYNOS5_DRD_PHYSS_LANE0_TX_DEBUG,
+				temp);
+	if (ret)
+		dev_err(phy_drd->dev,
+			"Fail to set RxDet measurement time for SuperSpeed\n");
+
+	return ret;
+}
+
 static struct phy *exynos5_usbdrd_phy_xlate(struct device *dev,
 					struct of_phandle_args *args)
 {
@@ -538,11 +694,22 @@ static struct phy *exynos5_usbdrd_phy_xlate(struct device *dev,
 	return phy_drd->phys[args->args[0]].phy;
 }
 
+static int exynos5_usbdrd_phy_calibrate(struct phy *phy)
+{
+	struct phy_usb_instance *inst = phy_get_drvdata(phy);
+	struct exynos5_usbdrd_phy *phy_drd = to_usbdrd_phy(inst);
+
+	if (inst->phy_cfg->id == EXYNOS5_DRDPHY_UTMI)
+		return exynos5420_usbdrd_phy_calibrate(phy_drd);
+	return 0;
+}
+
 static const struct phy_ops exynos5_usbdrd_phy_ops = {
 	.init		= exynos5_usbdrd_phy_init,
 	.exit		= exynos5_usbdrd_phy_exit,
 	.power_on	= exynos5_usbdrd_phy_power_on,
 	.power_off	= exynos5_usbdrd_phy_power_off,
+	.calibrate	= exynos5_usbdrd_phy_calibrate,
 	.owner		= THIS_MODULE,
 };
 
@@ -773,11 +940,12 @@ static struct platform_driver exynos5_usb3drd_phy = {
 	.driver = {
 		.of_match_table	= exynos5_usbdrd_phy_of_match,
 		.name		= "exynos5_usb3drd_phy",
+		.suppress_bind_attrs = true,
 	}
 };
 
 module_platform_driver(exynos5_usb3drd_phy);
-MODULE_DESCRIPTION("Samsung EXYNOS5 SoCs USB 3.0 DRD controller PHY driver");
+MODULE_DESCRIPTION("Samsung Exynos5 SoCs USB 3.0 DRD controller PHY driver");
 MODULE_AUTHOR("Vivek Gautam <gautam.vivek@samsung.com>");
 MODULE_LICENSE("GPL v2");
 MODULE_ALIAS("platform:exynos5_usb3drd_phy");

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2007-2011 Freescale Semiconductor, Inc.
  *
@@ -5,12 +6,6 @@
  *	   Jason Jin <Jason.jin@freescale.com>
  *
  * The hwirq alloc and free code reuse from sysdev/mpic_msi.c
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; version 2 of the
- * License.
- *
  */
 #include <linux/irq.h>
 #include <linux/msi.h>
@@ -354,6 +349,7 @@ static int fsl_of_msi_remove(struct platform_device *ofdev)
 }
 
 static struct lock_class_key fsl_msi_irq_class;
+static struct lock_class_key fsl_msi_irq_request_class;
 
 static int fsl_msi_setup_hwirq(struct fsl_msi *msi, struct platform_device *dev,
 			       int offset, int irq_index)
@@ -373,7 +369,8 @@ static int fsl_msi_setup_hwirq(struct fsl_msi *msi, struct platform_device *dev,
 		dev_err(&dev->dev, "No memory for MSI cascade data\n");
 		return -ENOMEM;
 	}
-	irq_set_lockdep_class(virt_msir, &fsl_msi_irq_class);
+	irq_set_lockdep_class(virt_msir, &fsl_msi_irq_class,
+			      &fsl_msi_irq_request_class);
 	cascade_data->index = offset;
 	cascade_data->msi_data = msi;
 	cascade_data->virq = virt_msir;

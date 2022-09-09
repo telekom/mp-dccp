@@ -1,10 +1,10 @@
 /*
- * Marvell Wireless LAN device driver: station command handling
+ * NXP Wireless LAN device driver: station command handling
  *
- * Copyright (C) 2011-2014, Marvell International Ltd.
+ * Copyright 2011-2020 NXP
  *
- * This software file (the "File") is distributed by Marvell International
- * Ltd. under the terms of the GNU General Public License Version 2, June 1991
+ * This software file (the "File") is distributed by NXP
+ * under the terms of the GNU General Public License Version 2, June 1991
  * (the "License").  You may use, redistribute and/or modify this File in
  * accordance with the terms and conditions of the License, a copy of which
  * is available by writing to the Free Software Foundation, Inc.,
@@ -853,43 +853,36 @@ mwifiex_cmd_802_11_key_material_v1(struct mwifiex_private *priv,
 		memset(&key_material->key_param_set, 0,
 		       sizeof(struct mwifiex_ie_type_key_param_set));
 	if (enc_key->is_wapi_key) {
-		mwifiex_dbg(priv->adapter, INFO, "info: Set WAPI Key\n");
-		key_material->key_param_set.key_type_id =
-						cpu_to_le16(KEY_TYPE_ID_WAPI);
-		if (cmd_oid == KEY_INFO_ENABLED)
-			key_material->key_param_set.key_info =
-						cpu_to_le16(KEY_ENABLED);
-		else
-			key_material->key_param_set.key_info =
-						cpu_to_le16(!KEY_ENABLED);
+		struct mwifiex_ie_type_key_param_set *set;
 
-		key_material->key_param_set.key[0] = enc_key->key_index;
+		mwifiex_dbg(priv->adapter, INFO, "info: Set WAPI Key\n");
+		set = &key_material->key_param_set;
+		set->key_type_id = cpu_to_le16(KEY_TYPE_ID_WAPI);
+		if (cmd_oid == KEY_INFO_ENABLED)
+			set->key_info = cpu_to_le16(KEY_ENABLED);
+		else
+			set->key_info = cpu_to_le16(!KEY_ENABLED);
+
+		set->key[0] = enc_key->key_index;
 		if (!priv->sec_info.wapi_key_on)
-			key_material->key_param_set.key[1] = 1;
+			set->key[1] = 1;
 		else
 			/* set 0 when re-key */
-			key_material->key_param_set.key[1] = 0;
+			set->key[1] = 0;
 
 		if (!is_broadcast_ether_addr(enc_key->mac_addr)) {
 			/* WAPI pairwise key: unicast */
-			key_material->key_param_set.key_info |=
-				cpu_to_le16(KEY_UNICAST);
+			set->key_info |= cpu_to_le16(KEY_UNICAST);
 		} else {	/* WAPI group key: multicast */
-			key_material->key_param_set.key_info |=
-				cpu_to_le16(KEY_MCAST);
+			set->key_info |= cpu_to_le16(KEY_MCAST);
 			priv->sec_info.wapi_key_on = true;
 		}
 
-		key_material->key_param_set.type =
-					cpu_to_le16(TLV_TYPE_KEY_MATERIAL);
-		key_material->key_param_set.key_len =
-						cpu_to_le16(WAPI_KEY_LEN);
-		memcpy(&key_material->key_param_set.key[2],
-		       enc_key->key_material, enc_key->key_len);
-		memcpy(&key_material->key_param_set.key[2 + enc_key->key_len],
-		       enc_key->pn, PN_LEN);
-		key_material->key_param_set.length =
-			cpu_to_le16(WAPI_KEY_LEN + KEYPARAMSET_FIXED_LEN);
+		set->type = cpu_to_le16(TLV_TYPE_KEY_MATERIAL);
+		set->key_len = cpu_to_le16(WAPI_KEY_LEN);
+		memcpy(&set->key[2], enc_key->key_material, enc_key->key_len);
+		memcpy(&set->key[2 + enc_key->key_len], enc_key->pn, PN_LEN);
+		set->length = cpu_to_le16(WAPI_KEY_LEN + KEYPARAMSET_FIXED_LEN);
 
 		key_param_len = (WAPI_KEY_LEN + KEYPARAMSET_FIXED_LEN) +
 				 sizeof(struct mwifiex_ie_types_header);
@@ -1730,7 +1723,7 @@ mwifiex_cmd_tdls_config(struct mwifiex_private *priv,
 	default:
 		mwifiex_dbg(priv->adapter, ERROR,
 			    "Unknown TDLS configuration\n");
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 
 	le16_unaligned_add_cpu(&cmd->size, len);
@@ -1856,7 +1849,7 @@ mwifiex_cmd_tdls_oper(struct mwifiex_private *priv,
 		break;
 	default:
 		mwifiex_dbg(priv->adapter, ERROR, "Unknown TDLS operation\n");
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 	}
 
 	le16_unaligned_add_cpu(&cmd->size, config_len);
@@ -1894,6 +1887,25 @@ static int mwifiex_cmd_get_wakeup_reason(struct mwifiex_private *priv,
 	cmd->command = cpu_to_le16(HostCmd_CMD_HS_WAKEUP_REASON);
 	cmd->size = cpu_to_le16(sizeof(struct host_cmd_ds_wakeup_reason) +
 				S_DS_GEN);
+
+	return 0;
+}
+
+static int mwifiex_cmd_get_chan_info(struct host_cmd_ds_command *cmd,
+				     u16 cmd_action)
+{
+	struct host_cmd_ds_sta_configure *sta_cfg_cmd = &cmd->params.sta_cfg;
+	struct host_cmd_tlv_channel_band *tlv_band_channel =
+	(struct host_cmd_tlv_channel_band *)sta_cfg_cmd->tlv_buffer;
+
+	cmd->command = cpu_to_le16(HostCmd_CMD_STA_CONFIGURE);
+	cmd->size = cpu_to_le16(sizeof(*sta_cfg_cmd) +
+				sizeof(*tlv_band_channel) + S_DS_GEN);
+	sta_cfg_cmd->action = cpu_to_le16(cmd_action);
+	memset(tlv_band_channel, 0, sizeof(*tlv_band_channel));
+	tlv_band_channel->header.type = cpu_to_le16(TLV_TYPE_CHANNELBANDLIST);
+	tlv_band_channel->header.len  = cpu_to_le16(sizeof(*tlv_band_channel) -
+					sizeof(struct mwifiex_ie_types_header));
 
 	return 0;
 }
@@ -2205,6 +2217,13 @@ int mwifiex_sta_prepare_cmd(struct mwifiex_private *priv, uint16_t cmd_no,
 		break;
 	case HostCmd_CMD_CHAN_REGION_CFG:
 		ret = mwifiex_cmd_chan_region_cfg(priv, cmd_ptr, cmd_action);
+		break;
+	case HostCmd_CMD_FW_DUMP_EVENT:
+		cmd_ptr->command = cpu_to_le16(cmd_no);
+		cmd_ptr->size = cpu_to_le16(S_DS_GEN);
+		break;
+	case HostCmd_CMD_STA_CONFIGURE:
+		ret = mwifiex_cmd_get_chan_info(cmd_ptr, cmd_action);
 		break;
 	default:
 		mwifiex_dbg(priv->adapter, ERROR,

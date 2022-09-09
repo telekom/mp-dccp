@@ -40,9 +40,10 @@
 #include <net/xfrm.h>
 #include <linux/idr.h>
 
+#include "accel/ipsec.h"
+
 #define MLX5E_IPSEC_SADB_RX_BITS 10
-#define MLX5E_METADATA_ETHER_TYPE (0x8CE4)
-#define MLX5E_METADATA_ETHER_LEN 8
+#define MLX5E_IPSEC_ESN_SCOPE_MID 0x80000000L
 
 struct mlx5e_priv;
 
@@ -74,24 +75,51 @@ struct mlx5e_ipsec_stats {
 	u64 ipsec_cmd_drop;
 };
 
+struct mlx5e_accel_fs_esp;
+struct mlx5e_ipsec_tx;
+
 struct mlx5e_ipsec {
 	struct mlx5e_priv *en_priv;
 	DECLARE_HASHTABLE(sadb_rx, MLX5E_IPSEC_SADB_RX_BITS);
+	bool no_trailer;
 	spinlock_t sadb_rx_lock; /* Protects sadb_rx and halloc */
 	struct ida halloc;
 	struct mlx5e_ipsec_sw_stats sw_stats;
 	struct mlx5e_ipsec_stats stats;
+	struct workqueue_struct *wq;
+	struct mlx5e_accel_fs_esp *rx_fs;
+	struct mlx5e_ipsec_tx *tx_fs;
+};
+
+struct mlx5e_ipsec_esn_state {
+	u32 esn;
+	u8 trigger: 1;
+	u8 overlap: 1;
+};
+
+struct mlx5e_ipsec_rule {
+	struct mlx5_flow_handle *rule;
+	struct mlx5_modify_hdr *set_modify_hdr;
+};
+
+struct mlx5e_ipsec_sa_entry {
+	struct hlist_node hlist; /* Item in SADB_RX hashtable */
+	struct mlx5e_ipsec_esn_state esn_state;
+	unsigned int handle; /* Handle in SADB_RX */
+	struct xfrm_state *x;
+	struct mlx5e_ipsec *ipsec;
+	struct mlx5_accel_esp_xfrm *xfrm;
+	void *hw_context;
+	void (*set_iv_op)(struct sk_buff *skb, struct xfrm_state *x,
+			  struct xfrm_offload *xo);
+	u32 ipsec_obj_id;
+	struct mlx5e_ipsec_rule ipsec_rule;
 };
 
 void mlx5e_ipsec_build_inverse_table(void);
 int mlx5e_ipsec_init(struct mlx5e_priv *priv);
 void mlx5e_ipsec_cleanup(struct mlx5e_priv *priv);
 void mlx5e_ipsec_build_netdev(struct mlx5e_priv *priv);
-
-int mlx5e_ipsec_get_count(struct mlx5e_priv *priv);
-int mlx5e_ipsec_get_strings(struct mlx5e_priv *priv, uint8_t *data);
-void mlx5e_ipsec_update_stats(struct mlx5e_priv *priv);
-int mlx5e_ipsec_get_stats(struct mlx5e_priv *priv, u64 *data);
 
 struct xfrm_state *mlx5e_ipsec_sadb_rx_lookup(struct mlx5e_ipsec *dev,
 					      unsigned int handle);
@@ -113,26 +141,6 @@ static inline void mlx5e_ipsec_cleanup(struct mlx5e_priv *priv)
 
 static inline void mlx5e_ipsec_build_netdev(struct mlx5e_priv *priv)
 {
-}
-
-static inline int mlx5e_ipsec_get_count(struct mlx5e_priv *priv)
-{
-	return 0;
-}
-
-static inline int mlx5e_ipsec_get_strings(struct mlx5e_priv *priv,
-					  uint8_t *data)
-{
-	return 0;
-}
-
-static inline void mlx5e_ipsec_update_stats(struct mlx5e_priv *priv)
-{
-}
-
-static inline int mlx5e_ipsec_get_stats(struct mlx5e_priv *priv, u64 *data)
-{
-	return 0;
 }
 
 #endif

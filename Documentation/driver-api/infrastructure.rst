@@ -6,6 +6,7 @@ The Basic Device Driver-Model Structures
 
 .. kernel-doc:: include/linux/device.h
    :internal:
+   :no-identifiers: device_link_state
 
 Device Drivers Base
 -------------------
@@ -28,9 +29,6 @@ Device Drivers Base
 .. kernel-doc:: drivers/base/node.c
    :internal:
 
-.. kernel-doc:: drivers/base/firmware_class.c
-   :export:
-
 .. kernel-doc:: drivers/base/transport_class.c
    :export:
 
@@ -49,10 +47,7 @@ Device Drivers Base
 Device Drivers DMA Management
 -----------------------------
 
-.. kernel-doc:: drivers/base/dma-coherent.c
-   :export:
-
-.. kernel-doc:: drivers/base/dma-mapping.c
+.. kernel-doc:: kernel/dma/mapping.c
    :export:
 
 Device drivers PnP support

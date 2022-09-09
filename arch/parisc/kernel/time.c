@@ -40,7 +40,7 @@
 
 #include <linux/timex.h>
 
-static unsigned long clocktick __read_mostly;	/* timer cycles per tick */
+static unsigned long clocktick __ro_after_init;	/* timer cycles per tick */
 
 /*
  * We keep time on PA-RISC Linux by using the Interval Timer which is
@@ -174,15 +174,22 @@ static int rtc_generic_get_time(struct device *dev, struct rtc_time *tm)
 
 	/* we treat tod_sec as unsigned, so this can work until year 2106 */
 	rtc_time64_to_tm(tod_data.tod_sec, tm);
-	return rtc_valid_tm(tm);
+	return 0;
 }
 
 static int rtc_generic_set_time(struct device *dev, struct rtc_time *tm)
 {
 	time64_t secs = rtc_tm_to_time64(tm);
+	int ret;
 
-	if (pdc_tod_set(secs, 0) < 0)
+	/* hppa has Y2K38 problem: pdc_tod_set() takes an u32 value! */
+	ret = pdc_tod_set(secs, 0);
+	if (ret != 0) {
+		pr_warn("pdc_tod_set(%lld) returned error %d\n", secs, ret);
+		if (ret == PDC_INVALID_ARG)
+			return -EINVAL;
 		return -EOPNOTSUPP;
+	}
 
 	return 0;
 }
@@ -245,27 +252,13 @@ void __init time_init(void)
 static int __init init_cr16_clocksource(void)
 {
 	/*
-	 * The cr16 interval timers are not syncronized across CPUs on
-	 * different sockets, so mark them unstable and lower rating on
-	 * multi-socket SMP systems.
+	 * The cr16 interval timers are not syncronized across CPUs, even if
+	 * they share the same socket.
 	 */
 	if (num_online_cpus() > 1 && !running_on_qemu) {
-		int cpu;
-		unsigned long cpu0_loc;
-		cpu0_loc = per_cpu(cpu_data, 0).cpu_loc;
-
-		for_each_online_cpu(cpu) {
-			if (cpu == 0)
-				continue;
-			if ((cpu0_loc != 0) &&
-			    (cpu0_loc == per_cpu(cpu_data, cpu).cpu_loc))
-				continue;
-
-			clocksource_cr16.name = "cr16_unstable";
-			clocksource_cr16.flags = CLOCK_SOURCE_UNSTABLE;
-			clocksource_cr16.rating = 0;
-			break;
-		}
+		clocksource_cr16.name = "cr16_unstable";
+		clocksource_cr16.flags = CLOCK_SOURCE_UNSTABLE;
+		clocksource_cr16.rating = 0;
 	}
 
 	/* XXX: We may want to mark sched_clock stable here if cr16 clocks are

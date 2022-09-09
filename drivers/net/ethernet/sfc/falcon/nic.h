@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /****************************************************************************
  * Driver for Solarflare network controllers and boards
  * Copyright 2005-2006 Fen Systems Ltd.
  * Copyright 2006-2013 Solarflare Communications Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, incorporated herein by reference.
  */
 
 #ifndef EF4_NIC_H
@@ -83,7 +80,7 @@ static inline struct ef4_tx_queue *ef4_tx_queue_partner(struct ef4_tx_queue *tx_
 static inline bool __ef4_nic_tx_is_empty(struct ef4_tx_queue *tx_queue,
 					 unsigned int write_count)
 {
-	unsigned int empty_read_count = ACCESS_ONCE(tx_queue->empty_read_count);
+	unsigned int empty_read_count = READ_ONCE(tx_queue->empty_read_count);
 
 	if (empty_read_count == 0)
 		return false;
@@ -267,6 +264,7 @@ enum {
 /**
  * struct falcon_nic_data - Falcon NIC state
  * @pci_dev2: Secondary function of Falcon A
+ * @efx: ef4_nic pointer
  * @board: Board state and functions
  * @stats: Hardware statistics
  * @stats_disable_count: Nest count for disabling statistics fetches
@@ -280,6 +278,7 @@ enum {
  */
 struct falcon_nic_data {
 	struct pci_dev *pci_dev2;
+	struct ef4_nic *efx;
 	struct falcon_board board;
 	u64 stats[FALCON_STAT_COUNT];
 	unsigned int stats_disable_count;
@@ -464,11 +463,11 @@ irqreturn_t ef4_farch_fatal_interrupt(struct ef4_nic *efx);
 
 static inline int ef4_nic_event_test_irq_cpu(struct ef4_channel *channel)
 {
-	return ACCESS_ONCE(channel->event_test_cpu);
+	return READ_ONCE(channel->event_test_cpu);
 }
 static inline int ef4_nic_irq_test_irq_cpu(struct ef4_nic *efx)
 {
-	return ACCESS_ONCE(efx->last_irq_cpu);
+	return READ_ONCE(efx->last_irq_cpu);
 }
 
 /* Global Resources */

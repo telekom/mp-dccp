@@ -145,7 +145,8 @@ static int mpdccp_read_from_subflow (struct sock *sk)
     if(!sk)
         return -EINVAL;
 
-    skb = __skb_recv_datagram (sk, MSG_DONTWAIT, NULL, &peeked, &off, &ret);
+    //skb = __skb_recv_datagram (sk, MSG_DONTWAIT, NULL, &peeked, &off, &ret);
+    skb = __skb_recv_datagram(sk, &sk->sk_receive_queue, MSG_DONTWAIT, &off, &ret);
     if (!skb) 
         return 0;
 
@@ -1211,7 +1212,7 @@ int mpdccp_hash_key(const u8 *key, u8 keylen, u32 *token)
         u32 buf[8];
 
         desc->tfm = tfm_hash;
-        desc->flags = 0;
+        //desc->flags = 0;
         ret = crypto_shash_digest(desc, key, keylen, (u8*)buf);
 
         if (token)
@@ -1334,7 +1335,7 @@ int mpdccp_hmac_sha256(const u8 *key, u8 keylen, const u8 *msg, u8 msglen, u8 *o
         }
 
         desc->tfm = tfm_hmac;
-        desc->flags = 0;
+        //desc->flags = 0;
 
         ret = crypto_shash_digest(desc, msg, msglen, buf);
         if (ret) {

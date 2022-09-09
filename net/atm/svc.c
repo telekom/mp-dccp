@@ -381,7 +381,7 @@ static int svc_accept(struct socket *sock, struct socket *newsock, int flags,
 				    msg->pvc.sap_addr.vpi,
 				    msg->pvc.sap_addr.vci);
 		dev_kfree_skb(skb);
-		sk->sk_ack_backlog--;
+		sk_acceptq_removed(sk);
 		if (error) {
 			sigd_enq2(NULL, as_reject, old_vcc, NULL, NULL,
 				  &old_vcc->qos, error);
@@ -419,15 +419,14 @@ out:
 }
 
 static int svc_getname(struct socket *sock, struct sockaddr *sockaddr,
-		       int *sockaddr_len, int peer)
+		       int peer)
 {
 	struct sockaddr_atmsvc *addr;
 
-	*sockaddr_len = sizeof(struct sockaddr_atmsvc);
 	addr = (struct sockaddr_atmsvc *) sockaddr;
 	memcpy(addr, peer ? &ATM_SD(sock)->remote : &ATM_SD(sock)->local,
 	       sizeof(struct sockaddr_atmsvc));
-	return 0;
+	return sizeof(struct sockaddr_atmsvc);
 }
 
 int svc_change_qos(struct atm_vcc *vcc, struct atm_qos *qos)
@@ -452,7 +451,7 @@ int svc_change_qos(struct atm_vcc *vcc, struct atm_qos *qos)
 }
 
 static int svc_setsockopt(struct socket *sock, int level, int optname,
-			  char __user *optval, unsigned int optlen)
+			  sockptr_t optval, unsigned int optlen)
 {
 	struct sock *sk = sock->sk;
 	struct atm_vcc *vcc = ATM_SD(sock);
@@ -465,7 +464,7 @@ static int svc_setsockopt(struct socket *sock, int level, int optname,
 			error = -EINVAL;
 			goto out;
 		}
-		if (copy_from_user(&vcc->sap, optval, optlen)) {
+		if (copy_from_sockptr(&vcc->sap, optval, optlen)) {
 			error = -EFAULT;
 			goto out;
 		}
@@ -476,7 +475,7 @@ static int svc_setsockopt(struct socket *sock, int level, int optname,
 			error = -EINVAL;
 			goto out;
 		}
-		if (get_user(value, (int __user *)optval)) {
+		if (copy_from_sockptr(&value, optval, sizeof(int))) {
 			error = -EFAULT;
 			goto out;
 		}
@@ -642,6 +641,7 @@ static const struct proto_ops svc_proto_ops = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl =	svc_compat_ioctl,
 #endif
+	.gettstamp =	sock_gettstamp,
 	.listen =	svc_listen,
 	.shutdown =	svc_shutdown,
 	.setsockopt =	svc_setsockopt,

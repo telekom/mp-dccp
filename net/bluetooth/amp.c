@@ -1,14 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
    Copyright (c) 2011,2012 Intel Corp.
 
-   This program is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License version 2 and
-   only version 2 as published by the Free Software Foundation.
-
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU General Public License for more details.
 */
 
 #include <net/bluetooth/bluetooth.h>
@@ -161,7 +154,6 @@ static int hmac_sha256(u8 *key, u8 ksize, char *plaintext, u8 psize, u8 *output)
 	}
 
 	shash->tfm = tfm;
-	shash->flags = CRYPTO_TFM_REQ_MAY_SLEEP;
 
 	ret = crypto_shash_digest(shash, plaintext, psize, output);
 
@@ -187,7 +179,7 @@ int phylink_gen_key(struct hci_conn *conn, u8 *data, u8 *len, u8 *type)
 
 	/* Legacy key */
 	if (conn->key_type < 3) {
-		BT_ERR("Legacy key type %d", conn->key_type);
+		bt_dev_err(hdev, "legacy key type %d", conn->key_type);
 		return -EACCES;
 	}
 
@@ -207,7 +199,7 @@ int phylink_gen_key(struct hci_conn *conn, u8 *data, u8 *len, u8 *type)
 	/* Derive Generic AMP Link Key (gamp) */
 	err = hmac_sha256(keybuf, HCI_AMP_LINK_KEY_SIZE, "gamp", 4, gamp_key);
 	if (err) {
-		BT_ERR("Could not derive Generic AMP Key: err %d", err);
+		bt_dev_err(hdev, "could not derive Generic AMP Key: err %d", err);
 		return err;
 	}
 
@@ -304,6 +296,9 @@ void amp_read_loc_assoc_final_data(struct hci_dev *hdev,
 	struct amp_mgr *mgr = hcon->amp_mgr;
 	struct hci_request req;
 	int err;
+
+	if (!mgr)
+		return;
 
 	cp.phy_handle = hcon->handle;
 	cp.len_so_far = cpu_to_le16(0);

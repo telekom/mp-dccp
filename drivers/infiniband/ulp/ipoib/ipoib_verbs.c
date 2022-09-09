@@ -52,7 +52,7 @@ int ipoib_mcast_attach(struct net_device *dev, struct ib_device *hca,
 
 	if (set_qkey) {
 		ret = -ENOMEM;
-		qp_attr = kmalloc(sizeof *qp_attr, GFP_KERNEL);
+		qp_attr = kmalloc(sizeof(*qp_attr), GFP_KERNEL);
 		if (!qp_attr)
 			goto out;
 
@@ -147,7 +147,7 @@ int ipoib_transport_dev_init(struct net_device *dev, struct ib_device *ca)
 		.cap = {
 			.max_send_wr  = ipoib_sendq_size,
 			.max_recv_wr  = ipoib_recvq_size,
-			.max_send_sge = min_t(u32, priv->ca->attrs.max_sge,
+			.max_send_sge = min_t(u32, priv->ca->attrs.max_send_sge,
 					      MAX_SKB_FRAGS + 1),
 			.max_recv_sge = IPOIB_UD_RX_SG
 		},
@@ -156,7 +156,7 @@ int ipoib_transport_dev_init(struct net_device *dev, struct ib_device *ca)
 	};
 	struct ib_cq_init_attr cq_attr = {};
 
-	int ret, size;
+	int ret, size, req_vec;
 	int i;
 
 	size = ipoib_recvq_size + 1;
@@ -168,22 +168,26 @@ int ipoib_transport_dev_init(struct net_device *dev, struct ib_device *ca)
 		else
 			size += ipoib_recvq_size * ipoib_max_conn_qp;
 	} else
-		if (ret != -ENOSYS)
-			return -ENODEV;
+		if (ret != -EOPNOTSUPP)
+			return ret;
+
+	req_vec = (priv->port - 1) * 2;
 
 	cq_attr.cqe = size;
-	priv->recv_cq = ib_create_cq(priv->ca, ipoib_ib_completion, NULL,
-				     dev, &cq_attr);
+	cq_attr.comp_vector = req_vec % priv->ca->num_comp_vectors;
+	priv->recv_cq = ib_create_cq(priv->ca, ipoib_ib_rx_completion, NULL,
+				     priv, &cq_attr);
 	if (IS_ERR(priv->recv_cq)) {
-		printk(KERN_WARNING "%s: failed to create receive CQ\n", ca->name);
+		pr_warn("%s: failed to create receive CQ\n", ca->name);
 		goto out_cm_dev_cleanup;
 	}
 
 	cq_attr.cqe = ipoib_sendq_size;
-	priv->send_cq = ib_create_cq(priv->ca, ipoib_send_comp_handler, NULL,
-				     dev, &cq_attr);
+	cq_attr.comp_vector = (req_vec + 1) % priv->ca->num_comp_vectors;
+	priv->send_cq = ib_create_cq(priv->ca, ipoib_ib_tx_completion, NULL,
+				     priv, &cq_attr);
 	if (IS_ERR(priv->send_cq)) {
-		printk(KERN_WARNING "%s: failed to create send CQ\n", ca->name);
+		pr_warn("%s: failed to create send CQ\n", ca->name);
 		goto out_free_recv_cq;
 	}
 
@@ -202,11 +206,17 @@ int ipoib_transport_dev_init(struct net_device *dev, struct ib_device *ca)
 	if (priv->hca_caps & IB_DEVICE_MANAGED_FLOW_STEERING)
 		init_attr.create_flags |= IB_QP_CREATE_NETIF_QP;
 
+	if (priv->hca_caps & IB_DEVICE_RDMA_NETDEV_OPA)
+		init_attr.create_flags |= IB_QP_CREATE_NETDEV_USE;
+
 	priv->qp = ib_create_qp(priv->pd, &init_attr);
 	if (IS_ERR(priv->qp)) {
-		printk(KERN_WARNING "%s: failed to create QP\n", ca->name);
+		pr_warn("%s: failed to create QP\n", ca->name);
 		goto out_free_send_cq;
 	}
+
+	if (ib_req_notify_cq(priv->send_cq, IB_CQ_NEXT_COMP))
+		goto out_free_send_cq;
 
 	for (i = 0; i < MAX_SKB_FRAGS + 1; ++i)
 		priv->tx_sge[i].lkey = priv->pd->local_dma_lkey;
@@ -253,11 +263,8 @@ void ipoib_transport_dev_cleanup(struct net_device *dev)
 		priv->qp = NULL;
 	}
 
-	if (ib_destroy_cq(priv->send_cq))
-		ipoib_warn(priv, "ib_cq_destroy (send) failed\n");
-
-	if (ib_destroy_cq(priv->recv_cq))
-		ipoib_warn(priv, "ib_cq_destroy (recv) failed\n");
+	ib_destroy_cq(priv->send_cq);
+	ib_destroy_cq(priv->recv_cq);
 }
 
 void ipoib_event(struct ib_event_handler *handler,
@@ -270,10 +277,9 @@ void ipoib_event(struct ib_event_handler *handler,
 		return;
 
 	ipoib_dbg(priv, "Event %d on device %s port %d\n", record->event,
-		  record->device->name, record->element.port_num);
+		  dev_name(&record->device->dev), record->element.port_num);
 
-	if (record->event == IB_EVENT_SM_CHANGE ||
-	    record->event == IB_EVENT_CLIENT_REREGISTER) {
+	if (record->event == IB_EVENT_CLIENT_REREGISTER) {
 		queue_work(ipoib_workqueue, &priv->flush_light);
 	} else if (record->event == IB_EVENT_PORT_ERR ||
 		   record->event == IB_EVENT_PORT_ACTIVE ||

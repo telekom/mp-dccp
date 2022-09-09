@@ -1,13 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * omap iommu: main structures
  *
  * Copyright (C) 2008-2009 Nokia Corporation
  *
  * Written by Hiroshi DOYU <Hiroshi.DOYU@nokia.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef _OMAP_IOMMU_H
@@ -29,17 +26,26 @@ struct iotlb_entry {
 };
 
 /**
+ * struct omap_iommu_device - omap iommu device data
+ * @pgtable:	page table used by an omap iommu attached to a domain
+ * @iommu_dev:	pointer to store an omap iommu instance attached to a domain
+ */
+struct omap_iommu_device {
+	u32 *pgtable;
+	struct omap_iommu *iommu_dev;
+};
+
+/**
  * struct omap_iommu_domain - omap iommu domain
- * @pgtable:	the page table
- * @iommu_dev:	an omap iommu device attached to this domain. only a single
- *		iommu device can be attached for now.
+ * @num_iommus: number of iommus in this domain
+ * @iommus:	omap iommu device data for all iommus in this domain
  * @dev:	Device using this domain.
  * @lock:	domain lock, should be taken when attaching/detaching
  * @domain:	generic domain handle used by iommu core code
  */
 struct omap_iommu_domain {
-	u32 *pgtable;
-	struct omap_iommu *iommu_dev;
+	u32 num_iommus;
+	struct omap_iommu_device *iommus;
 	struct device *dev;
 	spinlock_t lock;
 	struct iommu_domain domain;
@@ -67,16 +73,22 @@ struct omap_iommu {
 
 	void *ctx; /* iommu context: registres saved area */
 
+	struct cr_regs *cr_ctx;
+	u32 num_cr_ctx;
+
 	int has_bus_err_back;
 	u32 id;
 
 	struct iommu_device iommu;
 	struct iommu_group *group;
+
+	u8 pwrst;
 };
 
 /**
  * struct omap_iommu_arch_data - omap iommu private data
- * @iommu_dev: handle of the iommu device
+ * @iommu_dev: handle of the OMAP iommu device
+ * @dev: handle of the iommu device
  *
  * This is an omap iommu private data object, which binds an iommu user
  * to its iommu device. This object should be placed at the iommu user's
@@ -85,6 +97,7 @@ struct omap_iommu {
  */
 struct omap_iommu_arch_data {
 	struct omap_iommu *iommu_dev;
+	struct device *dev;
 };
 
 struct cr_regs {
@@ -96,17 +109,6 @@ struct iotlb_lock {
 	short base;
 	short vict;
 };
-
-/**
- * dev_to_omap_iommu() - retrieves an omap iommu object from a user device
- * @dev: iommu client device
- */
-static inline struct omap_iommu *dev_to_omap_iommu(struct device *dev)
-{
-	struct omap_iommu_arch_data *arch_data = dev->archdata.iommu;
-
-	return arch_data->iommu_dev;
-}
 
 /*
  * MMU Register offsets

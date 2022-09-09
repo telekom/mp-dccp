@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * motu-hwdep.c - a part of driver for MOTU FireWire series
  *
  * Copyright (c) 2015-2017 Takashi Sakamoto <o-takashi@sakamocchi.jp>
- *
- * Licensed under the terms of the GNU General Public License, version 2.
  */
 
 /*
@@ -59,22 +58,22 @@ static long hwdep_read(struct snd_hwdep *hwdep, char __user *buf, long count,
 	return count;
 }
 
-static unsigned int hwdep_poll(struct snd_hwdep *hwdep, struct file *file,
+static __poll_t hwdep_poll(struct snd_hwdep *hwdep, struct file *file,
 			       poll_table *wait)
 {
 	struct snd_motu *motu = hwdep->private_data;
-	unsigned int events;
+	__poll_t events;
 
 	poll_wait(file, &motu->hwdep_wait, wait);
 
 	spin_lock_irq(&motu->lock);
 	if (motu->dev_lock_changed || motu->msg)
-		events = POLLIN | POLLRDNORM;
+		events = EPOLLIN | EPOLLRDNORM;
 	else
 		events = 0;
 	spin_unlock_irq(&motu->lock);
 
-	return events | POLLOUT;
+	return events | EPOLLOUT;
 }
 
 static int hwdep_get_info(struct snd_motu *motu, void __user *arg)

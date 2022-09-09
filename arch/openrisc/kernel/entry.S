@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * OpenRISC entry.S
  *
@@ -9,14 +10,10 @@
  * Copyright (C) 2003 Matjaz Breskvar <phoenix@bsemi.com>
  * Copyright (C) 2005 Gyorgy Jeney <nog@bsemi.com>
  * Copyright (C) 2010-2011 Jonas Bonn <jonas@southpole.se>
- *
- *      This program is free software; you can redistribute it and/or
- *      modify it under the terms of the GNU General Public License
- *      as published by the Free Software Foundation; either version
- *      2 of the License, or (at your option) any later version.
  */
 
 #include <linux/linkage.h>
+#include <linux/pgtable.h>
 
 #include <asm/processor.h>
 #include <asm/unistd.h>
@@ -25,7 +22,6 @@
 #include <asm/spr_defs.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
-#include <asm/pgtable.h>
 #include <asm/asm-offsets.h>
 
 #define DISABLE_INTERRUPTS(t1,t2)			\
@@ -41,6 +37,61 @@
 	l.mtspr	r0,t1,SPR_SR
 
 /* =========================================================[ macros ]=== */
+
+#ifdef CONFIG_TRACE_IRQFLAGS
+/*
+ * Trace irq on/off creating a stack frame.
+ */
+#define TRACE_IRQS_OP(trace_op)					\
+	l.sw 	-8(r1),r2	/* store frame pointer */		;\
+	l.sw	-4(r1),r9	/* store return address */		;\
+	l.addi	r2,r1,0		/* move sp to fp */			;\
+	l.jal	trace_op						;\
+	 l.addi	r1,r1,-8						;\
+	l.ori	r1,r2,0		/* restore sp */			;\
+	l.lwz	r9,-4(r1)	/* restore return address */		;\
+	l.lwz	r2,-8(r1)	/* restore fp */			;\
+/*
+ * Trace irq on/off and save registers we need that would otherwise be
+ * clobbered.
+ */
+#define TRACE_IRQS_SAVE(t1,trace_op)					\
+	l.sw	-12(r1),t1	/* save extra reg */			;\
+	l.sw 	-8(r1),r2	/* store frame pointer */		;\
+	l.sw	-4(r1),r9	/* store return address */		;\
+	l.addi	r2,r1,0		/* move sp to fp */			;\
+	l.jal	trace_op						;\
+	 l.addi	r1,r1,-12						;\
+	l.ori	r1,r2,0		/* restore sp */			;\
+	l.lwz	r9,-4(r1)	/* restore return address */		;\
+	l.lwz	r2,-8(r1)	/* restore fp */			;\
+	l.lwz	t1,-12(r1)	/* restore extra reg */
+
+#define TRACE_IRQS_OFF	TRACE_IRQS_OP(trace_hardirqs_off)
+#define TRACE_IRQS_ON	TRACE_IRQS_OP(trace_hardirqs_on)
+#define TRACE_IRQS_ON_SYSCALL						\
+	TRACE_IRQS_SAVE(r10,trace_hardirqs_on)				;\
+	l.lwz	r3,PT_GPR3(r1)						;\
+	l.lwz	r4,PT_GPR4(r1)						;\
+	l.lwz	r5,PT_GPR5(r1)						;\
+	l.lwz	r6,PT_GPR6(r1)						;\
+	l.lwz	r7,PT_GPR7(r1)						;\
+	l.lwz	r8,PT_GPR8(r1)						;\
+	l.lwz	r11,PT_GPR11(r1)
+#define TRACE_IRQS_OFF_ENTRY						\
+	l.lwz	r5,PT_SR(r1)						;\
+	l.andi	r3,r5,(SPR_SR_IEE|SPR_SR_TEE)				;\
+	l.sfeq	r5,r0		/* skip trace if irqs were already off */;\
+	l.bf	1f							;\
+	 l.nop								;\
+	TRACE_IRQS_SAVE(r4,trace_hardirqs_off)				;\
+1:
+#else
+#define TRACE_IRQS_OFF
+#define TRACE_IRQS_ON
+#define TRACE_IRQS_OFF_ENTRY
+#define TRACE_IRQS_ON_SYSCALL
+#endif
 
 /*
  * We need to disable interrupts at beginning of RESTORE_ALL
@@ -124,6 +175,7 @@ handler:							;\
 	/* r30 already save */					;\
 /*        l.sw    PT_GPR30(r1),r30*/					;\
 	l.sw    PT_GPR31(r1),r31					;\
+	TRACE_IRQS_OFF_ENTRY						;\
 	/* Store -1 in orig_gpr11 for non-syscall exceptions */	;\
 	l.addi	r30,r0,-1					;\
 	l.sw	PT_ORIG_GPR11(r1),r30
@@ -184,7 +236,7 @@ handler:							;\
  *	 occured. in fact they never do. if you need them use
  *	 values saved on stack (for SPR_EPC, SPR_ESR) or content
  *       of r4 (for SPR_EEAR). for details look at EXCEPTION_HANDLE()
- *       in 'arch/or32/kernel/head.S'
+ *       in 'arch/openrisc/kernel/head.S'
  */
 
 /* =====================================================[ exceptions] === */
@@ -495,6 +547,7 @@ EXCEPTION_ENTRY(_external_irq_handler)
 	l.bnf	1f			// ext irq enabled, all ok.
 	l.nop
 
+#ifdef CONFIG_PRINTK
 	l.addi  r1,r1,-0x8
 	l.movhi r3,hi(42f)
 	l.ori	r3,r3,lo(42f)
@@ -508,6 +561,7 @@ EXCEPTION_ENTRY(_external_irq_handler)
 		.string "\n\rESR interrupt bug: in _external_irq_handler (ESR %x)\n\r"
 		.align 4
 	.previous
+#endif
 
 	l.ori	r4,r4,SPR_SR_IEE	// fix the bug
 //	l.sw	PT_SR(r1),r4
@@ -551,9 +605,6 @@ _string_syscall_return:
 	.align 4
 
 ENTRY(_sys_call_handler)
-	/* syscalls run with interrupts enabled */
-	ENABLE_INTERRUPTS(r29)		// enable interrupts, r29 is temp
-
 	/* r1, EPCR, ESR a already saved */
 	l.sw	PT_GPR2(r1),r2
 	/* r3-r8 must be saved because syscall restart relies
@@ -591,6 +642,10 @@ ENTRY(_sys_call_handler)
 /*	l.sw    PT_GPR30(r1),r30 */
 
 _syscall_check_trace_enter:
+	/* syscalls run with interrupts enabled */
+	TRACE_IRQS_ON_SYSCALL
+	ENABLE_INTERRUPTS(r29)		// enable interrupts, r29 is temp
+
 	/* If TIF_SYSCALL_TRACE is set, then we want to do syscall tracing */
 	l.lwz	r30,TI_FLAGS(r10)
 	l.andi	r30,r30,_TIF_SYSCALL_TRACE
@@ -651,6 +706,7 @@ _syscall_check_trace_leave:
 _syscall_check_work:
 	/* Here we need to disable interrupts */
 	DISABLE_INTERRUPTS(r27,r29)
+	TRACE_IRQS_OFF
 	l.lwz	r30,TI_FLAGS(r10)
 	l.andi	r30,r30,_TIF_WORK_MASK
 	l.sfne	r30,r0
@@ -865,6 +921,7 @@ UNHANDLED_EXCEPTION(_vector_0x1f00,0x1f00)
 
 _resume_userspace:
 	DISABLE_INTERRUPTS(r3,r4)
+	TRACE_IRQS_OFF
 	l.lwz	r4,TI_FLAGS(r10)
 	l.andi	r13,r4,_TIF_WORK_MASK
 	l.sfeqi	r13,0
@@ -903,6 +960,15 @@ _work_pending:
 	 l.lwz	r8,PT_GPR8(r1)
 
 _restore_all:
+#ifdef CONFIG_TRACE_IRQFLAGS
+	l.lwz	r4,PT_SR(r1)
+	l.andi	r3,r4,(SPR_SR_IEE|SPR_SR_TEE)
+	l.sfeq	r3,r0		/* skip trace if irqs were off */
+	l.bf	skip_hardirqs_on
+	 l.nop
+	TRACE_IRQS_ON
+skip_hardirqs_on:
+#endif
 	RESTORE_ALL
 	/* This returns to userspace code */
 
@@ -1102,13 +1168,18 @@ ENTRY(__sys_clone)
 	l.movhi	r29,hi(sys_clone)
 	l.ori	r29,r29,lo(sys_clone)
 	l.j	_fork_save_extra_regs_and_call
-	 l.addi	r7,r1,0
+	 l.nop
+
+ENTRY(__sys_clone3)
+	l.movhi	r29,hi(sys_clone3)
+	l.j	_fork_save_extra_regs_and_call
+	 l.ori	r29,r29,lo(sys_clone3)
 
 ENTRY(__sys_fork)
 	l.movhi	r29,hi(sys_fork)
 	l.ori	r29,r29,lo(sys_fork)
 	l.j	_fork_save_extra_regs_and_call
-	 l.addi	r3,r1,0
+	 l.nop
 
 ENTRY(sys_rt_sigreturn)
 	l.jal	_sys_rt_sigreturn

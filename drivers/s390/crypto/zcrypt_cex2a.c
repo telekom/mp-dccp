@@ -1,6 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
- *  zcrypt 2.1.0
- *
  *  Copyright IBM Corp. 2001, 2012
  *  Author(s): Robert Burroughs
  *	       Eric Rossman (edrossma@us.ibm.com)
@@ -9,20 +8,6 @@
  *  Major cleanup & driver split: Martin Schwidefsky <schwidefsky@de.ibm.com>
  *				  Ralph Wuerthner <rwuerthn@de.ibm.com>
  *  MSGTYPE restruct:		  Holger Dengler <hd@linux.vnet.ibm.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/module.h>
@@ -56,8 +41,8 @@
 #define CEX3A_CLEANUP_TIME	CEX2A_CLEANUP_TIME
 
 MODULE_AUTHOR("IBM Corporation");
-MODULE_DESCRIPTION("CEX2A Cryptographic Coprocessor device driver, " \
-		   "Copyright IBM Corp. 2001, 2012");
+MODULE_DESCRIPTION("CEX2A/CEX3A Cryptographic Coprocessor device driver, " \
+		   "Copyright IBM Corp. 2001, 2018");
 MODULE_LICENSE("GPL");
 
 static struct ap_device_id zcrypt_cex2a_card_ids[] = {
@@ -109,8 +94,7 @@ static int zcrypt_cex2a_card_probe(struct ap_device *ap_dev)
 	if (ac->ap_dev.device_type == AP_DEVICE_TYPE_CEX2A) {
 		zc->min_mod_size = CEX2A_MIN_MOD_SIZE;
 		zc->max_mod_size = CEX2A_MAX_MOD_SIZE;
-		memcpy(zc->speed_rating, CEX2A_SPEED_IDX,
-		       sizeof(CEX2A_SPEED_IDX));
+		zc->speed_rating = CEX2A_SPEED_IDX;
 		zc->max_exp_bit_length = CEX2A_MAX_MOD_SIZE;
 		zc->type_string = "CEX2A";
 		zc->user_space_type = ZCRYPT_CEX2A;
@@ -123,8 +107,7 @@ static int zcrypt_cex2a_card_probe(struct ap_device *ap_dev)
 			zc->max_mod_size = CEX3A_MAX_MOD_SIZE;
 			zc->max_exp_bit_length = CEX3A_MAX_MOD_SIZE;
 		}
-		memcpy(zc->speed_rating, CEX3A_SPEED_IDX,
-		       sizeof(CEX3A_SPEED_IDX));
+		zc->speed_rating = CEX3A_SPEED_IDX;
 		zc->type_string = "CEX3A";
 		zc->user_space_type = ZCRYPT_CEX3A;
 	} else {
@@ -158,6 +141,7 @@ static struct ap_driver zcrypt_cex2a_card_driver = {
 	.probe = zcrypt_cex2a_card_probe,
 	.remove = zcrypt_cex2a_card_remove,
 	.ids = zcrypt_cex2a_card_ids,
+	.flags = AP_DRIVER_FLAG_DEFAULT,
 };
 
 /**
@@ -189,6 +173,7 @@ static int zcrypt_cex2a_queue_probe(struct ap_device *ap_dev)
 	zq->queue = aq;
 	zq->online = 1;
 	atomic_set(&zq->load, 0);
+	ap_queue_init_state(aq);
 	ap_queue_init_reply(aq, &zq->reply);
 	aq->request_timeout = CEX2A_CLEANUP_TIME,
 	aq->private = zq;
@@ -210,7 +195,6 @@ static void zcrypt_cex2a_queue_remove(struct ap_device *ap_dev)
 	struct ap_queue *aq = to_ap_queue(&ap_dev->device);
 	struct zcrypt_queue *zq = aq->private;
 
-	ap_queue_remove(aq);
 	if (zq)
 		zcrypt_queue_unregister(zq);
 }
@@ -218,9 +202,8 @@ static void zcrypt_cex2a_queue_remove(struct ap_device *ap_dev)
 static struct ap_driver zcrypt_cex2a_queue_driver = {
 	.probe = zcrypt_cex2a_queue_probe,
 	.remove = zcrypt_cex2a_queue_remove,
-	.suspend = ap_queue_suspend,
-	.resume = ap_queue_resume,
 	.ids = zcrypt_cex2a_queue_ids,
+	.flags = AP_DRIVER_FLAG_DEFAULT,
 };
 
 int __init zcrypt_cex2a_init(void)

@@ -92,7 +92,7 @@ struct mpdccp_pm_ops *mpdccp_pm_find(const char *name);
 
 
 int mpdccp_pm_default_register(void);
-
 void mpdccp_pm_default_unregister (void);
 
 #endif /* _MPDCCP_PM_H */
+

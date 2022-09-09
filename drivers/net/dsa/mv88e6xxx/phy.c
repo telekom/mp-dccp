@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Marvell 88e6xxx Ethernet switch PHY and PPU support
  *
  * Copyright (c) 2008 Marvell Semiconductor
  *
  * Copyright (c) 2017 Andrew Lunn <andrew@lunn.ch>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/mdio.h>
@@ -141,7 +137,7 @@ static void mv88e6xxx_phy_ppu_reenable_work(struct work_struct *ugly)
 
 	chip = container_of(ugly, struct mv88e6xxx_chip, ppu_work);
 
-	mutex_lock(&chip->reg_lock);
+	mv88e6xxx_reg_lock(chip);
 
 	if (mutex_trylock(&chip->ppu_mutex)) {
 		if (mv88e6xxx_phy_ppu_enable(chip) == 0)
@@ -149,12 +145,12 @@ static void mv88e6xxx_phy_ppu_reenable_work(struct work_struct *ugly)
 		mutex_unlock(&chip->ppu_mutex);
 	}
 
-	mutex_unlock(&chip->reg_lock);
+	mv88e6xxx_reg_unlock(chip);
 }
 
-static void mv88e6xxx_phy_ppu_reenable_timer(unsigned long _ps)
+static void mv88e6xxx_phy_ppu_reenable_timer(struct timer_list *t)
 {
-	struct mv88e6xxx_chip *chip = (void *)_ps;
+	struct mv88e6xxx_chip *chip = from_timer(chip, t, ppu_timer);
 
 	schedule_work(&chip->ppu_work);
 }
@@ -196,8 +192,7 @@ static void mv88e6xxx_phy_ppu_state_init(struct mv88e6xxx_chip *chip)
 {
 	mutex_init(&chip->ppu_mutex);
 	INIT_WORK(&chip->ppu_work, mv88e6xxx_phy_ppu_reenable_work);
-	setup_timer(&chip->ppu_timer, mv88e6xxx_phy_ppu_reenable_timer,
-		    (unsigned long)chip);
+	timer_setup(&chip->ppu_timer, mv88e6xxx_phy_ppu_reenable_timer, 0);
 }
 
 static void mv88e6xxx_phy_ppu_state_destroy(struct mv88e6xxx_chip *chip)

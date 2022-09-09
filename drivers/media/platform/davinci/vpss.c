@@ -1,15 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2009 Texas Instruments.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * common vpss system module platform driver for all video drivers.
  */
@@ -59,9 +50,9 @@ MODULE_AUTHOR("Texas Instruments");
 #define DM365_ISP5_INTSEL1		0x10
 #define DM365_ISP5_INTSEL2		0x14
 #define DM365_ISP5_INTSEL3		0x18
-#define DM365_ISP5_CCDCMUX 		0x20
-#define DM365_ISP5_PG_FRAME_SIZE 	0x28
-#define DM365_VPBE_CLK_CTRL 		0x00
+#define DM365_ISP5_CCDCMUX		0x20
+#define DM365_ISP5_PG_FRAME_SIZE	0x28
+#define DM365_VPBE_CLK_CTRL		0x00
 
 #define VPSS_CLK_CTRL			0x01c40044
 #define VPSS_CLK_CTRL_VENCCLKEN		BIT(3)
@@ -78,8 +69,8 @@ MODULE_AUTHOR("Texas Instruments");
 #define DM365_ISP5_INTSEL3_DEFAULT	0x00000015
 
 /* masks and shifts for DM365*/
-#define DM365_CCDC_PG_VD_POL_SHIFT 	0
-#define DM365_CCDC_PG_HD_POL_SHIFT 	1
+#define DM365_CCDC_PG_VD_POL_SHIFT	0
+#define DM365_CCDC_PG_HD_POL_SHIFT	1
 
 #define CCD_SRC_SEL_MASK		(BIT_MASK(5) | BIT_MASK(4))
 #define CCD_SRC_SEL_SHIFT		4
@@ -116,7 +107,7 @@ struct vpss_hw_ops {
 struct vpss_oper_config {
 	__iomem void *vpss_regs_base0;
 	__iomem void *vpss_regs_base1;
-	resource_size_t *vpss_regs_base2;
+	__iomem void *vpss_regs_base2;
 	enum vpss_platform_type platform;
 	spinlock_t vpss_lock;
 	struct vpss_hw_ops hw_ops;
@@ -507,21 +498,38 @@ static struct platform_driver vpss_driver = {
 
 static void vpss_exit(void)
 {
+	platform_driver_unregister(&vpss_driver);
 	iounmap(oper_cfg.vpss_regs_base2);
 	release_mem_region(VPSS_CLK_CTRL, 4);
-	platform_driver_unregister(&vpss_driver);
 }
 
 static int __init vpss_init(void)
 {
+	int ret;
+
 	if (!request_mem_region(VPSS_CLK_CTRL, 4, "vpss_clock_control"))
 		return -EBUSY;
 
 	oper_cfg.vpss_regs_base2 = ioremap(VPSS_CLK_CTRL, 4);
-	writel(VPSS_CLK_CTRL_VENCCLKEN |
-		     VPSS_CLK_CTRL_DACCLKEN, oper_cfg.vpss_regs_base2);
+	if (unlikely(!oper_cfg.vpss_regs_base2)) {
+		ret = -ENOMEM;
+		goto err_ioremap;
+	}
 
-	return platform_driver_register(&vpss_driver);
+	writel(VPSS_CLK_CTRL_VENCCLKEN |
+	       VPSS_CLK_CTRL_DACCLKEN, oper_cfg.vpss_regs_base2);
+
+	ret = platform_driver_register(&vpss_driver);
+	if (ret)
+		goto err_pd_register;
+
+	return 0;
+
+err_pd_register:
+	iounmap(oper_cfg.vpss_regs_base2);
+err_ioremap:
+	release_mem_region(VPSS_CLK_CTRL, 4);
+	return ret;
 }
 subsys_initcall(vpss_init);
 module_exit(vpss_exit);

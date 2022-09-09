@@ -1,19 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * GPIO driver for EXAR XRA1403 16-bit GPIO expander
  *
  * Copyright (c) 2017, General Electric Company
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/bitops.h>
@@ -39,6 +28,7 @@
 #define XRA_REIR  0x10 /* Input Rising Edge Interrupt Enable */
 #define XRA_FEIR  0x12 /* Input Falling Edge Interrupt Enable */
 #define XRA_IFR   0x14 /* Input Filter Enable/Disable */
+#define XRA_LAST  0x15 /* Bounds */
 
 struct xra1403 {
 	struct gpio_chip  chip;
@@ -50,7 +40,7 @@ static const struct regmap_config xra1403_regmap_cfg = {
 		.pad_bits = 1,
 		.val_bits = 8,
 
-		.max_register = XRA_IFR | 0x01,
+		.max_register = XRA_LAST,
 };
 
 static unsigned int to_reg(unsigned int reg, unsigned int offset)
@@ -93,7 +83,10 @@ static int xra1403_get_direction(struct gpio_chip *chip, unsigned int offset)
 	if (ret)
 		return ret;
 
-	return !!(val & BIT(offset % 8));
+	if (val & BIT(offset % 8))
+		return GPIO_LINE_DIRECTION_IN;
+
+	return GPIO_LINE_DIRECTION_OUT;
 }
 
 static int xra1403_get(struct gpio_chip *chip, unsigned int offset)
@@ -126,16 +119,17 @@ static void xra1403_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 {
 	int reg;
 	struct xra1403 *xra = gpiochip_get_data(chip);
-	int value[xra1403_regmap_cfg.max_register];
+	int value[XRA_LAST];
 	int i;
+	const char *label;
 	unsigned int gcr;
 	unsigned int gsr;
 
 	seq_puts(s, "xra reg:");
-	for (reg = 0; reg <= xra1403_regmap_cfg.max_register; reg++)
+	for (reg = 0; reg <= XRA_LAST; reg++)
 		seq_printf(s, " %2.2x", reg);
 	seq_puts(s, "\n  value:");
-	for (reg = 0; reg < xra1403_regmap_cfg.max_register; reg++) {
+	for (reg = 0; reg < XRA_LAST; reg++) {
 		regmap_read(xra->regmap, reg, &value[reg]);
 		seq_printf(s, " %2.2x", value[reg]);
 	}
@@ -143,12 +137,7 @@ static void xra1403_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 
 	gcr = value[XRA_GCR + 1] << 8 | value[XRA_GCR];
 	gsr = value[XRA_GSR + 1] << 8 | value[XRA_GSR];
-	for (i = 0; i < chip->ngpio; i++) {
-		const char *label = gpiochip_is_requested(chip, i);
-
-		if (!label)
-			continue;
-
+	for_each_requested_gpio(chip, i, label) {
 		seq_printf(s, " gpio-%-3d (%-12s) %s %s\n",
 			   chip->base + i, label,
 			   (gcr & BIT(i)) ? "in" : "out",

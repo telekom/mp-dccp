@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * hangcheck-timer.c
  *
@@ -6,20 +7,6 @@
  * Copyright (C) 2002, 2003 Oracle.  All rights reserved.
  *
  * Author: Joel Becker <joel.becker@oracle.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public
- * License version 2 as published by the Free Software Foundation.
- * 
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- * 
- * You should have received a copy of the GNU General Public
- * License along with this program; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 021110-1307, USA.
  */
 
 /*
@@ -122,11 +109,11 @@ __setup("hcheck_dump_tasks", hangcheck_parse_dump_tasks);
 /* Last time scheduled */
 static unsigned long long hangcheck_tsc, hangcheck_tsc_margin;
 
-static void hangcheck_fire(unsigned long);
+static void hangcheck_fire(struct timer_list *);
 
-static DEFINE_TIMER(hangcheck_ticktock, hangcheck_fire, 0, 0);
+static DEFINE_TIMER(hangcheck_ticktock, hangcheck_fire);
 
-static void hangcheck_fire(unsigned long data)
+static void hangcheck_fire(struct timer_list *unused)
 {
 	unsigned long long cur_tsc, tsc_diff;
 

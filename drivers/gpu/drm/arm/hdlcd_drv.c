@@ -13,19 +13,27 @@
 #include <linux/spinlock.h>
 #include <linux/clk.h>
 #include <linux/component.h>
+#include <linux/console.h>
+#include <linux/dma-mapping.h>
 #include <linux/list.h>
 #include <linux/of_graph.h>
 #include <linux/of_reserved_mem.h>
+#include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 
-#include <drm/drmP.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_fb_helper.h>
+#include <drm/drm_debugfs.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_fb_cma_helper.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_gem_cma_helper.h>
+#include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_irq.h>
+#include <drm/drm_modeset_helper.h>
 #include <drm/drm_of.h>
+#include <drm/drm_probe_helper.h>
+#include <drm/drm_vblank.h>
 
 #include "hdlcd_drv.h"
 #include "hdlcd_regs.h"
@@ -98,16 +106,8 @@ setup_fail:
 	return ret;
 }
 
-static void hdlcd_fb_output_poll_changed(struct drm_device *drm)
-{
-	struct hdlcd_drm_private *hdlcd = drm->dev_private;
-
-	drm_fbdev_cma_hotplug_event(hdlcd->fbdev);
-}
-
 static const struct drm_mode_config_funcs hdlcd_mode_config_funcs = {
-	.fb_create = drm_fb_cma_create,
-	.output_poll_changed = hdlcd_fb_output_poll_changed,
+	.fb_create = drm_gem_fb_create,
 	.atomic_check = drm_atomic_helper_check,
 	.atomic_commit = drm_atomic_helper_commit,
 };
@@ -120,13 +120,6 @@ static void hdlcd_setup_mode_config(struct drm_device *drm)
 	drm->mode_config.max_width = HDLCD_MAX_XRES;
 	drm->mode_config.max_height = HDLCD_MAX_YRES;
 	drm->mode_config.funcs = &hdlcd_mode_config_funcs;
-}
-
-static void hdlcd_lastclose(struct drm_device *drm)
-{
-	struct hdlcd_drm_private *hdlcd = drm->dev_private;
-
-	drm_fbdev_cma_restore_mode(hdlcd->fbdev);
 }
 
 static irqreturn_t hdlcd_irq(int irq, void *arg)
@@ -229,39 +222,25 @@ static int hdlcd_show_pxlclock(struct seq_file *m, void *arg)
 static struct drm_info_list hdlcd_debugfs_list[] = {
 	{ "interrupt_count", hdlcd_show_underrun_count, 0 },
 	{ "clocks", hdlcd_show_pxlclock, 0 },
-	{ "fb", drm_fb_cma_debugfs_show, 0 },
 };
 
-static int hdlcd_debugfs_init(struct drm_minor *minor)
+static void hdlcd_debugfs_init(struct drm_minor *minor)
 {
-	return drm_debugfs_create_files(hdlcd_debugfs_list,
-		ARRAY_SIZE(hdlcd_debugfs_list),	minor->debugfs_root, minor);
+	drm_debugfs_create_files(hdlcd_debugfs_list,
+				 ARRAY_SIZE(hdlcd_debugfs_list),
+				 minor->debugfs_root, minor);
 }
 #endif
 
 DEFINE_DRM_GEM_CMA_FOPS(fops);
 
 static struct drm_driver hdlcd_driver = {
-	.driver_features = DRIVER_HAVE_IRQ | DRIVER_GEM |
-			   DRIVER_MODESET | DRIVER_PRIME |
-			   DRIVER_ATOMIC,
-	.lastclose = hdlcd_lastclose,
+	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.irq_handler = hdlcd_irq,
 	.irq_preinstall = hdlcd_irq_preinstall,
 	.irq_postinstall = hdlcd_irq_postinstall,
 	.irq_uninstall = hdlcd_irq_uninstall,
-	.gem_free_object_unlocked = drm_gem_cma_free_object,
-	.gem_vm_ops = &drm_gem_cma_vm_ops,
-	.dumb_create = drm_gem_cma_dumb_create,
-	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
-	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
-	.gem_prime_export = drm_gem_prime_export,
-	.gem_prime_import = drm_gem_prime_import,
-	.gem_prime_get_sg_table = drm_gem_cma_prime_get_sg_table,
-	.gem_prime_import_sg_table = drm_gem_cma_prime_import_sg_table,
-	.gem_prime_vmap = drm_gem_cma_prime_vmap,
-	.gem_prime_vunmap = drm_gem_cma_prime_vunmap,
-	.gem_prime_mmap = drm_gem_cma_prime_mmap,
+	DRM_GEM_CMA_DRIVER_OPS,
 #ifdef CONFIG_DEBUG_FS
 	.debugfs_init = hdlcd_debugfs_init,
 #endif
@@ -319,31 +298,20 @@ static int hdlcd_drm_bind(struct device *dev)
 	drm_mode_config_reset(drm);
 	drm_kms_helper_poll_init(drm);
 
-	hdlcd->fbdev = drm_fbdev_cma_init(drm, 32,
-					  drm->mode_config.num_connector);
-
-	if (IS_ERR(hdlcd->fbdev)) {
-		ret = PTR_ERR(hdlcd->fbdev);
-		hdlcd->fbdev = NULL;
-		goto err_fbdev;
-	}
-
 	ret = drm_dev_register(drm, 0);
 	if (ret)
 		goto err_register;
 
+	drm_fbdev_generic_setup(drm, 32);
+
 	return 0;
 
 err_register:
-	if (hdlcd->fbdev) {
-		drm_fbdev_cma_fini(hdlcd->fbdev);
-		hdlcd->fbdev = NULL;
-	}
-err_fbdev:
 	drm_kms_helper_poll_fini(drm);
 err_vblank:
 	pm_runtime_disable(drm->dev);
 err_pm_active:
+	drm_atomic_helper_shutdown(drm);
 	component_unbind_all(dev, drm);
 err_unload:
 	of_node_put(hdlcd->crtc.port);
@@ -353,7 +321,7 @@ err_unload:
 err_free:
 	drm_mode_config_cleanup(drm);
 	dev_set_drvdata(dev, NULL);
-	drm_dev_unref(drm);
+	drm_dev_put(drm);
 
 	return ret;
 }
@@ -364,23 +332,21 @@ static void hdlcd_drm_unbind(struct device *dev)
 	struct hdlcd_drm_private *hdlcd = drm->dev_private;
 
 	drm_dev_unregister(drm);
-	if (hdlcd->fbdev) {
-		drm_fbdev_cma_fini(hdlcd->fbdev);
-		hdlcd->fbdev = NULL;
-	}
 	drm_kms_helper_poll_fini(drm);
 	component_unbind_all(dev, drm);
 	of_node_put(hdlcd->crtc.port);
 	hdlcd->crtc.port = NULL;
-	pm_runtime_get_sync(drm->dev);
+	pm_runtime_get_sync(dev);
+	drm_atomic_helper_shutdown(drm);
 	drm_irq_uninstall(drm);
-	pm_runtime_put_sync(drm->dev);
-	pm_runtime_disable(drm->dev);
-	of_reserved_mem_device_release(drm->dev);
+	pm_runtime_put(dev);
+	if (pm_runtime_enabled(dev))
+		pm_runtime_disable(dev);
+	of_reserved_mem_device_release(dev);
 	drm_mode_config_cleanup(drm);
-	drm_dev_unref(drm);
 	drm->dev_private = NULL;
 	dev_set_drvdata(dev, NULL);
+	drm_dev_put(drm);
 }
 
 static const struct component_master_ops hdlcd_master_ops = {
@@ -425,33 +391,15 @@ MODULE_DEVICE_TABLE(of, hdlcd_of_match);
 static int __maybe_unused hdlcd_pm_suspend(struct device *dev)
 {
 	struct drm_device *drm = dev_get_drvdata(dev);
-	struct hdlcd_drm_private *hdlcd = drm ? drm->dev_private : NULL;
 
-	if (!hdlcd)
-		return 0;
-
-	drm_kms_helper_poll_disable(drm);
-
-	hdlcd->state = drm_atomic_helper_suspend(drm);
-	if (IS_ERR(hdlcd->state)) {
-		drm_kms_helper_poll_enable(drm);
-		return PTR_ERR(hdlcd->state);
-	}
-
-	return 0;
+	return drm_mode_config_helper_suspend(drm);
 }
 
 static int __maybe_unused hdlcd_pm_resume(struct device *dev)
 {
 	struct drm_device *drm = dev_get_drvdata(dev);
-	struct hdlcd_drm_private *hdlcd = drm ? drm->dev_private : NULL;
 
-	if (!hdlcd)
-		return 0;
-
-	drm_atomic_helper_resume(drm, hdlcd->state);
-	drm_kms_helper_poll_enable(drm);
-	pm_runtime_set_active(dev);
+	drm_mode_config_helper_resume(drm);
 
 	return 0;
 }

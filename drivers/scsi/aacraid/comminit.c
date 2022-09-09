@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *	Adaptec AAC series RAID controller driver
  *	(c) Copyright 2001 Red Hat Inc.
@@ -9,26 +10,11 @@
  *               2010-2015 PMC-Sierra, Inc. (aacraid@pmc-sierra.com)
  *               2016-2017 Microsemi Corp. (aacraid@microsemi.com)
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; see the file COPYING.  If not, write to
- * the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
- *
  * Module Name:
  *  comminit.c
  *
  * Abstract: This supports the initialization of the host adapter commuication interface.
  *    This is a platform dependent module for the pci cyclone board.
- *
  */
 
 #include <linux/kernel.h>
@@ -42,6 +28,8 @@
 #include <linux/completion.h>
 #include <linux/mm.h>
 #include <scsi/scsi_host.h>
+#include <scsi/scsi_device.h>
+#include <scsi/scsi_cmnd.h>
 
 #include "aacraid.h"
 
@@ -284,6 +272,37 @@ static void aac_queue_init(struct aac_dev * dev, struct aac_queue * q, u32 *mem,
 	q->entries = qsize;
 }
 
+static bool wait_for_io_iter(struct scsi_cmnd *cmd, void *data, bool rsvd)
+{
+	int *active = data;
+
+	if (cmd->SCp.phase == AAC_OWNER_FIRMWARE)
+		*active = *active + 1;
+	return true;
+}
+static void aac_wait_for_io_completion(struct aac_dev *aac)
+{
+	int i = 0, active;
+
+	for (i = 60; i; --i) {
+
+		active = 0;
+		scsi_host_busy_iter(aac->scsi_host_ptr,
+				    wait_for_io_iter, &active);
+		/*
+		 * We can exit If all the commands are complete
+		 */
+		if (active == 0)
+			break;
+		dev_info(&aac->pdev->dev,
+			 "Wait for %d commands to complete\n", active);
+		ssleep(1);
+	}
+	if (active)
+		dev_err(&aac->pdev->dev,
+			"%d outstanding commands during shutdown\n", active);
+}
+
 /**
  *	aac_send_shutdown		-	shutdown an adapter
  *	@dev: Adapter to shutdown
@@ -295,18 +314,23 @@ int aac_send_shutdown(struct aac_dev * dev)
 {
 	struct fib * fibctx;
 	struct aac_close *cmd;
-	int status;
+	int status = 0;
 
-	fibctx = aac_fib_alloc(dev);
-	if (!fibctx)
-		return -ENOMEM;
-	aac_fib_init(fibctx);
+	if (aac_adapter_check_health(dev))
+		return status;
 
 	if (!dev->adapter_shutdown) {
 		mutex_lock(&dev->ioctl_mutex);
 		dev->adapter_shutdown = 1;
 		mutex_unlock(&dev->ioctl_mutex);
 	}
+
+	aac_wait_for_io_completion(dev);
+
+	fibctx = aac_fib_alloc(dev);
+	if (!fibctx)
+		return -ENOMEM;
+	aac_fib_init(fibctx);
 
 	cmd = (struct aac_close *) fib_data(fibctx);
 	cmd->command = cpu_to_le32(VM_CloseAll);
@@ -545,6 +569,11 @@ struct aac_dev *aac_init_adapter(struct aac_dev *dev)
 			dev->sa_firmware = 1;
 		else
 			dev->sa_firmware = 0;
+
+		if (status[4] & le32_to_cpu(AAC_EXTOPT_SOFT_RESET))
+			dev->soft_reset_support = 1;
+		else
+			dev->soft_reset_support = 0;
 
 		if ((dev->comm_interface == AAC_COMM_MESSAGE) &&
 		    (status[2] > dev->base_size)) {

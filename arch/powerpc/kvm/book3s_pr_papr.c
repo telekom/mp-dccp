@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2011. Freescale Inc. All rights reserved.
  *
@@ -9,10 +10,6 @@
  *
  * Hypercall handling for running PAPR guests in PR KVM on Book 3S
  * processors.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License, version 2, as
- * published by the Free Software Foundation.
  */
 
 #include <linux/anon_inodes.h>
@@ -419,6 +416,8 @@ int kvmppc_hcall_impl_pr(unsigned long cmd)
 	case H_PROTECT:
 	case H_BULK_REMOVE:
 	case H_PUT_TCE:
+	case H_PUT_TCE_INDIRECT:
+	case H_STUFF_TCE:
 	case H_CEDE:
 	case H_LOGICAL_CI_LOAD:
 	case H_LOGICAL_CI_STORE:

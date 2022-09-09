@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ff-midi.c - a part of driver for RME Fireface series
  *
  * Copyright (c) 2015-2017 Takashi Sakamoto
- *
- * Licensed under the terms of the GNU General Public License, version 2.
  */
 
 #include "ff.h"
@@ -19,10 +18,10 @@ static int midi_playback_open(struct snd_rawmidi_substream *substream)
 	struct snd_ff *ff = substream->rmidi->private_data;
 
 	/* Initialize internal status. */
-	ff->running_status[substream->number] = 0;
+	ff->on_sysex[substream->number] = 0;
 	ff->rx_midi_error[substream->number] = false;
 
-	ACCESS_ONCE(ff->rx_midi_substreams[substream->number]) = substream;
+	WRITE_ONCE(ff->rx_midi_substreams[substream->number], substream);
 
 	return 0;
 }
@@ -38,7 +37,7 @@ static int midi_playback_close(struct snd_rawmidi_substream *substream)
 	struct snd_ff *ff = substream->rmidi->private_data;
 
 	cancel_work_sync(&ff->rx_midi_work[substream->number]);
-	ACCESS_ONCE(ff->rx_midi_substreams[substream->number]) = NULL;
+	WRITE_ONCE(ff->rx_midi_substreams[substream->number], NULL);
 
 	return 0;
 }
@@ -52,10 +51,10 @@ static void midi_capture_trigger(struct snd_rawmidi_substream *substream,
 	spin_lock_irqsave(&ff->lock, flags);
 
 	if (up)
-		ACCESS_ONCE(ff->tx_midi_substreams[substream->number]) =
-								substream;
+		WRITE_ONCE(ff->tx_midi_substreams[substream->number],
+			   substream);
 	else
-		ACCESS_ONCE(ff->tx_midi_substreams[substream->number]) = NULL;
+		WRITE_ONCE(ff->tx_midi_substreams[substream->number], NULL);
 
 	spin_unlock_irqrestore(&ff->lock, flags);
 }

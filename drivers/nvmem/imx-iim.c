@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * i.MX IIM driver
  *
@@ -6,13 +7,6 @@
  * Based on the barebox iim driver,
  * Copyright (c) 2010 Baruch Siach <baruch@tkos.co.il>,
  *	Orex Computed Radiography
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
- *
- * http://www.opensource.org/licenses/gpl-license.html
- * http://www.gnu.org/copyleft/gpl.html
  */
 
 #include <linux/device.h>
@@ -34,7 +28,6 @@ struct imx_iim_drvdata {
 struct iim_priv {
 	void __iomem *base;
 	struct clk *clk;
-	struct nvmem_config nvmem;
 };
 
 static int imx_iim_read(void *context, unsigned int offset,
@@ -105,18 +98,16 @@ static int imx_iim_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *of_id;
 	struct device *dev = &pdev->dev;
-	struct resource *res;
 	struct iim_priv *iim;
 	struct nvmem_device *nvmem;
-	struct nvmem_config *cfg;
+	struct nvmem_config cfg = {};
 	const struct imx_iim_drvdata *drvdata = NULL;
 
 	iim = devm_kzalloc(dev, sizeof(*iim), GFP_KERNEL);
 	if (!iim)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	iim->base = devm_ioremap_resource(dev, res);
+	iim->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(iim->base))
 		return PTR_ERR(iim->base);
 
@@ -126,41 +117,26 @@ static int imx_iim_probe(struct platform_device *pdev)
 
 	drvdata = of_id->data;
 
-	iim->clk = devm_clk_get(&pdev->dev, NULL);
+	iim->clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(iim->clk))
 		return PTR_ERR(iim->clk);
 
-	cfg = &iim->nvmem;
+	cfg.name = "imx-iim",
+	cfg.read_only = true,
+	cfg.word_size = 1,
+	cfg.stride = 1,
+	cfg.reg_read = imx_iim_read,
+	cfg.dev = dev;
+	cfg.size = drvdata->nregs;
+	cfg.priv = iim;
 
-	cfg->name = "imx-iim",
-	cfg->read_only = true,
-	cfg->word_size = 1,
-	cfg->stride = 1,
-	cfg->owner = THIS_MODULE,
-	cfg->reg_read = imx_iim_read,
-	cfg->dev = dev;
-	cfg->size = drvdata->nregs;
-	cfg->priv = iim;
+	nvmem = devm_nvmem_register(dev, &cfg);
 
-	nvmem = nvmem_register(cfg);
-	if (IS_ERR(nvmem))
-		return PTR_ERR(nvmem);
-
-	platform_set_drvdata(pdev, nvmem);
-
-	return 0;
-}
-
-static int imx_iim_remove(struct platform_device *pdev)
-{
-	struct nvmem_device *nvmem = platform_get_drvdata(pdev);
-
-	return nvmem_unregister(nvmem);
+	return PTR_ERR_OR_ZERO(nvmem);
 }
 
 static struct platform_driver imx_iim_driver = {
 	.probe	= imx_iim_probe,
-	.remove	= imx_iim_remove,
 	.driver = {
 		.name	= "imx-iim",
 		.of_match_table = imx_iim_dt_ids,

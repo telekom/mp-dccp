@@ -27,15 +27,18 @@
 
 #include <linux/device.h>
 #include <linux/fs.h>
-#include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/sched/signal.h>
+#include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
-#include <drm/drm_dp_helper.h>
+
 #include <drm/drm_crtc.h>
-#include <drm/drmP.h>
+#include <drm/drm_dp_helper.h>
+#include <drm/drm_dp_mst_helper.h>
+#include <drm/drm_print.h>
 
 #include "drm_crtc_helper_internal.h"
 
@@ -60,7 +63,7 @@ static struct drm_dp_aux_dev *drm_dp_aux_dev_get_by_minor(unsigned index)
 
 	mutex_lock(&aux_idr_mutex);
 	aux_dev = idr_find(&aux_idr, index);
-	if (!kref_get_unless_zero(&aux_dev->refcount))
+	if (aux_dev && !kref_get_unless_zero(&aux_dev->refcount))
 		aux_dev = NULL;
 	mutex_unlock(&aux_idr_mutex);
 
@@ -80,8 +83,7 @@ static struct drm_dp_aux_dev *alloc_drm_dp_aux_dev(struct drm_dp_aux *aux)
 	kref_init(&aux_dev->refcount);
 
 	mutex_lock(&aux_idr_mutex);
-	index = idr_alloc_cyclic(&aux_idr, aux_dev, 0, DRM_AUX_MINORS,
-				 GFP_KERNEL);
+	index = idr_alloc(&aux_idr, aux_dev, 0, DRM_AUX_MINORS, GFP_KERNEL);
 	mutex_unlock(&aux_idr_mutex);
 	if (index < 0) {
 		kfree(aux_dev);
@@ -162,6 +164,7 @@ static ssize_t auxdev_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		}
 
 		res = drm_dp_dpcd_read(aux_dev->aux, pos, buf, todo);
+
 		if (res <= 0)
 			break;
 
@@ -177,8 +180,9 @@ static ssize_t auxdev_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		res = pos - iocb->ki_pos;
 	iocb->ki_pos = pos;
 
-	atomic_dec(&aux_dev->usecount);
-	wake_up_atomic_t(&aux_dev->usecount);
+	if (atomic_dec_and_test(&aux_dev->usecount))
+		wake_up_var(&aux_dev->usecount);
+
 	return res;
 }
 
@@ -208,6 +212,7 @@ static ssize_t auxdev_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		}
 
 		res = drm_dp_dpcd_write(aux_dev->aux, pos, buf, todo);
+
 		if (res <= 0)
 			break;
 
@@ -218,8 +223,9 @@ static ssize_t auxdev_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		res = pos - iocb->ki_pos;
 	iocb->ki_pos = pos;
 
-	atomic_dec(&aux_dev->usecount);
-	wake_up_atomic_t(&aux_dev->usecount);
+	if (atomic_dec_and_test(&aux_dev->usecount))
+		wake_up_var(&aux_dev->usecount);
+
 	return res;
 }
 
@@ -263,12 +269,6 @@ static struct drm_dp_aux_dev *drm_dp_aux_dev_get_by_aux(struct drm_dp_aux *aux)
 	return aux_dev;
 }
 
-static int auxdev_wait_atomic_t(atomic_t *p)
-{
-	schedule();
-	return 0;
-}
-
 void drm_dp_aux_unregister_devnode(struct drm_dp_aux *aux)
 {
 	struct drm_dp_aux_dev *aux_dev;
@@ -283,8 +283,7 @@ void drm_dp_aux_unregister_devnode(struct drm_dp_aux *aux)
 	mutex_unlock(&aux_idr_mutex);
 
 	atomic_dec(&aux_dev->usecount);
-	wait_on_atomic_t(&aux_dev->usecount, auxdev_wait_atomic_t,
-			 TASK_UNINTERRUPTIBLE);
+	wait_var_event(&aux_dev->usecount, !atomic_read(&aux_dev->usecount));
 
 	minor = aux_dev->index;
 	if (aux_dev->dev)

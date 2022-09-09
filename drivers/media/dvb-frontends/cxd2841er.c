@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * cxd2841er.c
  *
@@ -9,16 +10,6 @@
  * Copyright (C) 2014 NetUP Inc.
  * Copyright (C) 2014 Sergey Kozlov <serjk@netup.ru>
  * Copyright (C) 2014 Abylay Ospan <aospan@netup.ru>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
   */
 
 #include <linux/module.h>
@@ -29,9 +20,10 @@
 #include <linux/math64.h>
 #include <linux/log2.h>
 #include <linux/dynamic_debug.h>
+#include <linux/kernel.h>
 
-#include "dvb_math.h"
-#include "dvb_frontend.h"
+#include <media/dvb_math.h>
+#include <media/dvb_frontend.h>
 #include "cxd2841er.h"
 #include "cxd2841er_priv.h"
 
@@ -68,6 +60,7 @@ struct cxd2841er_priv {
 	enum cxd2841er_xtal		xtal;
 	enum fe_caps caps;
 	u32				flags;
+	unsigned long			stats_time;
 };
 
 static const struct cxd2841er_cnr_data s_cn_data[] = {
@@ -1698,12 +1691,10 @@ static u32 cxd2841er_dvbs_read_snr(struct cxd2841er_priv *priv,
 		min_index = 0;
 		if (delsys == SYS_DVBS) {
 			cn_data = s_cn_data;
-			max_index = sizeof(s_cn_data) /
-				sizeof(s_cn_data[0]) - 1;
+			max_index = ARRAY_SIZE(s_cn_data) - 1;
 		} else {
 			cn_data = s2_cn_data;
-			max_index = sizeof(s2_cn_data) /
-				sizeof(s2_cn_data[0]) - 1;
+			max_index = ARRAY_SIZE(s2_cn_data) - 1;
 		}
 		if (value >= cn_data[min_index].value) {
 			res = cn_data[min_index].cnr_x1000;
@@ -2948,7 +2939,7 @@ static int cxd2841er_sleep_tc_to_active_t(struct cxd2841er_priv *priv,
 		((priv->flags & CXD2841ER_ASCOT) ? 0x01 : 0x00), 0x01);
 	/* Set SLV-T Bank : 0x18 */
 	cxd2841er_write_reg(priv, I2C_SLVT, 0x00, 0x18);
-	/* Pre-RS BER moniter setting */
+	/* Pre-RS BER monitor setting */
 	cxd2841er_set_reg_bits(priv, I2C_SLVT, 0x36, 0x40, 0x07);
 	/* FEC Auto Recovery setting */
 	cxd2841er_set_reg_bits(priv, I2C_SLVT, 0x30, 0x01, 0x01);
@@ -3289,9 +3280,15 @@ static int cxd2841er_get_frontend(struct dvb_frontend *fe,
 		p->strength.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
 
 	if (status & FE_HAS_LOCK) {
+		if (priv->stats_time &&
+		    (!time_after(jiffies, priv->stats_time)))
+			return 0;
+
+		/* Prevent retrieving stats faster than once per second */
+		priv->stats_time = jiffies + msecs_to_jiffies(1000);
+
 		cxd2841er_read_snr(fe);
 		cxd2841er_read_ucblocks(fe);
-
 		cxd2841er_read_ber(fe);
 	} else {
 		p->cnr.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
@@ -3342,13 +3339,17 @@ static int cxd2841er_set_frontend_s(struct dvb_frontend *fe)
 
 	cxd2841er_tune_done(priv);
 	timeout = ((3000000 + (symbol_rate - 1)) / symbol_rate) + 150;
-	for (i = 0; i < timeout / CXD2841ER_DVBS_POLLING_INVL; i++) {
+
+	i = 0;
+	do {
 		usleep_range(CXD2841ER_DVBS_POLLING_INVL*1000,
 			(CXD2841ER_DVBS_POLLING_INVL + 2) * 1000);
 		cxd2841er_read_status_s(fe, &status);
 		if (status & FE_HAS_LOCK)
 			break;
-	}
+		i++;
+	} while (i < timeout / CXD2841ER_DVBS_POLLING_INVL);
+
 	if (status & FE_HAS_LOCK) {
 		if (cxd2841er_get_carrier_offset_s_s2(
 				priv, &carr_offset)) {
@@ -3365,6 +3366,9 @@ done:
 	p->block_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
 	p->post_bit_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
 	p->post_bit_count.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+
+	/* Reset the wait for jiffies logic */
+	priv->stats_time = 0;
 
 	return ret;
 }
@@ -3939,9 +3943,8 @@ static const struct dvb_frontend_ops cxd2841er_dvbs_s2_ops = {
 	.delsys = { SYS_DVBS, SYS_DVBS2 },
 	.info = {
 		.name		= "Sony CXD2841ER DVB-S/S2 demodulator",
-		.frequency_min	= 500000,
-		.frequency_max	= 2500000,
-		.frequency_stepsize	= 0,
+		.frequency_min_hz	=  500 * MHz,
+		.frequency_max_hz	= 2500 * MHz,
 		.symbol_rate_min = 1000000,
 		.symbol_rate_max = 45000000,
 		.symbol_rate_tolerance = 500,
@@ -3985,8 +3988,8 @@ static struct dvb_frontend_ops cxd2841er_t_c_ops = {
 			FE_CAN_HIERARCHY_AUTO |
 			FE_CAN_MUTE_TS |
 			FE_CAN_2G_MODULATION,
-		.frequency_min = 42000000,
-		.frequency_max = 1002000000,
+		.frequency_min_hz =   42 * MHz,
+		.frequency_max_hz = 1002 * MHz,
 		.symbol_rate_min = 870000,
 		.symbol_rate_max = 11700000
 	},

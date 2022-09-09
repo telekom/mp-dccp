@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2016 NVIDIA Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk-provider.h>
@@ -55,6 +52,7 @@ struct tegra_bpmp_clk_message {
 	struct {
 		void *data;
 		size_t size;
+		int ret;
 	} rx;
 };
 
@@ -64,6 +62,7 @@ static int tegra_bpmp_clk_transfer(struct tegra_bpmp *bpmp,
 	struct mrq_clk_request request;
 	struct tegra_bpmp_message msg;
 	void *req = &request;
+	int err;
 
 	memset(&request, 0, sizeof(request));
 	request.cmd_and_id = (clk->cmd << 24) | clk->id;
@@ -84,7 +83,13 @@ static int tegra_bpmp_clk_transfer(struct tegra_bpmp *bpmp,
 	msg.rx.data = clk->rx.data;
 	msg.rx.size = clk->rx.size;
 
-	return tegra_bpmp_transfer(bpmp, &msg);
+	err = tegra_bpmp_transfer(bpmp, &msg);
+	if (err < 0)
+		return err;
+	else if (msg.rx.ret < 0)
+		return -EINVAL;
+
+	return 0;
 }
 
 static int tegra_bpmp_clk_prepare(struct clk_hw *hw)
@@ -414,11 +419,8 @@ static int tegra_bpmp_probe_clocks(struct tegra_bpmp *bpmp,
 		struct tegra_bpmp_clk_info *info = &clocks[count];
 
 		err = tegra_bpmp_clk_get_info(bpmp, id, info);
-		if (err < 0) {
-			dev_err(bpmp->dev, "failed to query clock %u: %d\n",
-				id, err);
+		if (err < 0)
 			continue;
-		}
 
 		if (info->num_parents >= U8_MAX) {
 			dev_err(bpmp->dev,

@@ -9,6 +9,8 @@ Sparse is a semantic checker for C programs; it can be used to find a
 number of potential problems with kernel code.  See
 https://lwn.net/Articles/689907/ for an overview of sparse; this document
 contains some kernel-specific sparse information.
+More information on sparse, mainly about its internals, can be found in
+its official pages at https://sparse.docs.kernel.org.
 
 
 Using sparse for typechecking
@@ -67,24 +69,19 @@ __releases - The specified lock is held on function entry, but not exit.
 
 If the function enters and exits without the lock held, acquiring and
 releasing the lock inside the function in a balanced way, no
-annotation is needed.  The tree annotations above are for cases where
+annotation is needed.  The three annotations above are for cases where
 sparse would otherwise report a context imbalance.
 
 Getting sparse
 --------------
 
-You can get latest released versions from the Sparse homepage at
-https://sparse.wiki.kernel.org/index.php/Main_Page
+You can get tarballs of the latest released versions from:
+https://www.kernel.org/pub/software/devel/sparse/dist/
 
 Alternatively, you can get snapshots of the latest development version
 of sparse using git to clone::
 
         git://git.kernel.org/pub/scm/devel/sparse/sparse.git
-
-DaveJ has hourly generated tarballs of the git tree available at::
-
-        http://www.codemonkey.org.uk/projects/git-snapshots/sparse/
-
 
 Once you have it, just do::
 

@@ -15,7 +15,7 @@
  * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE, TITLE, or
  * NONINFRINGEMENT.  See the GNU General Public License for more details.
  ***********************************************************************/
-/**
+/*
  * @file octeon_console.c
  */
 #include <linux/moduleparam.h>
@@ -127,11 +127,11 @@ struct octeon_pci_console_desc {
 	u32 pad;
 	/* must be 64 bit aligned here... */
 	/* Array of addresses of octeon_pci_console structures */
-	u64 console_addr_array[0];
+	u64 console_addr_array[];
 	/* Implicit storage for console_addr_array */
 };
 
-/**
+/*
  * This function is the implementation of the get macros defined
  * for individual structure members. The argument are generated
  * by the macros inorder to read only the needed memory.
@@ -160,7 +160,7 @@ static inline u64 __cvmx_bootmem_desc_get(struct octeon_device *oct,
 	}
 }
 
-/**
+/*
  * This function retrieves the string name of a named block. It is
  * more complicated than a simple memcpy() since the named block
  * descriptor may not be directly accessible.
@@ -182,7 +182,7 @@ static void CVMX_BOOTMEM_NAMED_GET_NAME(struct octeon_device *oct,
 
 /* See header file for descriptions of functions */
 
-/**
+/*
  * Check the version information on the bootmem descriptor
  *
  * @param exact_match
@@ -205,11 +205,11 @@ static int __cvmx_bootmem_check_version(struct octeon_device *oct,
 	major_version = (u32)__cvmx_bootmem_desc_get(
 			oct, oct->bootmem_desc_addr,
 			offsetof(struct cvmx_bootmem_desc, major_version),
-			FIELD_SIZEOF(struct cvmx_bootmem_desc, major_version));
+			sizeof_field(struct cvmx_bootmem_desc, major_version));
 	minor_version = (u32)__cvmx_bootmem_desc_get(
 			oct, oct->bootmem_desc_addr,
 			offsetof(struct cvmx_bootmem_desc, minor_version),
-			FIELD_SIZEOF(struct cvmx_bootmem_desc, minor_version));
+			sizeof_field(struct cvmx_bootmem_desc, minor_version));
 
 	dev_dbg(&oct->pci_dev->dev, "%s: major_version=%d\n", __func__,
 		major_version);
@@ -237,13 +237,13 @@ static const struct cvmx_bootmem_named_block_desc
 				oct, named_addr,
 				offsetof(struct cvmx_bootmem_named_block_desc,
 					 base_addr),
-				FIELD_SIZEOF(
+				sizeof_field(
 					struct cvmx_bootmem_named_block_desc,
 					base_addr));
 		desc->size = __cvmx_bootmem_desc_get(oct, named_addr,
 				offsetof(struct cvmx_bootmem_named_block_desc,
 					 size),
-				FIELD_SIZEOF(
+				sizeof_field(
 					struct cvmx_bootmem_named_block_desc,
 					size));
 
@@ -268,20 +268,20 @@ static u64 cvmx_bootmem_phy_named_block_find(struct octeon_device *oct,
 					oct, oct->bootmem_desc_addr,
 					offsetof(struct cvmx_bootmem_desc,
 						 named_block_array_addr),
-					FIELD_SIZEOF(struct cvmx_bootmem_desc,
+					sizeof_field(struct cvmx_bootmem_desc,
 						     named_block_array_addr));
 		u32 num_blocks = (u32)__cvmx_bootmem_desc_get(
 					oct, oct->bootmem_desc_addr,
 					offsetof(struct cvmx_bootmem_desc,
 						 nb_num_blocks),
-					FIELD_SIZEOF(struct cvmx_bootmem_desc,
+					sizeof_field(struct cvmx_bootmem_desc,
 						     nb_num_blocks));
 
 		u32 name_length = (u32)__cvmx_bootmem_desc_get(
 					oct, oct->bootmem_desc_addr,
 					offsetof(struct cvmx_bootmem_desc,
 						 named_block_name_len),
-					FIELD_SIZEOF(struct cvmx_bootmem_desc,
+					sizeof_field(struct cvmx_bootmem_desc,
 						     named_block_name_len));
 
 		u64 named_addr = named_block_array_addr;
@@ -292,7 +292,7 @@ static u64 cvmx_bootmem_phy_named_block_find(struct octeon_device *oct,
 					 offsetof(
 					struct cvmx_bootmem_named_block_desc,
 					size),
-					 FIELD_SIZEOF(
+					 sizeof_field(
 					struct cvmx_bootmem_named_block_desc,
 					size));
 
@@ -323,7 +323,7 @@ static u64 cvmx_bootmem_phy_named_block_find(struct octeon_device *oct,
 	return result;
 }
 
-/**
+/*
  * Find a named block on the remote Octeon
  *
  * @param name      Name of block to find
@@ -707,7 +707,7 @@ int octeon_add_console(struct octeon_device *oct, u32 console_num,
 	return ret;
 }
 
-/**
+/*
  * Removes all consoles
  *
  * @param oct         octeon device
@@ -803,15 +803,18 @@ static int octeon_console_read(struct octeon_device *oct, u32 console_num,
 }
 
 #define FBUF_SIZE	(4 * 1024 * 1024)
+#define MAX_BOOTTIME_SIZE    80
 
 int octeon_download_firmware(struct octeon_device *oct, const u8 *data,
 			     size_t size)
 {
-	int ret = 0;
+	struct octeon_firmware_file_header *h;
+	char boottime[MAX_BOOTTIME_SIZE];
+	struct timespec64 ts;
 	u32 crc32_result;
 	u64 load_addr;
 	u32 image_len;
-	struct octeon_firmware_file_header *h;
+	int ret = 0;
 	u32 i, rem;
 
 	if (size < sizeof(struct octeon_firmware_file_header)) {
@@ -837,17 +840,11 @@ int octeon_download_firmware(struct octeon_device *oct, const u8 *data,
 		return -EINVAL;
 	}
 
-	if (strncmp(LIQUIDIO_PACKAGE, h->version, strlen(LIQUIDIO_PACKAGE))) {
-		dev_err(&oct->pci_dev->dev, "Unmatched firmware package type. Expected %s, got %s.\n",
-			LIQUIDIO_PACKAGE, h->version);
-		return -EINVAL;
-	}
-
-	if (memcmp(LIQUIDIO_BASE_VERSION, h->version + strlen(LIQUIDIO_PACKAGE),
+	if (memcmp(LIQUIDIO_BASE_VERSION, h->version,
 		   strlen(LIQUIDIO_BASE_VERSION))) {
 		dev_err(&oct->pci_dev->dev, "Unmatched firmware version. Expected %s.x, got %s.\n",
 			LIQUIDIO_BASE_VERSION,
-			h->version + strlen(LIQUIDIO_PACKAGE));
+			h->version);
 		return -EINVAL;
 	}
 
@@ -890,11 +887,34 @@ int octeon_download_firmware(struct octeon_device *oct, const u8 *data,
 			load_addr += size;
 		}
 	}
+
+	/* Pass date and time information to NIC at the time of loading
+	 * firmware and periodically update the host time to NIC firmware.
+	 * This is to make NIC firmware use the same time reference as Host,
+	 * so that it is easy to correlate logs from firmware and host for
+	 * debugging.
+	 *
+	 * Octeon always uses UTC time. so timezone information is not sent.
+	 */
+	ktime_get_real_ts64(&ts);
+	ret = snprintf(boottime, MAX_BOOTTIME_SIZE,
+		       " time_sec=%lld time_nsec=%ld",
+		       (s64)ts.tv_sec, ts.tv_nsec);
+	if ((sizeof(h->bootcmd) - strnlen(h->bootcmd, sizeof(h->bootcmd))) <
+		ret) {
+		dev_err(&oct->pci_dev->dev, "Boot command buffer too small\n");
+		return -EINVAL;
+	}
+	strncat(h->bootcmd, boottime,
+		sizeof(h->bootcmd) - strnlen(h->bootcmd, sizeof(h->bootcmd)));
+
 	dev_info(&oct->pci_dev->dev, "Writing boot command: %s\n",
 		 h->bootcmd);
 
 	/* Invoke the bootcmd */
 	ret = octeon_console_send_cmd(oct, h->bootcmd, 50);
+	if (ret)
+		dev_info(&oct->pci_dev->dev, "Boot command send failed\n");
 
-	return 0;
+	return ret;
 }

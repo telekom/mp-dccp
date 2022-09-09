@@ -888,20 +888,24 @@ static int octeon_cf_probe(struct platform_device *pdev)
 				int i;
 				res_dma = platform_get_resource(dma_dev, IORESOURCE_MEM, 0);
 				if (!res_dma) {
+					put_device(&dma_dev->dev);
 					of_node_put(dma_node);
 					return -EINVAL;
 				}
-				cf_port->dma_base = (u64)devm_ioremap_nocache(&pdev->dev, res_dma->start,
+				cf_port->dma_base = (u64)devm_ioremap(&pdev->dev, res_dma->start,
 									 resource_size(res_dma));
 				if (!cf_port->dma_base) {
+					put_device(&dma_dev->dev);
 					of_node_put(dma_node);
 					return -EINVAL;
 				}
 
-				irq_handler = octeon_cf_interrupt;
 				i = platform_get_irq(dma_dev, 0);
-				if (i > 0)
+				if (i > 0) {
 					irq = i;
+					irq_handler = octeon_cf_interrupt;
+				}
+				put_device(&dma_dev->dev);
 			}
 			of_node_put(dma_node);
 		}
@@ -909,7 +913,7 @@ static int octeon_cf_probe(struct platform_device *pdev)
 		if (!res_cs1)
 			return -EINVAL;
 
-		cs1 = devm_ioremap_nocache(&pdev->dev, res_cs1->start,
+		cs1 = devm_ioremap(&pdev->dev, res_cs1->start,
 					   resource_size(res_cs1));
 		if (!cs1)
 			return rv;
@@ -925,7 +929,7 @@ static int octeon_cf_probe(struct platform_device *pdev)
 	if (!res_cs0)
 		return -EINVAL;
 
-	cs0 = devm_ioremap_nocache(&pdev->dev, res_cs0->start,
+	cs0 = devm_ioremap(&pdev->dev, res_cs0->start,
 				   resource_size(res_cs0));
 	if (!cs0)
 		return rv;

@@ -36,6 +36,8 @@
 #include <subdev/i2c.h>
 #include <subdev/vga.h>
 
+#include <linux/kernel.h>
+
 #define bioslog(lvl, fmt, args...) do {                                        \
 	nvkm_printk(init->subdev, lvl, info, "0x%08x[%c]: "fmt,                \
 		    init->offset, init_exec(init) ?                            \
@@ -804,12 +806,12 @@ init_generic_condition(struct nvbios_init *init)
 	init->offset += 3;
 
 	switch (cond) {
-	case 0:
+	case 0: /* CONDITION_ID_INT_DP. */
 		if (init_conn(init) != DCB_CONNECTOR_eDP)
 			init_exec_set(init, false);
 		break;
-	case 1:
-	case 2:
+	case 1: /* CONDITION_ID_USE_SPPLL0. */
+	case 2: /* CONDITION_ID_USE_SPPLL1. */
 		if ( init->outp &&
 		    (data = nvbios_dpout_match(bios, DCB_OUTPUT_DP,
 					       (init->outp->or << 0) |
@@ -824,12 +826,15 @@ init_generic_condition(struct nvbios_init *init)
 		if (init_exec(init))
 			warn("script needs dp output table data\n");
 		break;
-	case 5:
+	case 5: /* CONDITION_ID_ASSR_SUPPORT. */
 		if (!(init_rdauxr(init, 0x0d) & 1))
 			init_exec_set(init, false);
 		break;
+	case 7: /* CONDITION_ID_NO_PANEL_SEQ_DELAYS. */
+		init_exec_set(init, false);
+		break;
 	default:
-		warn("INIT_GENERIC_CONDITON: unknown 0x%02x\n", cond);
+		warn("INIT_GENERIC_CONDITION: unknown 0x%02x\n", cond);
 		init->offset += size;
 		break;
 	}
@@ -1930,6 +1935,28 @@ init_ram_restrict_pll(struct nvbios_init *init)
 }
 
 /**
+ * INIT_RESET_BEGUN - opcode 0x8c
+ *
+ */
+static void
+init_reset_begun(struct nvbios_init *init)
+{
+	trace("RESET_BEGUN\n");
+	init->offset += 1;
+}
+
+/**
+ * INIT_RESET_END - opcode 0x8d
+ *
+ */
+static void
+init_reset_end(struct nvbios_init *init)
+{
+	trace("RESET_END\n");
+	init->offset += 1;
+}
+
+/**
  * INIT_GPIO - opcode 0x8e
  *
  */
@@ -2255,8 +2282,8 @@ static struct nvbios_init_opcode {
 	[0x79] = { init_pll },
 	[0x7a] = { init_zm_reg },
 	[0x87] = { init_ram_restrict_pll },
-	[0x8c] = { init_reserved },
-	[0x8d] = { init_reserved },
+	[0x8c] = { init_reset_begun },
+	[0x8d] = { init_reset_end },
 	[0x8e] = { init_gpio },
 	[0x8f] = { init_ram_restrict_zm_reg_group },
 	[0x90] = { init_copy_zm_reg },
@@ -2271,8 +2298,6 @@ static struct nvbios_init_opcode {
 	[0xaa] = { init_reserved },
 };
 
-#define init_opcode_nr (sizeof(init_opcode) / sizeof(init_opcode[0]))
-
 int
 nvbios_exec(struct nvbios_init *init)
 {
@@ -2281,7 +2306,8 @@ nvbios_exec(struct nvbios_init *init)
 	init->nested++;
 	while (init->offset) {
 		u8 opcode = nvbios_rd08(bios, init->offset);
-		if (opcode >= init_opcode_nr || !init_opcode[opcode].exec) {
+		if (opcode >= ARRAY_SIZE(init_opcode) ||
+		    !init_opcode[opcode].exec) {
 			error("unknown opcode 0x%02x\n", opcode);
 			return -EINVAL;
 		}

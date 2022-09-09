@@ -186,9 +186,9 @@ static int nfcmrvl_i2c_parse_dt(struct device_node *node,
 		pdata->irq_polarity = IRQF_TRIGGER_RISING;
 
 	ret = irq_of_parse_and_map(node, 0);
-	if (ret < 0) {
-		pr_err("Unable to get irq, error: %d\n", ret);
-		return ret;
+	if (!ret) {
+		pr_err("Unable to get irq\n");
+		return -EINVAL;
 	}
 	pdata->irq = ret;
 
@@ -266,7 +266,7 @@ static const struct of_device_id of_nfcmrvl_i2c_match[] = {
 };
 MODULE_DEVICE_TABLE(of, of_nfcmrvl_i2c_match);
 
-static struct i2c_device_id nfcmrvl_i2c_id_table[] = {
+static const struct i2c_device_id nfcmrvl_i2c_id_table[] = {
 	{ "nfcmrvl_i2c", 0 },
 	{}
 };
@@ -278,7 +278,6 @@ static struct i2c_driver nfcmrvl_i2c_driver = {
 	.remove = nfcmrvl_i2c_remove,
 	.driver = {
 		.name		= "nfcmrvl_i2c",
-		.owner		= THIS_MODULE,
 		.of_match_table	= of_match_ptr(of_nfcmrvl_i2c_match),
 	},
 };

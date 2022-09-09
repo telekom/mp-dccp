@@ -68,6 +68,7 @@ typedef int drm_ioctl_compat_t(struct file *filp, unsigned int cmd,
 			       unsigned long arg);
 
 #define DRM_IOCTL_NR(n)                _IOC_NR(n)
+#define DRM_IOCTL_TYPE(n)              _IOC_TYPE(n)
 #define DRM_MAJOR       226
 
 /**
@@ -109,18 +110,14 @@ enum drm_ioctl_flags {
 	 */
 	DRM_ROOT_ONLY		= BIT(2),
 	/**
-	 * @DRM_CONTROL_ALLOW:
-	 *
-	 * Deprecated, do not use. Control nodes are in the process of getting
-	 * removed.
-	 */
-	DRM_CONTROL_ALLOW	= BIT(3),
-	/**
 	 * @DRM_UNLOCKED:
 	 *
 	 * Whether &drm_ioctl_desc.func should be called with the DRM BKL held
 	 * or not. Enforced as the default for all modern drivers, hence there
 	 * should never be a need to set this flag.
+	 *
+	 * Do not use anywhere else than for the VBLANK_WAIT IOCTL, which is the
+	 * only legacy IOCTL which needs this.
 	 */
 	DRM_UNLOCKED		= BIT(4),
 	/**

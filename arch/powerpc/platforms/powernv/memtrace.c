@@ -1,11 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) IBM Corporation, 2014, 2017
  * Anton Blanchard, Rashmica Gupta.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #define pr_fmt(fmt) "memtrace: " fmt
@@ -20,6 +16,7 @@
 #include <linux/slab.h>
 #include <linux/memory.h>
 #include <linux/memory_hotplug.h>
+#include <linux/numa.h>
 #include <asm/machdep.h>
 #include <asm/debugfs.h>
 
@@ -33,6 +30,7 @@ struct memtrace_entry {
 	char name[16];
 };
 
+static DEFINE_MUTEX(memtrace_mutex);
 static u64 memtrace_size;
 
 static struct memtrace_entry *memtrace_array;
@@ -47,38 +45,9 @@ static ssize_t memtrace_read(struct file *filp, char __user *ubuf,
 	return simple_read_from_buffer(ubuf, count, ppos, ent->mem, ent->size);
 }
 
-static bool valid_memtrace_range(struct memtrace_entry *dev,
-				 unsigned long start, unsigned long size)
-{
-	if ((start >= dev->start) &&
-	    ((start + size) <= (dev->start + dev->size)))
-		return true;
-
-	return false;
-}
-
-static int memtrace_mmap(struct file *filp, struct vm_area_struct *vma)
-{
-	unsigned long size = vma->vm_end - vma->vm_start;
-	struct memtrace_entry *dev = filp->private_data;
-
-	if (!valid_memtrace_range(dev, vma->vm_pgoff << PAGE_SHIFT, size))
-		return -EINVAL;
-
-	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
-
-	if (remap_pfn_range(vma, vma->vm_start,
-			    vma->vm_pgoff + (dev->start >> PAGE_SHIFT),
-			    size, vma->vm_page_prot))
-		return -EAGAIN;
-
-	return 0;
-}
-
 static const struct file_operations memtrace_fops = {
 	.llseek = default_llseek,
 	.read	= memtrace_read,
-	.mmap	= memtrace_mmap,
 	.open	= simple_open,
 };
 
@@ -99,25 +68,43 @@ static int change_memblock_state(struct memory_block *mem, void *arg)
 	return 0;
 }
 
+static void memtrace_clear_range(unsigned long start_pfn,
+				 unsigned long nr_pages)
+{
+	unsigned long pfn;
+
+	/*
+	 * As pages are offline, we cannot trust the memmap anymore. As HIGHMEM
+	 * does not apply, avoid passing around "struct page" and use
+	 * clear_page() instead directly.
+	 */
+	for (pfn = start_pfn; pfn < start_pfn + nr_pages; pfn++) {
+		if (IS_ALIGNED(pfn, PAGES_PER_SECTION))
+			cond_resched();
+		clear_page(__va(PFN_PHYS(pfn)));
+	}
+}
+
+/* called with device_hotplug_lock held */
 static bool memtrace_offline_pages(u32 nid, u64 start_pfn, u64 nr_pages)
 {
-	u64 end_pfn = start_pfn + nr_pages - 1;
+	const unsigned long start = PFN_PHYS(start_pfn);
+	const unsigned long size = PFN_PHYS(nr_pages);
 
-	if (walk_memory_range(start_pfn, end_pfn, NULL,
-	    check_memblock_online))
+	if (walk_memory_blocks(start, size, NULL, check_memblock_online))
 		return false;
 
-	walk_memory_range(start_pfn, end_pfn, (void *)MEM_GOING_OFFLINE,
-			  change_memblock_state);
+	walk_memory_blocks(start, size, (void *)MEM_GOING_OFFLINE,
+			   change_memblock_state);
 
 	if (offline_pages(start_pfn, nr_pages)) {
-		walk_memory_range(start_pfn, end_pfn, (void *)MEM_ONLINE,
-				  change_memblock_state);
+		walk_memory_blocks(start, size, (void *)MEM_ONLINE,
+				   change_memblock_state);
 		return false;
 	}
 
-	walk_memory_range(start_pfn, end_pfn, (void *)MEM_OFFLINE,
-			  change_memblock_state);
+	walk_memory_blocks(start, size, (void *)MEM_OFFLINE,
+			   change_memblock_state);
 
 
 	return true;
@@ -129,7 +116,7 @@ static u64 memtrace_alloc_node(u32 nid, u64 size)
 	u64 base_pfn;
 	u64 bytes = memory_block_size_bytes();
 
-	if (!NODE_DATA(nid) || !node_spanned_pages(nid))
+	if (!node_spanned_pages(nid))
 		return 0;
 
 	start_pfn = node_start_pfn(nid);
@@ -139,23 +126,29 @@ static u64 memtrace_alloc_node(u32 nid, u64 size)
 	/* Trace memory needs to be aligned to the size */
 	end_pfn = round_down(end_pfn - nr_pages, nr_pages);
 
+	lock_device_hotplug();
 	for (base_pfn = end_pfn; base_pfn > start_pfn; base_pfn -= nr_pages) {
 		if (memtrace_offline_pages(nid, base_pfn, nr_pages) == true) {
+			/*
+			 * Clear the range while we still have a linear
+			 * mapping.
+			 */
+			memtrace_clear_range(base_pfn, nr_pages);
 			/*
 			 * Remove memory in memory block size chunks so that
 			 * iomem resources are always split to the same size and
 			 * we never try to remove memory that spans two iomem
 			 * resources.
 			 */
-			lock_device_hotplug();
 			end_pfn = base_pfn + nr_pages;
 			for (pfn = base_pfn; pfn < end_pfn; pfn += bytes>> PAGE_SHIFT) {
-				remove_memory(nid, pfn << PAGE_SHIFT, bytes);
+				__remove_memory(nid, pfn << PAGE_SHIFT, bytes);
 			}
 			unlock_device_hotplug();
 			return base_pfn << PAGE_SHIFT;
 		}
 	}
+	unlock_device_hotplug();
 
 	return 0;
 }
@@ -217,8 +210,6 @@ static int memtrace_init_debugfs(void)
 
 		snprintf(ent->name, 16, "%08x", ent->nid);
 		dir = debugfs_create_dir(ent->name, memtrace_debugfs_dir);
-		if (!dir)
-			return -1;
 
 		ent->dir = dir;
 		debugfs_create_file("trace", 0400, dir, ent, &memtrace_fops);
@@ -229,27 +220,104 @@ static int memtrace_init_debugfs(void)
 	return ret;
 }
 
+static int online_mem_block(struct memory_block *mem, void *arg)
+{
+	return device_online(&mem->dev);
+}
+
+/*
+ * Iterate through the chunks of memory we have removed from the kernel
+ * and attempt to add them back to the kernel.
+ */
+static int memtrace_online(void)
+{
+	int i, ret = 0;
+	struct memtrace_entry *ent;
+
+	for (i = memtrace_array_nr - 1; i >= 0; i--) {
+		ent = &memtrace_array[i];
+
+		/* We have onlined this chunk previously */
+		if (ent->nid == NUMA_NO_NODE)
+			continue;
+
+		/* Remove from io mappings */
+		if (ent->mem) {
+			iounmap(ent->mem);
+			ent->mem = 0;
+		}
+
+		if (add_memory(ent->nid, ent->start, ent->size, MHP_NONE)) {
+			pr_err("Failed to add trace memory to node %d\n",
+				ent->nid);
+			ret += 1;
+			continue;
+		}
+
+		lock_device_hotplug();
+		walk_memory_blocks(ent->start, ent->size, NULL,
+				   online_mem_block);
+		unlock_device_hotplug();
+
+		/*
+		 * Memory was added successfully so clean up references to it
+		 * so on reentry we can tell that this chunk was added.
+		 */
+		debugfs_remove_recursive(ent->dir);
+		pr_info("Added trace memory back to node %d\n", ent->nid);
+		ent->size = ent->start = ent->nid = NUMA_NO_NODE;
+	}
+	if (ret)
+		return ret;
+
+	/* If all chunks of memory were added successfully, reset globals */
+	kfree(memtrace_array);
+	memtrace_array = NULL;
+	memtrace_size = 0;
+	memtrace_array_nr = 0;
+	return 0;
+}
+
 static int memtrace_enable_set(void *data, u64 val)
 {
-	if (memtrace_size)
-		return -EINVAL;
+	int rc = -EAGAIN;
+	u64 bytes;
 
-	if (!val)
+	/*
+	 * Don't attempt to do anything if size isn't aligned to a memory
+	 * block or equal to zero.
+	 */
+	bytes = memory_block_size_bytes();
+	if (val & (bytes - 1)) {
+		pr_err("Value must be aligned with 0x%llx\n", bytes);
 		return -EINVAL;
+	}
 
-	/* Make sure size is aligned to a memory block */
-	if (val & (memory_block_size_bytes() - 1))
-		return -EINVAL;
+	mutex_lock(&memtrace_mutex);
 
+	/* Re-add/online previously removed/offlined memory */
+	if (memtrace_size) {
+		if (memtrace_online())
+			goto out_unlock;
+	}
+
+	if (!val) {
+		rc = 0;
+		goto out_unlock;
+	}
+
+	/* Offline and remove memory */
 	if (memtrace_init_regions_runtime(val))
-		return -EINVAL;
+		goto out_unlock;
 
 	if (memtrace_init_debugfs())
-		return -EINVAL;
+		goto out_unlock;
 
 	memtrace_size = val;
-
-	return 0;
+	rc = 0;
+out_unlock:
+	mutex_unlock(&memtrace_mutex);
+	return rc;
 }
 
 static int memtrace_enable_get(void *data, u64 *val)
@@ -265,8 +333,6 @@ static int memtrace_init(void)
 {
 	memtrace_debugfs_dir = debugfs_create_dir("memtrace",
 						  powerpc_debugfs_root);
-	if (!memtrace_debugfs_dir)
-		return -1;
 
 	debugfs_create_file("enable", 0600, memtrace_debugfs_dir,
 			    NULL, &memtrace_init_fops);

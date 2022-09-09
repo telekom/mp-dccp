@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* cpwd.c - driver implementation for hardware watchdog
  * timers found on Sun Microsystems CP1400 and CP1500 boards.
  *
@@ -25,6 +26,7 @@
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/timer.h>
+#include <linux/compat.h>
 #include <linux/slab.h>
 #include <linux/mutex.h>
 #include <linux/io.h>
@@ -230,9 +232,9 @@ static void cpwd_resetbrokentimer(struct cpwd *p, int index)
  * interrupts within the PLD so me must continually
  * reset the timers ad infinitum.
  */
-static void cpwd_brokentimer(unsigned long data)
+static void cpwd_brokentimer(struct timer_list *unused)
 {
-	struct cpwd *p = (struct cpwd *) data;
+	struct cpwd *p = cpwd_device;
 	int id, tripped = 0;
 
 	/* kill a running timer instance, in case we
@@ -275,7 +277,7 @@ static void cpwd_stoptimer(struct cpwd *p, int index)
 
 		if (p->broken) {
 			p->devs[index].runstatus |= WD_STAT_BSTOP;
-			cpwd_brokentimer((unsigned long) p);
+			cpwd_brokentimer(NULL);
 		}
 	}
 }
@@ -394,7 +396,7 @@ static int cpwd_open(struct inode *inode, struct file *f)
 
 	mutex_unlock(&cpwd_mutex);
 
-	return nonseekable_open(inode, f);
+	return stream_open(inode, f);
 }
 
 static int cpwd_release(struct inode *inode, struct file *file)
@@ -472,27 +474,9 @@ static long cpwd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-static long cpwd_compat_ioctl(struct file *file, unsigned int cmd,
-			      unsigned long arg)
+static long cpwd_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	int rval = -ENOIOCTLCMD;
-
-	switch (cmd) {
-	/* solaris ioctls are specific to this driver */
-	case WIOCSTART:
-	case WIOCSTOP:
-	case WIOCGSTAT:
-		mutex_lock(&cpwd_mutex);
-		rval = cpwd_ioctl(file, cmd, arg);
-		mutex_unlock(&cpwd_mutex);
-		break;
-
-	/* everything else is handled by the generic compat layer */
-	default:
-		break;
-	}
-
-	return rval;
+	return cpwd_ioctl(file, cmd, (unsigned long)compat_ptr(arg));
 }
 
 static ssize_t cpwd_write(struct file *file, const char __user *buf,
@@ -570,6 +554,8 @@ static int cpwd_probe(struct platform_device *op)
 	if (str_prop)
 		p->timeout = simple_strtoul(str_prop, NULL, 10);
 
+	of_node_put(options);
+
 	/* CP1400s seem to have broken PLD implementations-- the
 	 * interrupt_mask register cannot be written, so no timer
 	 * interrupts can be masked within the PLD.
@@ -608,7 +594,7 @@ static int cpwd_probe(struct platform_device *op)
 	}
 
 	if (p->broken) {
-		setup_timer(&cpwd_timer, cpwd_brokentimer, (unsigned long)p);
+		timer_setup(&cpwd_timer, cpwd_brokentimer, 0);
 		cpwd_timer.expires	= WD_BTIMEOUT;
 
 		pr_info("PLD defect workaround enabled for model %s\n",

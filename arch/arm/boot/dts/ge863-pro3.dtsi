@@ -1,10 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * ge863_pro3.dtsi - Device Tree file for Telit GE863-PRO3
  *
  * Copyright (C) 2012 Telit,
  *               2012 Fabio Porcedda <fabio.porcedda@gmail.com>
- *
- * Licensed under GPLv2 or later.
  */
 
 #include "at91sam9260.dtsi"
@@ -18,6 +17,18 @@
 
 	ahb {
 		apb {
+			tcb0: timer@fffa0000 {
+				timer@0 {
+					compatible = "atmel,tcb-timer";
+					reg = <0>, <1>;
+				};
+
+				timer@2 {
+					compatible = "atmel,tcb-timer";
+					reg = <2>;
+				};
+			};
+
 			dbgu: serial@fffff200 {
 				status = "okay";
 			};
@@ -50,7 +61,7 @@
 							reg = <0x0 0x7c0000>;
 						};
 
-						root@07c0000 {
+						root@7c0000 {
 							label = "root";
 							reg = <0x7c0000 0x7840000>;
 						};

@@ -1,33 +1,6 @@
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause) */
 /* QLogic qed NIC Driver
  * Copyright (c) 2015-2017  QLogic Corporation
- *
- * This software is available to you under a choice of one of two
- * licenses.  You may choose to be licensed under the terms of the GNU
- * General Public License (GPL) Version 2, available from the file
- * COPYING in the main directory of this source tree, or the
- * OpenIB.org BSD license below:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      - Redistributions of source code must retain the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer.
- *
- *      - Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and /or other materials
- *        provided with the distribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
  */
 
 #ifndef _QED_VF_H
@@ -523,6 +496,12 @@ struct pfvf_read_coal_resp_tlv {
 	u8 padding[6];
 };
 
+struct vfpf_bulletin_update_mac_tlv {
+	struct vfpf_first_tlv first_tlv;
+	u8 mac[ETH_ALEN];
+	u8 padding[2];
+};
+
 union vfpf_tlvs {
 	struct vfpf_first_tlv first_tlv;
 	struct vfpf_acquire_tlv acquire;
@@ -537,6 +516,7 @@ union vfpf_tlvs {
 	struct vfpf_update_tunn_param_tlv tunn_param_update;
 	struct vfpf_update_coalesce update_coalesce;
 	struct vfpf_read_coal_req_tlv read_coal_req;
+	struct vfpf_bulletin_update_mac_tlv bulletin_update_mac;
 	struct tlv_buffer_size tlv_buf_size;
 };
 
@@ -655,6 +635,7 @@ enum {
 	CHANNEL_TLV_COALESCE_UPDATE,
 	CHANNEL_TLV_QID,
 	CHANNEL_TLV_COALESCE_READ,
+	CHANNEL_TLV_BULLETIN_UPDATE_MAC,
 	CHANNEL_TLV_MAX,
 
 	/* Required for iterating over vport-update tlvs.
@@ -1047,6 +1028,13 @@ int qed_vf_pf_tunnel_param_update(struct qed_hwfn *p_hwfn,
 				  struct qed_tunnel_info *p_tunn);
 
 u32 qed_vf_hw_bar_size(struct qed_hwfn *p_hwfn, enum BAR_ID bar_id);
+/**
+ * @brief - Ask PF to update the MAC address in it's bulletin board
+ *
+ * @param p_mac - mac address to be updated in bulletin board
+ */
+int qed_vf_pf_bulletin_update_mac(struct qed_hwfn *p_hwfn, u8 *p_mac);
+
 #else
 static inline void qed_vf_get_link_params(struct qed_hwfn *p_hwfn,
 					  struct qed_mcp_link_params *params)
@@ -1229,6 +1217,12 @@ qed_vf_set_vf_start_tunn_update_param(struct qed_tunnel_info *p_tun)
 
 static inline int qed_vf_pf_tunnel_param_update(struct qed_hwfn *p_hwfn,
 						struct qed_tunnel_info *p_tunn)
+{
+	return -EINVAL;
+}
+
+static inline int qed_vf_pf_bulletin_update_mac(struct qed_hwfn *p_hwfn,
+						u8 *p_mac)
 {
 	return -EINVAL;
 }

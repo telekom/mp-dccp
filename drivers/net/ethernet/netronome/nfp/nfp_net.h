@@ -1,35 +1,5 @@
-/*
- * Copyright (C) 2015-2017 Netronome Systems, Inc.
- *
- * This software is dual licensed under the GNU General License Version 2,
- * June 1991 as shown in the file COPYING in the top-level directory of this
- * source tree or the BSD 2-Clause License provided below.  You have the
- * option to license this software under the complete terms of either license.
- *
- * The BSD 2-Clause License:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      1. Redistributions of source code must retain the above
- *         copyright notice, this list of conditions and the following
- *         disclaimer.
- *
- *      2. Redistributions in binary form must reproduce the above
- *         copyright notice, this list of conditions and the following
- *         disclaimer in the documentation and/or other materials
- *         provided with the distribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/* Copyright (C) 2015-2018 Netronome Systems, Inc. */
 
 /*
  * nfp_net.h
@@ -42,11 +12,15 @@
 #ifndef _NFP_NET_H_
 #define _NFP_NET_H_
 
+#include <linux/atomic.h>
 #include <linux/interrupt.h>
 #include <linux/list.h>
 #include <linux/netdevice.h>
 #include <linux/pci.h>
 #include <linux/io-64-nonatomic-hi-lo.h>
+#include <linux/semaphore.h>
+#include <linux/workqueue.h>
+#include <net/xdp.h>
 
 #include "nfp_net_ctrl.h"
 
@@ -92,7 +66,7 @@
 #define NFP_NET_MAX_DMA_BITS	40
 
 /* Default size for MTU and freelist buffer sizes */
-#define NFP_NET_DEFAULT_MTU		1500
+#define NFP_NET_DEFAULT_MTU		1500U
 
 /* Maximum number of bytes prepended to a packet */
 #define NFP_NET_MAX_PREPEND		64
@@ -187,12 +161,14 @@ struct nfp_net_tx_desc {
 			__le16 data_len; /* Length of frame + meta data */
 		} __packed;
 		__le32 vals[4];
+		__le64 vals8[2];
 	};
 };
 
 /**
  * struct nfp_net_tx_buf - software TX buffer descriptor
- * @skb:	sk_buff associated with this buffer
+ * @skb:	normal ring, sk_buff associated with this buffer
+ * @frag:	XDP ring, page frag associated with this buffer
  * @dma_addr:	DMA mapping address of the buffer
  * @fidx:	Fragment index (-1 for the head and [0..nr_frags-1] for frags)
  * @pkt_cnt:	Number of packets to be produced out of the skb associated
@@ -248,7 +224,7 @@ struct nfp_net_tx_ring {
 	struct nfp_net_tx_desc *txds;
 
 	dma_addr_t dma;
-	unsigned int size;
+	size_t size;
 	bool is_xdp;
 } ____cacheline_aligned;
 
@@ -265,7 +241,7 @@ struct nfp_net_tx_ring {
 #define PCIE_DESC_RX_I_TCP_CSUM_OK	cpu_to_le16(BIT(11))
 #define PCIE_DESC_RX_I_UDP_CSUM		cpu_to_le16(BIT(10))
 #define PCIE_DESC_RX_I_UDP_CSUM_OK	cpu_to_le16(BIT(9))
-#define PCIE_DESC_RX_BPF		cpu_to_le16(BIT(8))
+#define PCIE_DESC_RX_DECRYPTED		cpu_to_le16(BIT(8))
 #define PCIE_DESC_RX_EOP		cpu_to_le16(BIT(7))
 #define PCIE_DESC_RX_IP4_CSUM		cpu_to_le16(BIT(6))
 #define PCIE_DESC_RX_IP4_CSUM_OK	cpu_to_le16(BIT(5))
@@ -348,6 +324,7 @@ struct nfp_net_rx_buf {
  * @qcp_fl:     Pointer to base of the QCP freelist queue
  * @rxbufs:     Array of transmitted FL/RX buffers
  * @rxds:       Virtual address of FL/RX ring in host memory
+ * @xdp_rxq:    RX-ring info avail for XDP
  * @dma:        DMA address of the FL/RX ring
  * @size:       Size, in bytes, of the FL/RX ring (needed to free)
  */
@@ -366,14 +343,19 @@ struct nfp_net_rx_ring {
 	struct nfp_net_rx_buf *rxbufs;
 	struct nfp_net_rx_desc *rxds;
 
+	struct xdp_rxq_info xdp_rxq;
+
 	dma_addr_t dma;
-	unsigned int size;
+	size_t size;
 } ____cacheline_aligned;
 
 /**
  * struct nfp_net_r_vector - Per ring interrupt vector configuration
  * @nfp_net:        Backpointer to nfp_net structure
  * @napi:           NAPI structure for this ring vec
+ * @tasklet:        ctrl vNIC, tasklet for servicing the r_vec
+ * @queue:          ctrl vNIC, send queue
+ * @lock:           ctrl vNIC, r_vec lock protects @queue
  * @tx_ring:        Pointer to TX ring
  * @rx_ring:        Pointer to RX ring
  * @xdp_ring:	    Pointer to an extra TX ring for XDP
@@ -384,7 +366,9 @@ struct nfp_net_rx_ring {
  * @rx_drops:	    Number of packets dropped on RX due to lack of resources
  * @hw_csum_rx_ok:  Counter of packets where the HW checksum was OK
  * @hw_csum_rx_inner_ok: Counter of packets where the inner HW checksum was OK
+ * @hw_csum_rx_complete: Counter of packets with CHECKSUM_COMPLETE reported
  * @hw_csum_rx_error:	 Counter of packets with bad checksums
+ * @hw_tls_rx:	    Number of packets with TLS decrypted by hardware
  * @tx_sync:	    Seqlock for atomic updates of TX stats
  * @tx_pkts:	    Number of Transmitted packets
  * @tx_bytes:	    Number of Transmitted bytes
@@ -392,8 +376,14 @@ struct nfp_net_rx_ring {
  * @hw_csum_tx_inner:	 Counter of inner TX checksum offload requests
  * @tx_gather:	    Counter of packets with Gather DMA
  * @tx_lso:	    Counter of LSO packets sent
+ * @hw_tls_tx:	    Counter of TLS packets sent with crypto offloaded to HW
+ * @tls_tx_fallback:	Counter of TLS packets sent which had to be encrypted
+ *			by the fallback path because packets came out of order
+ * @tls_tx_no_fallback:	Counter of TLS packets not sent because the fallback
+ *			path could not encrypt them
  * @tx_errors:	    How many TX errors were encountered
  * @tx_busy:        How often was TX busy (no space)?
+ * @rx_replace_buf_alloc_fail:	Counter of RX buffer allocation failures
  * @irq_vector:     Interrupt vector number (use for talking to the OS)
  * @handler:        Interrupt handler for this ring vector
  * @name:           Name of the interrupt vector
@@ -411,7 +401,7 @@ struct nfp_net_r_vector {
 		struct {
 			struct tasklet_struct tasklet;
 			struct sk_buff_head queue;
-			struct spinlock lock;
+			spinlock_t lock;
 		};
 	};
 
@@ -426,19 +416,30 @@ struct nfp_net_r_vector {
 	u64 rx_drops;
 	u64 hw_csum_rx_ok;
 	u64 hw_csum_rx_inner_ok;
+	u64 hw_csum_rx_complete;
+	u64 hw_tls_rx;
+
 	u64 hw_csum_rx_error;
+	u64 rx_replace_buf_alloc_fail;
 
 	struct nfp_net_tx_ring *xdp_ring;
 
 	struct u64_stats_sync tx_sync;
 	u64 tx_pkts;
 	u64 tx_bytes;
-	u64 hw_csum_tx;
+
+	u64 ____cacheline_aligned_in_smp hw_csum_tx;
 	u64 hw_csum_tx_inner;
 	u64 tx_gather;
 	u64 tx_lso;
+	u64 hw_tls_tx;
+
+	u64 tls_tx_fallback;
+	u64 tls_tx_no_fallback;
 	u64 tx_errors;
 	u64 tx_busy;
+
+	/* Cold data follows */
 
 	u32 irq_vector;
 	irq_handler_t handler;
@@ -473,9 +474,8 @@ struct nfp_stat_pair {
  * @dev:		Backpointer to struct device
  * @netdev:		Backpointer to net_device structure
  * @is_vf:		Is the driver attached to a VF?
- * @bpf_offload_skip_sw:  Offloaded BPF program will not be rerun by cls_bpf
- * @bpf_offload_xdp:	Offloaded BPF program is XDP
  * @chained_metadata_format:  Firemware will use new metadata format
+ * @ktls_tx:		Is kTLS TX enabled?
  * @rx_dma_dir:		Mapping direction for RX buffers
  * @rx_dma_off:		Offset at which DMA packets (for XDP headroom)
  * @rx_offset:		Offset in the RX buffers where packet data starts
@@ -499,9 +499,8 @@ struct nfp_net_dp {
 	struct net_device *netdev;
 
 	u8 is_vf:1;
-	u8 bpf_offload_skip_sw:1;
-	u8 bpf_offload_xdp:1;
 	u8 chained_metadata_format:1;
+	u8 ktls_tx:1;
 
 	u8 rx_dma_dir;
 	u8 rx_offset;
@@ -535,6 +534,7 @@ struct nfp_net_dp {
 /**
  * struct nfp_net - NFP network device structure
  * @dp:			Datapath structure
+ * @id:			vNIC id within the PF (0 for VFs)
  * @fw_ver:		Firmware version
  * @cap:                Capabilities advertised by the Firmware
  * @max_mtu:            Maximum support MTU advertised by the Firmware
@@ -542,11 +542,13 @@ struct nfp_net_dp {
  * @rss_cfg:            RSS configuration
  * @rss_key:            RSS secret key
  * @rss_itbl:           RSS indirection table
- * @xdp_flags:		Flags with which XDP prog was loaded
- * @xdp_prog:		XDP prog (for ctrl path, both DRV and HW modes)
+ * @xdp:		Information about the driver XDP program
+ * @xdp_hw:		Information about the HW XDP program
  * @max_r_vecs:		Number of allocated interrupt vectors for RX/TX
  * @max_tx_rings:       Maximum number of TX rings supported by the Firmware
  * @max_rx_rings:       Maximum number of RX rings supported by the Firmware
+ * @stride_rx:		Queue controller RX queue spacing
+ * @stride_tx:		Queue controller TX queue spacing
  * @r_vecs:             Pre-allocated array of ring vectors
  * @irq_entries:        Pre-allocated array of MSI-X entries
  * @lsc_handler:        Handler for Link State Change interrupt
@@ -555,27 +557,48 @@ struct nfp_net_dp {
  * @exn_name:           Name for Exception interrupt
  * @shared_handler:     Handler for shared interrupts
  * @shared_name:        Name for shared interrupt
- * @me_freq_mhz:        ME clock_freq (MHz)
- * @reconfig_lock:	Protects HW reconfiguration request regs/machinery
+ * @reconfig_lock:	Protects @reconfig_posted, @reconfig_timer_active,
+ *			@reconfig_sync_present and HW reconfiguration request
+ *			regs/machinery from async requests (sync must take
+ *			@bar_lock)
  * @reconfig_posted:	Pending reconfig bits coming from async sources
  * @reconfig_timer_active:  Timer for reading reconfiguration results is pending
  * @reconfig_sync_present:  Some thread is performing synchronous reconfig
  * @reconfig_timer:	Timer for async reading of reconfig results
+ * @reconfig_in_progress_update:	Update FW is processing now (debug only)
+ * @bar_lock:		vNIC config BAR access lock, protects: update,
+ *			mailbox area, crypto TLV
  * @link_up:            Is the link up?
  * @link_status_lock:	Protects @link_* and ensures atomicity with BAR reading
  * @rx_coalesce_usecs:      RX interrupt moderation usecs delay parameter
  * @rx_coalesce_max_frames: RX interrupt moderation frame count parameter
  * @tx_coalesce_usecs:      TX interrupt moderation usecs delay parameter
  * @tx_coalesce_max_frames: TX interrupt moderation frame count parameter
- * @vxlan_ports:	VXLAN ports for RX inner csum offload communicated to HW
- * @vxlan_usecnt:	IPv4/IPv6 VXLAN port use counts
  * @qcp_cfg:            Pointer to QCP queue used for configuration notification
  * @tx_bar:             Pointer to mapped TX queues
  * @rx_bar:             Pointer to mapped FL/RX queues
+ * @tlv_caps:		Parsed TLV capabilities
+ * @ktls_tx_conn_cnt:	Number of offloaded kTLS TX connections
+ * @ktls_rx_conn_cnt:	Number of offloaded kTLS RX connections
+ * @ktls_conn_id_gen:	Trivial generator for kTLS connection ids (for TX)
+ * @ktls_no_space:	Counter of firmware rejecting kTLS connection due to
+ *			lack of space
+ * @ktls_rx_resync_req:	Counter of TLS RX resync requested
+ * @ktls_rx_resync_ign:	Counter of TLS RX resync requests ignored
+ * @ktls_rx_resync_sent:    Counter of TLS RX resync completed
+ * @mbox_cmsg:		Common Control Message via vNIC mailbox state
+ * @mbox_cmsg.queue:	CCM mbox queue of pending messages
+ * @mbox_cmsg.wq:	CCM mbox wait queue of waiting processes
+ * @mbox_cmsg.workq:	CCM mbox work queue for @wait_work and @runq_work
+ * @mbox_cmsg.wait_work:    CCM mbox posted msg reconfig wait work
+ * @mbox_cmsg.runq_work:    CCM mbox posted msg queue runner work
+ * @mbox_cmsg.tag:	CCM mbox message tag allocator
  * @debugfs_dir:	Device directory in debugfs
  * @vnic_list:		Entry on device vNIC list
  * @pdev:		Backpointer to PCI device
  * @app:		APP handle if available
+ * @vnic_no_name:	For non-port PF vNIC make ndo_get_phys_port_name return
+ *			-EOPNOTSUPP to keep backwards compatibility (set by app)
  * @port:		Pointer to nfp_port structure if vNIC is a port
  * @app_priv:		APP private data for this vNIC
  */
@@ -583,6 +606,8 @@ struct nfp_net {
 	struct nfp_net_dp dp;
 
 	struct nfp_net_fw_version fw_ver;
+
+	u32 id;
 
 	u32 cap;
 	u32 max_mtu;
@@ -592,8 +617,8 @@ struct nfp_net {
 	u8 rss_key[NFP_NET_CFG_RSS_KEY_SZ];
 	u8 rss_itbl[NFP_NET_CFG_RSS_ITBL_SZ];
 
-	u32 xdp_flags;
-	struct bpf_prog *xdp_prog;
+	struct xdp_attachment_info xdp;
+	struct xdp_attachment_info xdp_hw;
 
 	unsigned int max_tx_rings;
 	unsigned int max_rx_rings;
@@ -614,8 +639,6 @@ struct nfp_net {
 	irq_handler_t shared_handler;
 	char shared_name[IFNAMSIZ + 8];
 
-	u32 me_freq_mhz;
-
 	bool link_up;
 	spinlock_t link_status_lock;
 
@@ -624,19 +647,40 @@ struct nfp_net {
 	bool reconfig_timer_active;
 	bool reconfig_sync_present;
 	struct timer_list reconfig_timer;
+	u32 reconfig_in_progress_update;
+
+	struct semaphore bar_lock;
 
 	u32 rx_coalesce_usecs;
 	u32 rx_coalesce_max_frames;
 	u32 tx_coalesce_usecs;
 	u32 tx_coalesce_max_frames;
 
-	__be16 vxlan_ports[NFP_NET_N_VXLAN_PORTS];
-	u8 vxlan_usecnt[NFP_NET_N_VXLAN_PORTS];
-
 	u8 __iomem *qcp_cfg;
 
 	u8 __iomem *tx_bar;
 	u8 __iomem *rx_bar;
+
+	struct nfp_net_tlv_caps tlv_caps;
+
+	unsigned int ktls_tx_conn_cnt;
+	unsigned int ktls_rx_conn_cnt;
+
+	atomic64_t ktls_conn_id_gen;
+
+	atomic_t ktls_no_space;
+	atomic_t ktls_rx_resync_req;
+	atomic_t ktls_rx_resync_ign;
+	atomic_t ktls_rx_resync_sent;
+
+	struct {
+		struct sk_buff_head queue;
+		wait_queue_head_t wq;
+		struct workqueue_struct *workq;
+		struct work_struct wait_work;
+		struct work_struct runq_work;
+		u16 tag;
+	} mbox_cmsg;
 
 	struct dentry *debugfs_dir;
 
@@ -644,6 +688,8 @@ struct nfp_net {
 
 	struct pci_dev *pdev;
 	struct nfp_app *app;
+
+	bool vnic_no_name;
 
 	struct nfp_port *port;
 
@@ -833,6 +879,33 @@ static inline const char *nfp_net_name(struct nfp_net *nn)
 	return nn->dp.netdev ? nn->dp.netdev->name : "ctrl";
 }
 
+static inline void nfp_ctrl_lock(struct nfp_net *nn)
+	__acquires(&nn->r_vecs[0].lock)
+{
+	spin_lock_bh(&nn->r_vecs[0].lock);
+}
+
+static inline void nfp_ctrl_unlock(struct nfp_net *nn)
+	__releases(&nn->r_vecs[0].lock)
+{
+	spin_unlock_bh(&nn->r_vecs[0].lock);
+}
+
+static inline void nn_ctrl_bar_lock(struct nfp_net *nn)
+{
+	down(&nn->bar_lock);
+}
+
+static inline bool nn_ctrl_bar_trylock(struct nfp_net *nn)
+{
+	return !down_trylock(&nn->bar_lock);
+}
+
+static inline void nn_ctrl_bar_unlock(struct nfp_net *nn)
+{
+	up(&nn->bar_lock);
+}
+
 /* Globals */
 extern const char nfp_driver_version[];
 
@@ -848,7 +921,7 @@ void nfp_net_get_fw_version(struct nfp_net_fw_version *fw_ver,
 			    void __iomem *ctrl_bar);
 
 struct nfp_net *
-nfp_net_alloc(struct pci_dev *pdev, bool needs_netdev,
+nfp_net_alloc(struct pci_dev *pdev, void __iomem *ctrl_bar, bool needs_netdev,
 	      unsigned int max_tx_rings, unsigned int max_rx_rings);
 void nfp_net_free(struct nfp_net *nn);
 
@@ -860,11 +933,17 @@ void nfp_ctrl_close(struct nfp_net *nn);
 
 void nfp_net_set_ethtool_ops(struct net_device *netdev);
 void nfp_net_info(struct nfp_net *nn);
+int __nfp_net_reconfig(struct nfp_net *nn, u32 update);
 int nfp_net_reconfig(struct nfp_net *nn, u32 update);
 unsigned int nfp_net_rss_key_sz(struct nfp_net *nn);
 void nfp_net_rss_write_itbl(struct nfp_net *nn);
 void nfp_net_rss_write_key(struct nfp_net *nn);
 void nfp_net_coalesce_write_cfg(struct nfp_net *nn);
+int nfp_net_mbox_lock(struct nfp_net *nn, unsigned int data_size);
+int nfp_net_mbox_reconfig(struct nfp_net *nn, u32 mbox_cmd);
+int nfp_net_mbox_reconfig_and_unlock(struct nfp_net *nn, u32 mbox_cmd);
+void nfp_net_mbox_reconfig_post(struct nfp_net *nn, u32 update);
+int nfp_net_mbox_reconfig_wait_posted(struct nfp_net *nn);
 
 unsigned int
 nfp_net_irqs_alloc(struct pci_dev *pdev, struct msix_entry *irq_entries,
@@ -882,7 +961,7 @@ int nfp_net_ring_reconfig(struct nfp_net *nn, struct nfp_net_dp *new,
 void nfp_net_debugfs_create(void);
 void nfp_net_debugfs_destroy(void);
 struct dentry *nfp_net_debugfs_device_add(struct pci_dev *pdev);
-void nfp_net_debugfs_vnic_add(struct nfp_net *nn, struct dentry *ddir, int id);
+void nfp_net_debugfs_vnic_add(struct nfp_net *nn, struct dentry *ddir);
 void nfp_net_debugfs_dir_clean(struct dentry **dir);
 #else
 static inline void nfp_net_debugfs_create(void)
@@ -899,7 +978,7 @@ static inline struct dentry *nfp_net_debugfs_device_add(struct pci_dev *pdev)
 }
 
 static inline void
-nfp_net_debugfs_vnic_add(struct nfp_net *nn, struct dentry *ddir, int id)
+nfp_net_debugfs_vnic_add(struct nfp_net *nn, struct dentry *ddir)
 {
 }
 

@@ -6,6 +6,7 @@
  * Copyright (C) 2010 ARM Ltd., Will Deacon <will.deacon@arm.com>
  */
 #define pr_fmt(fmt) "hw perfevents: " fmt
+#define dev_fmt pr_fmt
 
 #include <linux/bug.h>
 #include <linux/cpumask.h>
@@ -77,24 +78,15 @@ static int pmu_parse_irq_affinity(struct device_node *node, int i)
 
 	dn = of_parse_phandle(node, "interrupt-affinity", i);
 	if (!dn) {
-		pr_warn("failed to parse interrupt-affinity[%d] for %s\n",
-			i, node->name);
+		pr_warn("failed to parse interrupt-affinity[%d] for %pOFn\n",
+			i, node);
 		return -EINVAL;
 	}
 
-	/* Now look up the logical CPU number */
-	for_each_possible_cpu(cpu) {
-		struct device_node *cpu_dn;
-
-		cpu_dn = of_cpu_device_node_get(cpu);
-		of_node_put(cpu_dn);
-
-		if (dn == cpu_dn)
-			break;
-	}
-
-	if (cpu >= nr_cpu_ids) {
-		pr_warn("failed to find logical CPU for %s\n", dn->name);
+	cpu = of_cpu_node_to_id(dn);
+	if (cpu < 0) {
+		pr_warn("failed to find logical CPU for %pOFn\n", dn);
+		cpu = nr_cpu_ids;
 	}
 
 	of_node_put(dn);
@@ -109,10 +101,8 @@ static int pmu_parse_irqs(struct arm_pmu *pmu)
 	struct pmu_hw_events __percpu *hw_events = pmu->hw_events;
 
 	num_irqs = platform_irq_count(pdev);
-	if (num_irqs < 0) {
-		pr_err("unable to count PMU IRQs\n");
-		return num_irqs;
-	}
+	if (num_irqs < 0)
+		return dev_err_probe(&pdev->dev, num_irqs, "unable to count PMU IRQs\n");
 
 	/*
 	 * In this case we have no idea which CPUs are covered by the PMU.
@@ -127,21 +117,14 @@ static int pmu_parse_irqs(struct arm_pmu *pmu)
 
 	if (num_irqs == 1) {
 		int irq = platform_get_irq(pdev, 0);
-		if (irq && irq_is_percpu(irq))
+		if (irq && irq_is_percpu_devid(irq))
 			return pmu_parse_percpu_irq(pmu, irq);
 	}
 
-	if (!pmu_has_irq_affinity(pdev->dev.of_node)) {
+	if (nr_cpu_ids != 1 && !pmu_has_irq_affinity(pdev->dev.of_node)) {
 		pr_warn("no interrupt-affinity property for %pOF, guessing.\n",
 			pdev->dev.of_node);
 	}
-
-	/*
-	 * Some platforms have all PMU IRQs OR'd into a single IRQ, with a
-	 * special platdata function that attempts to demux them.
-	 */
-	if (dev_get_platdata(&pdev->dev))
-		cpumask_setall(&pmu->supported_cpus);
 
 	for (i = 0; i < num_irqs; i++) {
 		int cpu, irq;
@@ -150,7 +133,7 @@ static int pmu_parse_irqs(struct arm_pmu *pmu)
 		if (WARN_ON(irq <= 0))
 			continue;
 
-		if (irq_is_percpu(irq)) {
+		if (irq_is_percpu_devid(irq)) {
 			pr_warn("multiple PPIs or mismatched SPI/PPI detected\n");
 			return -EINVAL;
 		}
@@ -171,6 +154,36 @@ static int pmu_parse_irqs(struct arm_pmu *pmu)
 	}
 
 	return 0;
+}
+
+static int armpmu_request_irqs(struct arm_pmu *armpmu)
+{
+	struct pmu_hw_events __percpu *hw_events = armpmu->hw_events;
+	int cpu, err = 0;
+
+	for_each_cpu(cpu, &armpmu->supported_cpus) {
+		int irq = per_cpu(hw_events->irq, cpu);
+		if (!irq)
+			continue;
+
+		err = armpmu_request_irq(irq, cpu);
+		if (err)
+			break;
+	}
+
+	return err;
+}
+
+static void armpmu_free_irqs(struct arm_pmu *armpmu)
+{
+	int cpu;
+	struct pmu_hw_events __percpu *hw_events = armpmu->hw_events;
+
+	for_each_cpu(cpu, &armpmu->supported_cpus) {
+		int irq = per_cpu(hw_events->irq, cpu);
+
+		armpmu_free_irq(irq, cpu);
+	}
 }
 
 int arm_pmu_device_probe(struct platform_device *pdev,
@@ -222,7 +235,7 @@ int arm_pmu_device_probe(struct platform_device *pdev,
 
 	ret = armpmu_register(pmu);
 	if (ret)
-		goto out_free;
+		goto out_free_irqs;
 
 	return 0;
 

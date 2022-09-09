@@ -1,18 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Power Supply driver for a Greybus module.
  *
  * Copyright 2014-2015 Google Inc.
  * Copyright 2014-2015 Linaro Ltd.
- *
- * Released under the GPLv2 only.
  */
 
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/power_supply.h>
 #include <linux/slab.h>
-
-#include "greybus.h"
+#include <linux/greybus.h>
 
 #define PROP_MAX 32
 
@@ -521,8 +519,8 @@ static int gb_power_supply_prop_descriptors_get(struct gb_power_supply *gbpsy)
 
 	op = gb_operation_create(connection,
 				 GB_POWER_SUPPLY_TYPE_GET_PROP_DESCRIPTORS,
-				 sizeof(req), sizeof(*resp) + props_count *
-				 sizeof(struct gb_power_supply_props_desc),
+				 sizeof(*req),
+				 struct_size(resp, props, props_count),
 				 GFP_KERNEL);
 	if (!op)
 		return -ENOMEM;

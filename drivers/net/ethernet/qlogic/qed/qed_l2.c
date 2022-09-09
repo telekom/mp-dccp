@@ -1,33 +1,7 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause)
 /* QLogic qed NIC Driver
  * Copyright (c) 2015-2017  QLogic Corporation
- *
- * This software is available to you under a choice of one of two
- * licenses.  You may choose to be licensed under the terms of the GNU
- * General Public License (GPL) Version 2, available from the file
- * COPYING in the main directory of this source tree, or the
- * OpenIB.org BSD license below:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      - Redistributions of source code must retain the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer.
- *
- *      - Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and /or other materials
- *        provided with the distribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright (c) 2019-2020 Marvell International Ltd.
  */
 
 #include <linux/types.h>
@@ -50,6 +24,7 @@
 #include "qed.h"
 #include <linux/qed/qed_chain.h>
 #include "qed_cxt.h"
+#include "qed_dcbx.h"
 #include "qed_dev_api.h"
 #include <linux/qed/qed_eth_if.h>
 #include "qed_hsi.h"
@@ -57,6 +32,7 @@
 #include "qed_int.h"
 #include "qed_l2.h"
 #include "qed_mcp.h"
+#include "qed_ptp.h"
 #include "qed_reg_addr.h"
 #include "qed_sp.h"
 #include "qed_sriov.h"
@@ -98,7 +74,7 @@ int qed_l2_alloc(struct qed_hwfn *p_hwfn)
 		p_l2_info->queues = max_t(u8, rx, tx);
 	}
 
-	pp_qids = kzalloc(sizeof(unsigned long *) * p_l2_info->queues,
+	pp_qids = kcalloc(p_l2_info->queues, sizeof(unsigned long *),
 			  GFP_KERNEL);
 	if (!pp_qids)
 		return -ENOMEM;
@@ -221,10 +197,9 @@ _qed_eth_queue_to_cid(struct qed_hwfn *p_hwfn,
 	struct qed_queue_cid *p_cid;
 	int rc;
 
-	p_cid = vmalloc(sizeof(*p_cid));
+	p_cid = vzalloc(sizeof(*p_cid));
 	if (!p_cid)
 		return NULL;
-	memset(p_cid, 0, sizeof(*p_cid));
 
 	p_cid->opaque_fid = opaque_fid;
 	p_cid->cid = cid;
@@ -367,11 +342,12 @@ int qed_sp_eth_vport_start(struct qed_hwfn *p_hwfn,
 			   struct qed_sp_vport_start_params *p_params)
 {
 	struct vport_start_ramrod_data *p_ramrod = NULL;
+	struct eth_vport_tpa_param *tpa_param;
 	struct qed_spq_entry *p_ent =  NULL;
 	struct qed_sp_init_data init_data;
+	u16 min_size, rx_mode = 0;
 	u8 abs_vport_id = 0;
-	int rc = -EINVAL;
-	u16 rx_mode = 0;
+	int rc;
 
 	rc = qed_fw_vport(p_hwfn, p_params->vport_id, &abs_vport_id);
 	if (rc)
@@ -403,21 +379,23 @@ int qed_sp_eth_vport_start(struct qed_hwfn *p_hwfn,
 	p_ramrod->rx_mode.state = cpu_to_le16(rx_mode);
 
 	/* TPA related fields */
-	memset(&p_ramrod->tpa_param, 0, sizeof(struct eth_vport_tpa_param));
+	tpa_param = &p_ramrod->tpa_param;
+	memset(tpa_param, 0, sizeof(*tpa_param));
 
-	p_ramrod->tpa_param.max_buff_num = p_params->max_buffers_per_cqe;
+	tpa_param->max_buff_num = p_params->max_buffers_per_cqe;
 
 	switch (p_params->tpa_mode) {
 	case QED_TPA_MODE_GRO:
-		p_ramrod->tpa_param.tpa_max_aggs_num = ETH_TPA_MAX_AGGS_NUM;
-		p_ramrod->tpa_param.tpa_max_size = (u16)-1;
-		p_ramrod->tpa_param.tpa_min_size_to_cont = p_params->mtu / 2;
-		p_ramrod->tpa_param.tpa_min_size_to_start = p_params->mtu / 2;
-		p_ramrod->tpa_param.tpa_ipv4_en_flg = 1;
-		p_ramrod->tpa_param.tpa_ipv6_en_flg = 1;
-		p_ramrod->tpa_param.tpa_pkt_split_flg = 1;
-		p_ramrod->tpa_param.tpa_gro_consistent_flg = 1;
-		break;
+		min_size = p_params->mtu / 2;
+
+		tpa_param->tpa_max_aggs_num = ETH_TPA_MAX_AGGS_NUM;
+		tpa_param->tpa_max_size = cpu_to_le16(U16_MAX);
+		tpa_param->tpa_min_size_to_cont = cpu_to_le16(min_size);
+		tpa_param->tpa_min_size_to_start = cpu_to_le16(min_size);
+		tpa_param->tpa_ipv4_en_flg = 1;
+		tpa_param->tpa_ipv6_en_flg = 1;
+		tpa_param->tpa_pkt_split_flg = 1;
+		tpa_param->tpa_gro_consistent_flg = 1;
 	default:
 		break;
 	}
@@ -587,6 +565,9 @@ qed_sp_update_accept_mode(struct qed_hwfn *p_hwfn,
 		SET_FIELD(state, ETH_VPORT_RX_MODE_BCAST_ACCEPT_ALL,
 			  !!(accept_filter & QED_ACCEPT_BCAST));
 
+		SET_FIELD(state, ETH_VPORT_RX_MODE_ACCEPT_ANY_VNI,
+			  !!(accept_filter & QED_ACCEPT_ANY_VNI));
+
 		p_ramrod->rx_mode.state = cpu_to_le16(state);
 		DP_VERBOSE(p_hwfn, QED_MSG_SP,
 			   "p_ramrod->rx_mode.state = 0x%x\n", state);
@@ -623,33 +604,33 @@ qed_sp_update_accept_mode(struct qed_hwfn *p_hwfn,
 static void
 qed_sp_vport_update_sge_tpa(struct qed_hwfn *p_hwfn,
 			    struct vport_update_ramrod_data *p_ramrod,
-			    struct qed_sge_tpa_params *p_params)
+			    const struct qed_sge_tpa_params *param)
 {
-	struct eth_vport_tpa_param *p_tpa;
+	struct eth_vport_tpa_param *tpa;
 
-	if (!p_params) {
+	if (!param) {
 		p_ramrod->common.update_tpa_param_flg = 0;
 		p_ramrod->common.update_tpa_en_flg = 0;
 		p_ramrod->common.update_tpa_param_flg = 0;
 		return;
 	}
 
-	p_ramrod->common.update_tpa_en_flg = p_params->update_tpa_en_flg;
-	p_tpa = &p_ramrod->tpa_param;
-	p_tpa->tpa_ipv4_en_flg = p_params->tpa_ipv4_en_flg;
-	p_tpa->tpa_ipv6_en_flg = p_params->tpa_ipv6_en_flg;
-	p_tpa->tpa_ipv4_tunn_en_flg = p_params->tpa_ipv4_tunn_en_flg;
-	p_tpa->tpa_ipv6_tunn_en_flg = p_params->tpa_ipv6_tunn_en_flg;
+	p_ramrod->common.update_tpa_en_flg = param->update_tpa_en_flg;
+	tpa = &p_ramrod->tpa_param;
+	tpa->tpa_ipv4_en_flg = param->tpa_ipv4_en_flg;
+	tpa->tpa_ipv6_en_flg = param->tpa_ipv6_en_flg;
+	tpa->tpa_ipv4_tunn_en_flg = param->tpa_ipv4_tunn_en_flg;
+	tpa->tpa_ipv6_tunn_en_flg = param->tpa_ipv6_tunn_en_flg;
 
-	p_ramrod->common.update_tpa_param_flg = p_params->update_tpa_param_flg;
-	p_tpa->max_buff_num = p_params->max_buffers_per_cqe;
-	p_tpa->tpa_pkt_split_flg = p_params->tpa_pkt_split_flg;
-	p_tpa->tpa_hdr_data_split_flg = p_params->tpa_hdr_data_split_flg;
-	p_tpa->tpa_gro_consistent_flg = p_params->tpa_gro_consistent_flg;
-	p_tpa->tpa_max_aggs_num = p_params->tpa_max_aggs_num;
-	p_tpa->tpa_max_size = p_params->tpa_max_size;
-	p_tpa->tpa_min_size_to_start = p_params->tpa_min_size_to_start;
-	p_tpa->tpa_min_size_to_cont = p_params->tpa_min_size_to_cont;
+	p_ramrod->common.update_tpa_param_flg = param->update_tpa_param_flg;
+	tpa->max_buff_num = param->max_buffers_per_cqe;
+	tpa->tpa_pkt_split_flg = param->tpa_pkt_split_flg;
+	tpa->tpa_hdr_data_split_flg = param->tpa_hdr_data_split_flg;
+	tpa->tpa_gro_consistent_flg = param->tpa_gro_consistent_flg;
+	tpa->tpa_max_aggs_num = param->tpa_max_aggs_num;
+	tpa->tpa_max_size = cpu_to_le16(param->tpa_max_size);
+	tpa->tpa_min_size_to_start = cpu_to_le16(param->tpa_min_size_to_start);
+	tpa->tpa_min_size_to_cont = cpu_to_le16(param->tpa_min_size_to_cont);
 }
 
 static void
@@ -742,8 +723,7 @@ int qed_sp_vport_update(struct qed_hwfn *p_hwfn,
 
 	rc = qed_sp_vport_update_rss(p_hwfn, p_ramrod, p_rss_params);
 	if (rc) {
-		/* Return spq entry which is taken in qed_sp_init_request()*/
-		qed_spq_return_entry(p_hwfn, p_ent);
+		qed_sp_destroy_request(p_hwfn, p_ent);
 		return rc;
 	}
 
@@ -1362,6 +1342,7 @@ qed_filter_ucast_common(struct qed_hwfn *p_hwfn,
 			DP_NOTICE(p_hwfn,
 				  "%d is not supported yet\n",
 				  p_filter_cmd->opcode);
+			qed_sp_destroy_request(p_hwfn, *pp_ent);
 			return -EINVAL;
 		}
 
@@ -1629,10 +1610,9 @@ static void __qed_get_vport_pstats_addrlen(struct qed_hwfn *p_hwfn,
 	}
 }
 
-static void __qed_get_vport_pstats(struct qed_hwfn *p_hwfn,
-				   struct qed_ptt *p_ptt,
-				   struct qed_eth_stats *p_stats,
-				   u16 statistics_bin)
+static noinline_for_stack void
+__qed_get_vport_pstats(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
+		       struct qed_eth_stats *p_stats, u16 statistics_bin)
 {
 	struct eth_pstorm_per_queue_stat pstats;
 	u32 pstats_addr = 0, pstats_len = 0;
@@ -1659,10 +1639,9 @@ static void __qed_get_vport_pstats(struct qed_hwfn *p_hwfn,
 	    HILO_64_REGPAIR(pstats.error_drop_pkts);
 }
 
-static void __qed_get_vport_tstats(struct qed_hwfn *p_hwfn,
-				   struct qed_ptt *p_ptt,
-				   struct qed_eth_stats *p_stats,
-				   u16 statistics_bin)
+static noinline_for_stack void
+__qed_get_vport_tstats(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
+		       struct qed_eth_stats *p_stats, u16 statistics_bin)
 {
 	struct tstorm_per_port_stat tstats;
 	u32 tstats_addr, tstats_len;
@@ -1686,6 +1665,8 @@ static void __qed_get_vport_tstats(struct qed_hwfn *p_hwfn,
 	    HILO_64_REGPAIR(tstats.mftag_filter_discard);
 	p_stats->common.mac_filter_discards +=
 	    HILO_64_REGPAIR(tstats.eth_mac_filter_discard);
+	p_stats->common.gft_filter_drop +=
+		HILO_64_REGPAIR(tstats.eth_gft_drop_pkt);
 }
 
 static void __qed_get_vport_ustats_addrlen(struct qed_hwfn *p_hwfn,
@@ -1705,10 +1686,9 @@ static void __qed_get_vport_ustats_addrlen(struct qed_hwfn *p_hwfn,
 	}
 }
 
-static void __qed_get_vport_ustats(struct qed_hwfn *p_hwfn,
-				   struct qed_ptt *p_ptt,
-				   struct qed_eth_stats *p_stats,
-				   u16 statistics_bin)
+static noinline_for_stack
+void __qed_get_vport_ustats(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
+			    struct qed_eth_stats *p_stats, u16 statistics_bin)
 {
 	struct eth_ustorm_per_queue_stat ustats;
 	u32 ustats_addr = 0, ustats_len = 0;
@@ -1747,10 +1727,9 @@ static void __qed_get_vport_mstats_addrlen(struct qed_hwfn *p_hwfn,
 	}
 }
 
-static void __qed_get_vport_mstats(struct qed_hwfn *p_hwfn,
-				   struct qed_ptt *p_ptt,
-				   struct qed_eth_stats *p_stats,
-				   u16 statistics_bin)
+static noinline_for_stack void
+__qed_get_vport_mstats(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
+		       struct qed_eth_stats *p_stats, u16 statistics_bin)
 {
 	struct eth_mstorm_per_queue_stat mstats;
 	u32 mstats_addr = 0, mstats_len = 0;
@@ -1776,9 +1755,9 @@ static void __qed_get_vport_mstats(struct qed_hwfn *p_hwfn,
 	    HILO_64_REGPAIR(mstats.tpa_coalesced_bytes);
 }
 
-static void __qed_get_vport_port_stats(struct qed_hwfn *p_hwfn,
-				       struct qed_ptt *p_ptt,
-				       struct qed_eth_stats *p_stats)
+static noinline_for_stack void
+__qed_get_vport_port_stats(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
+			   struct qed_eth_stats *p_stats)
 {
 	struct qed_eth_stats_common *p_common = &p_stats->common;
 	struct port_stats port_stats;
@@ -1861,6 +1840,11 @@ static void __qed_get_vport_port_stats(struct qed_hwfn *p_hwfn,
 		p_ah->tx_1519_to_max_byte_packets =
 		    port_stats.eth.u1.ah1.t1519_to_max;
 	}
+
+	p_common->link_change_count = qed_rd(p_hwfn, p_ptt,
+					     p_hwfn->mcp_info->port_addr +
+					     offsetof(struct public_port,
+						      link_change_count));
 }
 
 static void __qed_get_vport_stats(struct qed_hwfn *p_hwfn,
@@ -1889,6 +1873,7 @@ static void _qed_get_vport_stats(struct qed_dev *cdev,
 		struct qed_hwfn *p_hwfn = &cdev->hwfns[i];
 		struct qed_ptt *p_ptt = IS_PF(cdev) ? qed_ptt_acquire(p_hwfn)
 						    :  NULL;
+		bool b_get_port_stats;
 
 		if (IS_PF(cdev)) {
 			/* The main vport index is relative first */
@@ -1903,8 +1888,9 @@ static void _qed_get_vport_stats(struct qed_dev *cdev,
 			continue;
 		}
 
+		b_get_port_stats = IS_PF(cdev) && IS_LEAD_HWFN(p_hwfn);
 		__qed_get_vport_stats(p_hwfn, p_ptt, stats, fw_vport,
-				      IS_PF(cdev) ? true : false);
+				      b_get_port_stats);
 
 out:
 		if (IS_PF(cdev) && p_ptt)
@@ -1968,40 +1954,60 @@ void qed_reset_vport_stats(struct qed_dev *cdev)
 
 	/* PORT statistics are not necessarily reset, so we need to
 	 * read and create a baseline for future statistics.
+	 * Link change stat is maintained by MFW, return its value as is.
 	 */
-	if (!cdev->reset_stats)
+	if (!cdev->reset_stats) {
 		DP_INFO(cdev, "Reset stats not allocated\n");
-	else
+	} else {
 		_qed_get_vport_stats(cdev, cdev->reset_stats);
+		cdev->reset_stats->common.link_change_count = 0;
+	}
 }
 
-static void
-qed_arfs_mode_configure(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
-			struct qed_arfs_config_params *p_cfg_params)
+static enum gft_profile_type
+qed_arfs_mode_to_hsi(enum qed_filter_config_mode mode)
 {
-	if (p_cfg_params->arfs_enable) {
-		qed_set_rfs_mode_enable(p_hwfn, p_ptt, p_hwfn->rel_pf_id,
-					p_cfg_params->tcp, p_cfg_params->udp,
-					p_cfg_params->ipv4, p_cfg_params->ipv6);
-		DP_VERBOSE(p_hwfn, QED_MSG_SP,
-			   "tcp = %s, udp = %s, ipv4 = %s, ipv6 =%s\n",
+	if (mode == QED_FILTER_CONFIG_MODE_5_TUPLE)
+		return GFT_PROFILE_TYPE_4_TUPLE;
+	if (mode == QED_FILTER_CONFIG_MODE_IP_DEST)
+		return GFT_PROFILE_TYPE_IP_DST_ADDR;
+	if (mode == QED_FILTER_CONFIG_MODE_IP_SRC)
+		return GFT_PROFILE_TYPE_IP_SRC_ADDR;
+	return GFT_PROFILE_TYPE_L4_DST_PORT;
+}
+
+void qed_arfs_mode_configure(struct qed_hwfn *p_hwfn,
+			     struct qed_ptt *p_ptt,
+			     struct qed_arfs_config_params *p_cfg_params)
+{
+	if (test_bit(QED_MF_DISABLE_ARFS, &p_hwfn->cdev->mf_bits))
+		return;
+
+	if (p_cfg_params->mode != QED_FILTER_CONFIG_MODE_DISABLE) {
+		qed_gft_config(p_hwfn, p_ptt, p_hwfn->rel_pf_id,
+			       p_cfg_params->tcp,
+			       p_cfg_params->udp,
+			       p_cfg_params->ipv4,
+			       p_cfg_params->ipv6,
+			       qed_arfs_mode_to_hsi(p_cfg_params->mode));
+		DP_VERBOSE(p_hwfn,
+			   QED_MSG_SP,
+			   "Configured Filtering: tcp = %s, udp = %s, ipv4 = %s, ipv6 =%s mode=%08x\n",
 			   p_cfg_params->tcp ? "Enable" : "Disable",
 			   p_cfg_params->udp ? "Enable" : "Disable",
 			   p_cfg_params->ipv4 ? "Enable" : "Disable",
-			   p_cfg_params->ipv6 ? "Enable" : "Disable");
+			   p_cfg_params->ipv6 ? "Enable" : "Disable",
+			   (u32)p_cfg_params->mode);
 	} else {
-		qed_set_rfs_mode_disable(p_hwfn, p_ptt, p_hwfn->rel_pf_id);
+		DP_VERBOSE(p_hwfn, QED_MSG_SP, "Disabled Filtering\n");
+		qed_gft_disable(p_hwfn, p_ptt, p_hwfn->rel_pf_id);
 	}
-
-	DP_VERBOSE(p_hwfn, QED_MSG_SP, "Configured ARFS mode : %s\n",
-		   p_cfg_params->arfs_enable ? "Enable" : "Disable");
 }
 
-static int
-qed_configure_rfs_ntuple_filter(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
+int
+qed_configure_rfs_ntuple_filter(struct qed_hwfn *p_hwfn,
 				struct qed_spq_comp_cb *p_cb,
-				dma_addr_t p_addr, u16 length, u16 qid,
-				u8 vport_id, bool b_is_add)
+				struct qed_ntuple_filter_params *p_params)
 {
 	struct rx_update_gft_filter_data *p_ramrod = NULL;
 	struct qed_spq_entry *p_ent = NULL;
@@ -2009,14 +2015,6 @@ qed_configure_rfs_ntuple_filter(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
 	u16 abs_rx_q_id = 0;
 	u8 abs_vport_id = 0;
 	int rc = -EINVAL;
-
-	rc = qed_fw_vport(p_hwfn, vport_id, &abs_vport_id);
-	if (rc)
-		return rc;
-
-	rc = qed_fw_l2_queue(p_hwfn, qid, &abs_rx_q_id);
-	if (rc)
-		return rc;
 
 	/* Get SPQ entry */
 	memset(&init_data, 0, sizeof(init_data));
@@ -2038,19 +2036,46 @@ qed_configure_rfs_ntuple_filter(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
 		return rc;
 
 	p_ramrod = &p_ent->ramrod.rx_update_gft;
-	DMA_REGPAIR_LE(p_ramrod->pkt_hdr_addr, p_addr);
-	p_ramrod->pkt_hdr_length = cpu_to_le16(length);
-	p_ramrod->rx_qid_or_action_icid = cpu_to_le16(abs_rx_q_id);
-	p_ramrod->vport_id = abs_vport_id;
-	p_ramrod->filter_type = RFS_FILTER_TYPE;
-	p_ramrod->filter_action = b_is_add ? GFT_ADD_FILTER : GFT_DELETE_FILTER;
+
+	DMA_REGPAIR_LE(p_ramrod->pkt_hdr_addr, p_params->addr);
+	p_ramrod->pkt_hdr_length = cpu_to_le16(p_params->length);
+
+	if (p_params->b_is_drop) {
+		p_ramrod->vport_id = cpu_to_le16(ETH_GFT_TRASHCAN_VPORT);
+	} else {
+		rc = qed_fw_vport(p_hwfn, p_params->vport_id, &abs_vport_id);
+		if (rc)
+			goto err;
+
+		if (p_params->qid != QED_RFS_NTUPLE_QID_RSS) {
+			rc = qed_fw_l2_queue(p_hwfn, p_params->qid,
+					     &abs_rx_q_id);
+			if (rc)
+				goto err;
+
+			p_ramrod->rx_qid_valid = 1;
+			p_ramrod->rx_qid = cpu_to_le16(abs_rx_q_id);
+		}
+
+		p_ramrod->vport_id = cpu_to_le16((u16)abs_vport_id);
+	}
+
+	p_ramrod->flow_id_valid = 0;
+	p_ramrod->flow_id = 0;
+	p_ramrod->filter_action = p_params->b_is_add ? GFT_ADD_FILTER
+	    : GFT_DELETE_FILTER;
 
 	DP_VERBOSE(p_hwfn, QED_MSG_SP,
 		   "V[%0x], Q[%04x] - %s filter from 0x%llx [length %04xb]\n",
 		   abs_vport_id, abs_rx_q_id,
-		   b_is_add ? "Adding" : "Removing", (u64)p_addr, length);
+		   p_params->b_is_add ? "Adding" : "Removing",
+		   (u64)p_params->addr, p_params->length);
 
 	return qed_spq_post(p_hwfn, p_ent, NULL);
+
+err:
+	qed_sp_destroy_request(p_hwfn, p_ent);
+	return rc;
 }
 
 int qed_get_rxq_coalesce(struct qed_hwfn *p_hwfn,
@@ -2064,13 +2089,14 @@ int qed_get_rxq_coalesce(struct qed_hwfn *p_hwfn,
 
 	rc = qed_dmae_grc2host(p_hwfn, p_ptt, CAU_REG_SB_VAR_MEMORY +
 			       p_cid->sb_igu_id * sizeof(u64),
-			       (u64)(uintptr_t)&sb_entry, 2, 0);
+			       (u64)(uintptr_t)&sb_entry, 2, NULL);
 	if (rc) {
 		DP_ERR(p_hwfn, "dmae_grc2host failed %d\n", rc);
 		return rc;
 	}
 
-	timer_res = GET_FIELD(sb_entry.params, CAU_SB_ENTRY_TIMER_RES0);
+	timer_res = GET_FIELD(le32_to_cpu(sb_entry.params),
+			      CAU_SB_ENTRY_TIMER_RES0);
 
 	address = BAR0_MAP_REG_USDM_RAM +
 		  USTORM_ETH_QUEUE_ZONE_OFFSET(p_cid->abs.queue_id);
@@ -2097,13 +2123,14 @@ int qed_get_txq_coalesce(struct qed_hwfn *p_hwfn,
 
 	rc = qed_dmae_grc2host(p_hwfn, p_ptt, CAU_REG_SB_VAR_MEMORY +
 			       p_cid->sb_igu_id * sizeof(u64),
-			       (u64)(uintptr_t)&sb_entry, 2, 0);
+			       (u64)(uintptr_t)&sb_entry, 2, NULL);
 	if (rc) {
 		DP_ERR(p_hwfn, "dmae_grc2host failed %d\n", rc);
 		return rc;
 	}
 
-	timer_res = GET_FIELD(sb_entry.params, CAU_SB_ENTRY_TIMER_RES1);
+	timer_res = GET_FIELD(le32_to_cpu(sb_entry.params),
+			      CAU_SB_ENTRY_TIMER_RES1);
 
 	address = BAR0_MAP_REG_XSDM_RAM +
 		  XSTORM_ETH_QUEUE_ZONE_OFFSET(p_cid->abs.queue_id);
@@ -2156,15 +2183,16 @@ out:
 static int qed_fill_eth_dev_info(struct qed_dev *cdev,
 				 struct qed_dev_eth_info *info)
 {
+	struct qed_hwfn *p_hwfn = QED_LEADING_HWFN(cdev);
 	int i;
 
 	memset(info, 0, sizeof(*info));
 
-	info->num_tc = 1;
-
 	if (IS_PF(cdev)) {
 		int max_vf_vlan_filters = 0;
 		int max_vf_mac_filters = 0;
+
+		info->num_tc = p_hwfn->hw_info.num_hw_tc;
 
 		if (cdev->int_params.out.int_mode == QED_INT_MODE_MSIX) {
 			u16 num_queues = 0;
@@ -2216,6 +2244,8 @@ static int qed_fill_eth_dev_info(struct qed_dev *cdev,
 		info->xdp_supported = true;
 	} else {
 		u16 total_cids = 0;
+
+		info->num_tc = 1;
 
 		/* Determine queues &  XDP support */
 		for_each_hwfn(cdev, i) {
@@ -2403,7 +2433,7 @@ static int qed_update_vport(struct qed_dev *cdev,
 	if (!cdev)
 		return -ENODEV;
 
-	rss = vzalloc(sizeof(*rss) * cdev->num_hwfns);
+	rss = vzalloc(array_size(sizeof(*rss), cdev->num_hwfns));
 	if (!rss)
 		return -ENOMEM;
 
@@ -2523,7 +2553,7 @@ static int qed_start_txq(struct qed_dev *cdev,
 
 	rc = qed_eth_tx_queue_start(p_hwfn,
 				    p_hwfn->hw_info.opaque_fid,
-				    p_params, 0,
+				    p_params, p_params->tc,
 				    pbl_addr, pbl_size, ret_params);
 
 	if (rc) {
@@ -2751,7 +2781,8 @@ static int qed_configure_filter(struct qed_dev *cdev,
 	}
 }
 
-static int qed_configure_arfs_searcher(struct qed_dev *cdev, bool en_searcher)
+static int qed_configure_arfs_searcher(struct qed_dev *cdev,
+				       enum qed_filter_config_mode mode)
 {
 	struct qed_hwfn *p_hwfn = QED_LEADING_HWFN(cdev);
 	struct qed_arfs_config_params arfs_config_params;
@@ -2761,8 +2792,7 @@ static int qed_configure_arfs_searcher(struct qed_dev *cdev, bool en_searcher)
 	arfs_config_params.udp = true;
 	arfs_config_params.ipv4 = true;
 	arfs_config_params.ipv6 = true;
-	arfs_config_params.arfs_enable = en_searcher;
-
+	arfs_config_params.mode = mode;
 	qed_arfs_mode_configure(p_hwfn, p_hwfn->p_arfs_ptt,
 				&arfs_config_params);
 	return 0;
@@ -2770,8 +2800,8 @@ static int qed_configure_arfs_searcher(struct qed_dev *cdev, bool en_searcher)
 
 static void
 qed_arfs_sp_response_handler(struct qed_hwfn *p_hwfn,
-			     void *cookie, union event_ring_data *data,
-			     u8 fw_return_code)
+			     void *cookie,
+			     union event_ring_data *data, u8 fw_return_code)
 {
 	struct qed_common_cb_ops *op = p_hwfn->cdev->protocol_ops.common;
 	void *dev = p_hwfn->cdev->ops_cookie;
@@ -2779,10 +2809,10 @@ qed_arfs_sp_response_handler(struct qed_hwfn *p_hwfn,
 	op->arfs_filter_op(dev, cookie, fw_return_code);
 }
 
-static int qed_ntuple_arfs_filter_config(struct qed_dev *cdev, void *cookie,
-					 dma_addr_t mapping, u16 length,
-					 u16 vport_id, u16 rx_queue_id,
-					 bool add_filter)
+static int
+qed_ntuple_arfs_filter_config(struct qed_dev *cdev,
+			      void *cookie,
+			      struct qed_ntuple_filter_params *params)
 {
 	struct qed_hwfn *p_hwfn = QED_LEADING_HWFN(cdev);
 	struct qed_spq_comp_cb cb;
@@ -2791,9 +2821,19 @@ static int qed_ntuple_arfs_filter_config(struct qed_dev *cdev, void *cookie,
 	cb.function = qed_arfs_sp_response_handler;
 	cb.cookie = cookie;
 
-	rc = qed_configure_rfs_ntuple_filter(p_hwfn, p_hwfn->p_arfs_ptt,
-					     &cb, mapping, length, rx_queue_id,
-					     vport_id, add_filter);
+	if (params->b_is_vf) {
+		if (!qed_iov_is_valid_vfid(p_hwfn, params->vf_id, false,
+					   false)) {
+			DP_INFO(p_hwfn, "vfid 0x%02x is out of bounds\n",
+				params->vf_id);
+			return rc;
+		}
+
+		params->vport_id = params->vf_id + 1;
+		params->qid = QED_RFS_NTUPLE_QID_RSS;
+	}
+
+	rc = qed_configure_rfs_ntuple_filter(p_hwfn, &cb, params);
 	if (rc)
 		DP_NOTICE(p_hwfn,
 			  "Failed to issue a-RFS filter configuration\n");
@@ -2813,7 +2853,8 @@ static int qed_get_coalesce(struct qed_dev *cdev, u16 *coal, void *handle)
 	p_hwfn = p_cid->p_owner;
 	rc = qed_get_queue_coalesce(p_hwfn, coal, handle);
 	if (rc)
-		DP_NOTICE(p_hwfn, "Unable to read queue coalescing\n");
+		DP_VERBOSE(cdev, QED_MSG_DEBUG,
+			   "Unable to read queue coalescing\n");
 
 	return rc;
 }
@@ -2825,15 +2866,23 @@ static int qed_fp_cqe_completion(struct qed_dev *dev,
 				      cqe);
 }
 
-#ifdef CONFIG_QED_SRIOV
-extern const struct qed_iov_hv_ops qed_iov_ops_pass;
-#endif
+static int qed_req_bulletin_update_mac(struct qed_dev *cdev, u8 *mac)
+{
+	int i, ret;
 
-#ifdef CONFIG_DCB
-extern const struct qed_eth_dcbnl_ops qed_dcbnl_ops_pass;
-#endif
+	if (IS_PF(cdev))
+		return 0;
 
-extern const struct qed_eth_ptp_ops qed_ptp_ops_pass;
+	for_each_hwfn(cdev, i) {
+		struct qed_hwfn *p_hwfn = &cdev->hwfns[i];
+
+		ret = qed_vf_pf_bulletin_update_mac(p_hwfn, mac);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
 
 static const struct qed_eth_ops qed_eth_ops_pass = {
 	.common = &qed_common_ops_pass,
@@ -2862,6 +2911,7 @@ static const struct qed_eth_ops qed_eth_ops_pass = {
 	.ntuple_filter_config = &qed_ntuple_arfs_filter_config,
 	.configure_arfs_searcher = &qed_configure_arfs_searcher,
 	.get_coalesce = &qed_get_coalesce,
+	.req_bulletin_update_mac = &qed_req_bulletin_update_mac,
 };
 
 const struct qed_eth_ops *qed_get_eth_ops(void)

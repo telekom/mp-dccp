@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * SLIM core rproc driver
  *
  * Copyright (C) 2016 STMicroelectronics
  *
  * Author: Peter Griffin <peter.griffin@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/clk.h>
@@ -178,7 +174,7 @@ static int slim_rproc_stop(struct rproc *rproc)
 	return 0;
 }
 
-static void *slim_rproc_da_to_va(struct rproc *rproc, u64 da, int len)
+static void *slim_rproc_da_to_va(struct rproc *rproc, u64 da, size_t len)
 {
 	struct st_slim_rproc *slim_rproc = rproc->priv;
 	void *va = NULL;
@@ -195,7 +191,8 @@ static void *slim_rproc_da_to_va(struct rproc *rproc, u64 da, int len)
 		}
 	}
 
-	dev_dbg(&rproc->dev, "da = 0x%llx len = 0x%x va = 0x%p\n", da, len, va);
+	dev_dbg(&rproc->dev, "da = 0x%llx len = 0x%zx va = 0x%pK\n",
+		da, len, va);
 
 	return va;
 }
@@ -204,27 +201,9 @@ static const struct rproc_ops slim_rproc_ops = {
 	.start		= slim_rproc_start,
 	.stop		= slim_rproc_stop,
 	.da_to_va       = slim_rproc_da_to_va,
-};
-
-/*
- * Firmware handler operations: sanity, boot address, load ...
- */
-
-static struct resource_table empty_rsc_tbl = {
-	.ver = 1,
-	.num = 0,
-};
-
-static struct resource_table *slim_rproc_find_rsc_table(struct rproc *rproc,
-					       const struct firmware *fw,
-					       int *tablesz)
-{
-	*tablesz = sizeof(empty_rsc_tbl);
-	return &empty_rsc_tbl;
-}
-
-static struct rproc_fw_ops slim_rproc_fw_ops = {
-	.find_rsc_table = slim_rproc_find_rsc_table,
+	.get_boot_addr	= rproc_elf_get_boot_addr,
+	.load		= rproc_elf_load_segments,
+	.sanity_check	= rproc_elf_sanity_check,
 };
 
 /**
@@ -249,7 +228,6 @@ struct st_slim_rproc *st_slim_rproc_alloc(struct platform_device *pdev,
 	struct rproc *rproc;
 	struct resource *res;
 	int err, i;
-	const struct rproc_fw_ops *elf_ops;
 
 	if (!fw_name)
 		return ERR_PTR(-EINVAL);
@@ -266,13 +244,6 @@ struct st_slim_rproc *st_slim_rproc_alloc(struct platform_device *pdev,
 
 	slim_rproc = rproc->priv;
 	slim_rproc->rproc = rproc;
-
-	elf_ops = rproc->fw_ops;
-	/* Use some generic elf ops */
-	slim_rproc_fw_ops.load = elf_ops->load;
-	slim_rproc_fw_ops.sanity_check = elf_ops->sanity_check;
-
-	rproc->fw_ops = &slim_rproc_fw_ops;
 
 	/* get imem and dmem */
 	for (i = 0; i < ARRAY_SIZE(mem_names); i++) {

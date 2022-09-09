@@ -1,13 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 /* Qualcomm Technologies, Inc. EMAC PHY Controller driver.
@@ -47,6 +39,7 @@
 #define MDIO_CLK_25_28                                               7
 
 #define MDIO_WAIT_TIMES                                           1000
+#define MDIO_STATUS_DELAY_TIME                                       1
 
 static int emac_mdio_read(struct mii_bus *bus, int addr, int regnum)
 {
@@ -65,7 +58,7 @@ static int emac_mdio_read(struct mii_bus *bus, int addr, int regnum)
 
 	if (readl_poll_timeout(adpt->base + EMAC_MDIO_CTRL, reg,
 			       !(reg & (MDIO_START | MDIO_BUSY)),
-			       100, MDIO_WAIT_TIMES * 100))
+			       MDIO_STATUS_DELAY_TIME, MDIO_WAIT_TIMES * 100))
 		return -EIO;
 
 	return (reg >> MDIO_DATA_SHFT) & MDIO_DATA_BMSK;
@@ -88,8 +81,8 @@ static int emac_mdio_write(struct mii_bus *bus, int addr, int regnum, u16 val)
 	writel(reg, adpt->base + EMAC_MDIO_CTRL);
 
 	if (readl_poll_timeout(adpt->base + EMAC_MDIO_CTRL, reg,
-			       !(reg & (MDIO_START | MDIO_BUSY)), 100,
-			       MDIO_WAIT_TIMES * 100))
+			       !(reg & (MDIO_START | MDIO_BUSY)),
+			       MDIO_STATUS_DELAY_TIME, MDIO_WAIT_TIMES * 100))
 		return -EIO;
 
 	return 0;

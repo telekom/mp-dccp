@@ -43,13 +43,11 @@ gf108_ram_probe_fbp_amount(const struct nvkm_ram_func *func, u32 fbpao,
 
 static const struct nvkm_ram_func
 gf108_ram = {
-	.upper = 0x0200000000,
+	.upper = 0x0200000000ULL,
 	.probe_fbp = gf100_ram_probe_fbp,
 	.probe_fbp_amount = gf108_ram_probe_fbp_amount,
 	.probe_fbpa_amount = gf100_ram_probe_fbpa_amount,
 	.init = gf100_ram_init,
-	.get = gf100_ram_get,
-	.put = gf100_ram_put,
 	.calc = gf100_ram_calc,
 	.prog = gf100_ram_prog,
 	.tidy = gf100_ram_tidy,

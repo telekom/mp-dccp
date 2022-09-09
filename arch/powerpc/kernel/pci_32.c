@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Common pmac/prep/chrp pci routines. -- Cort
  */
@@ -10,7 +11,7 @@
 #include <linux/capability.h>
 #include <linux/sched.h>
 #include <linux/errno.h>
-#include <linux/bootmem.h>
+#include <linux/memblock.h>
 #include <linux/syscalls.h>
 #include <linux/irq.h>
 #include <linux/list.h>
@@ -97,7 +98,8 @@ make_one_node_map(struct device_node* node, u8 pci_bus)
 		reg = of_get_property(node, "reg", NULL);
 		if (!reg)
 			continue;
-		dev = pci_get_bus_and_slot(pci_bus, ((reg[0] >> 8) & 0xff));
+		dev = pci_get_domain_bus_and_slot(0, pci_bus,
+						  ((reg[0] >> 8) & 0xff));
 		if (!dev || !dev->subordinate) {
 			pci_dev_put(dev);
 			continue;
@@ -202,7 +204,11 @@ pci_create_OF_bus_map(void)
 	struct property* of_prop;
 	struct device_node *dn;
 
-	of_prop = memblock_virt_alloc(sizeof(struct property) + 256, 0);
+	of_prop = memblock_alloc(sizeof(struct property) + 256,
+				 SMP_CACHE_BYTES);
+	if (!of_prop)
+		panic("%s: Failed to allocate %zu bytes\n", __func__,
+		      sizeof(struct property) + 256);
 	dn = of_find_node_by_path("/");
 	if (dn) {
 		memset(of_prop, -1, sizeof(struct property) + 256);
@@ -257,6 +263,10 @@ static int __init pcibios_init(void)
 	/* Call common code to handle resource allocation */
 	pcibios_resource_survey();
 
+	/* Call machine dependent fixup */
+	if (ppc_md.pcibios_fixup)
+		ppc_md.pcibios_fixup();
+
 	/* Call machine dependent post-init code */
 	if (ppc_md.pcibios_after_init)
 		ppc_md.pcibios_after_init();
@@ -283,7 +293,8 @@ pci_bus_to_hose(int bus)
  * Note that the returned IO or memory base is a physical address
  */
 
-long sys_pciconfig_iobase(long which, unsigned long bus, unsigned long devfn)
+SYSCALL_DEFINE3(pciconfig_iobase, long, which,
+		unsigned long, bus, unsigned long, devfn)
 {
 	struct pci_controller* hose;
 	long result = -EOPNOTSUPP;
@@ -307,5 +318,3 @@ long sys_pciconfig_iobase(long which, unsigned long bus, unsigned long devfn)
 
 	return result;
 }
-
-

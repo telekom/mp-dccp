@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Renesas Electronics uPD78F0730 USB to serial converter driver
  *
  * Copyright (C) 2014,2016 Maksim Salau <maksim.salau@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
  *
  * Protocol of the adaptor is described in the application note U19660EJ1V0AN00
  * μPD78F0730 8-bit Single-Chip Microcontroller
@@ -335,7 +332,7 @@ static void upd78f0730_set_termios(struct tty_struct *tty,
 		tty->termios.c_cflag &= ~CSIZE;
 		tty->termios.c_cflag |= CS8;
 		dev_warn(dev, "data size is not supported, using 8 bits\n");
-		/* fall through */
+		fallthrough;
 	case CS8:
 		request.params |= UPD78F0730_DATA_SIZE_8_BITS;
 		dev_dbg(dev, "%s - 8 data bits\n", __func__);

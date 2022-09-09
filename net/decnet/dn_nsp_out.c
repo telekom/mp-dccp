@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * DECnet       An implementation of the DECnet protocol suite for the LINUX
  *              operating system.  DECnet is implemented using the  BSD Socket
@@ -26,15 +27,6 @@
 /******************************************************************************
     (c) 1995-1998 E.M. Serrat		emserrat@geocities.com
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
 *******************************************************************************/
 
 #include <linux/errno.h>
@@ -313,11 +305,8 @@ static __le16 *dn_mk_ack_header(struct sock *sk, struct sk_buff *skb, unsigned c
 	ackcrs |= 0x8000;
 
 	/* If this is an "other data/ack" message, swap acknum and ackcrs */
-	if (other) {
-		unsigned short tmp = acknum;
-		acknum = ackcrs;
-		ackcrs = tmp;
-	}
+	if (other)
+		swap(acknum, ackcrs);
 
 	/* Set "cross subchannel" bit in ackcrs */
 	ackcrs |= 0x2000;
@@ -489,17 +478,6 @@ void dn_send_conn_ack (struct sock *sk)
 	msg->dstaddr = scp->addrrem;
 
 	dn_nsp_send(skb);
-}
-
-void dn_nsp_delayed_ack(struct sock *sk)
-{
-	struct dn_scp *scp = DN_SK(sk);
-
-	if (scp->ackxmt_oth != scp->numoth_rcv)
-		dn_nsp_send_oth_ack(sk);
-
-	if (scp->ackxmt_dat != scp->numdat_rcv)
-		dn_nsp_send_data_ack(sk);
 }
 
 static int dn_nsp_retrans_conn_conf(struct sock *sk)
@@ -715,4 +693,3 @@ void dn_nsp_send_conninit(struct sock *sk, unsigned char msgflg)
 
 	dn_nsp_send(skb);
 }
-

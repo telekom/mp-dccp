@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*-*-linux-c-*-*/
 
 /*
@@ -7,20 +8,6 @@
 
   Copyright (C) 2006 Lennart Poettering <mzxreary (at) 0pointer (dot) de>
 
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful, but
-  WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	See the GNU
-  General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
-  02110-1301, USA.
  */
 
 /*
@@ -239,7 +226,7 @@ static const unsigned char pwm_lookup_table[256] = {
 /* General access */
 static u8 ec_read_u8(u8 addr)
 {
-	u8 value;
+	u8 value = 0;
 	ec_read(addr, &value);
 	return value;
 }
@@ -679,18 +666,12 @@ static int bat_writeable_property(struct power_supply *psy,
 /* ============== */
 /* Driver Globals */
 /* ============== */
-static DEVICE_ATTR(wake_up_pme,
-		0644, wake_up_pme_show,		wake_up_pme_store);
-static DEVICE_ATTR(wake_up_modem,
-		0644, wake_up_modem_show,	wake_up_modem_store);
-static DEVICE_ATTR(wake_up_lan,
-		0644, wake_up_lan_show,	wake_up_lan_store);
-static DEVICE_ATTR(wake_up_wlan,
-		0644, wake_up_wlan_show,	wake_up_wlan_store);
-static DEVICE_ATTR(wake_up_key,
-		0644, wake_up_key_show,	wake_up_key_store);
-static DEVICE_ATTR(wake_up_mouse,
-		0644, wake_up_mouse_show,	wake_up_mouse_store);
+static DEVICE_ATTR_RW(wake_up_pme);
+static DEVICE_ATTR_RW(wake_up_modem);
+static DEVICE_ATTR_RW(wake_up_lan);
+static DEVICE_ATTR_RW(wake_up_wlan);
+static DEVICE_ATTR_RW(wake_up_key);
+static DEVICE_ATTR_RW(wake_up_mouse);
 
 static DEVICE_ATTR(fan1_input,  S_IRUGO, fan_show,          NULL);
 static DEVICE_ATTR(temp1_input, S_IRUGO, temp_cpu,          NULL);

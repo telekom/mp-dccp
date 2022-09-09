@@ -1,15 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * bdc_cmd.c - BRCM BDC USB3.0 device controller
  *
  * Copyright (C) 2014 Broadcom Corporation
  *
  * Author: Ashwini Pahuja
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
- *
  */
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
@@ -316,8 +311,8 @@ int bdc_ep_clear_stall(struct bdc *bdc, int epnum)
 		/* if the endpoint it not stallled */
 		if (!(ep->flags & BDC_EP_STALL)) {
 			ret = bdc_ep_set_stall(bdc, epnum);
-				if (ret)
-					return ret;
+			if (ret)
+				return ret;
 		}
 	}
 	/* Preserve the seq number for ep0 only */

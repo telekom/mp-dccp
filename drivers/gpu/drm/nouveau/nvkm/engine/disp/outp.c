@@ -22,6 +22,7 @@
  * Authors: Ben Skeggs
  */
 #include "outp.h"
+#include "dp.h"
 #include "ior.h"
 
 #include <subdev/bios.h>
@@ -111,8 +112,35 @@ nvkm_outp_acquire_ior(struct nvkm_outp *outp, u8 user, struct nvkm_ior *ior)
 	return 0;
 }
 
+static inline int
+nvkm_outp_acquire_hda(struct nvkm_outp *outp, enum nvkm_ior_type type,
+		      u8 user, bool hda)
+{
+	struct nvkm_ior *ior;
+
+	/* Failing that, a completely unused OR is the next best thing. */
+	list_for_each_entry(ior, &outp->disp->ior, head) {
+		if (!ior->identity && !!ior->func->hda.hpd == hda &&
+		    !ior->asy.outp && ior->type == type && !ior->arm.outp &&
+		    (ior->func->route.set || ior->id == __ffs(outp->info.or)))
+			return nvkm_outp_acquire_ior(outp, user, ior);
+	}
+
+	/* Last resort is to assign an OR that's already active on HW,
+	 * but will be released during the next modeset.
+	 */
+	list_for_each_entry(ior, &outp->disp->ior, head) {
+		if (!ior->identity && !!ior->func->hda.hpd == hda &&
+		    !ior->asy.outp && ior->type == type &&
+		    (ior->func->route.set || ior->id == __ffs(outp->info.or)))
+			return nvkm_outp_acquire_ior(outp, user, ior);
+	}
+
+	return -ENOSPC;
+}
+
 int
-nvkm_outp_acquire(struct nvkm_outp *outp, u8 user)
+nvkm_outp_acquire(struct nvkm_outp *outp, u8 user, bool hda)
 {
 	struct nvkm_ior *ior = outp->ior;
 	enum nvkm_ior_proto proto;
@@ -129,31 +157,54 @@ nvkm_outp_acquire(struct nvkm_outp *outp, u8 user)
 	if (proto == UNKNOWN)
 		return -ENOSYS;
 
+	/* Deal with panels requiring identity-mapped SOR assignment. */
+	if (outp->identity) {
+		ior = nvkm_ior_find(outp->disp, SOR, ffs(outp->info.or) - 1);
+		if (WARN_ON(!ior))
+			return -ENOSPC;
+		return nvkm_outp_acquire_ior(outp, user, ior);
+	}
+
 	/* First preference is to reuse the OR that is currently armed
 	 * on HW, if any, in order to prevent unnecessary switching.
 	 */
 	list_for_each_entry(ior, &outp->disp->ior, head) {
-		if (!ior->asy.outp && ior->arm.outp == outp)
+		if (!ior->identity && !ior->asy.outp && ior->arm.outp == outp) {
+			/*XXX: For various complicated reasons, we can't outright switch
+			 *     the boot-time OR on the first modeset without some fairly
+			 *     invasive changes.
+			 *
+			 *     The systems that were fixed by modifying the OR selection
+			 *     code to account for HDA support shouldn't regress here as
+			 *     the HDA-enabled ORs match the relevant output's pad macro
+			 *     index, and the firmware seems to select an OR this way.
+			 *
+			 *     This warning is to make it obvious if that proves wrong.
+			 */
+			WARN_ON(hda && !ior->func->hda.hpd);
 			return nvkm_outp_acquire_ior(outp, user, ior);
+		}
 	}
 
-	/* Failing that, a completely unused OR is the next best thing. */
-	list_for_each_entry(ior, &outp->disp->ior, head) {
-		if (!ior->asy.outp && ior->type == type && !ior->arm.outp &&
-		    (ior->func->route.set || ior->id == __ffs(outp->info.or)))
-			return nvkm_outp_acquire_ior(outp, user, ior);
-	}
-
-	/* Last resort is to assign an OR that's already active on HW,
-	 * but will be released during the next modeset.
+	/* If we don't need HDA, first try to acquire an OR that doesn't
+	 * support it to leave free the ones that do.
 	 */
-	list_for_each_entry(ior, &outp->disp->ior, head) {
-		if (!ior->asy.outp && ior->type == type &&
-		    (ior->func->route.set || ior->id == __ffs(outp->info.or)))
-			return nvkm_outp_acquire_ior(outp, user, ior);
+	if (!hda) {
+		if (!nvkm_outp_acquire_hda(outp, type, user, false))
+			return 0;
+
+		/* Use a HDA-supporting SOR anyway. */
+		return nvkm_outp_acquire_hda(outp, type, user, true);
 	}
 
-	return -ENOSPC;
+	/* We want HDA, try to acquire an OR that supports it. */
+	if (!nvkm_outp_acquire_hda(outp, type, user, true))
+		return 0;
+
+	/* There weren't any free ORs that support HDA, grab one that
+	 * doesn't and at least allow display to work still.
+	 */
+	return nvkm_outp_acquire_hda(outp, type, user, false);
 }
 
 void
@@ -207,6 +258,14 @@ nvkm_outp_init_route(struct nvkm_outp *outp)
 	if (!ior->arm.head || ior->arm.proto != proto) {
 		OUTP_DBG(outp, "no heads (%x %d %d)", ior->arm.head,
 			 ior->arm.proto, proto);
+
+		/* The EFI GOP driver on Ampere can leave unused DP links routed,
+		 * which we don't expect.  The DisableLT IED script *should* get
+		 * us back to where we need to be.
+		 */
+		if (ior->func->route.get && !ior->arm.head && outp->info.type == DCB_OUTPUT_DP)
+			nvkm_dp_disable(outp, ior);
+
 		return;
 	}
 
@@ -247,7 +306,6 @@ nvkm_outp_ctor(const struct nvkm_outp_func *func, struct nvkm_disp *disp,
 	outp->index = index;
 	outp->info = *dcbE;
 	outp->i2c = nvkm_i2c_bus_find(i2c, dcbE->i2c_index);
-	outp->or = ffs(outp->info.or) - 1;
 
 	OUTP_DBG(outp, "type %02x loc %d or %d link %d con %x "
 		       "edid %x bus %d head %x",

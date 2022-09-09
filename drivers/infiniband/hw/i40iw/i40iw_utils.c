@@ -137,7 +137,7 @@ inline u32 i40iw_rd32(struct i40iw_hw *hw, u32 reg)
 }
 
 /**
- * i40iw_inetaddr_event - system notifier for netdev events
+ * i40iw_inetaddr_event - system notifier for ipv4 addr events
  * @notfier: not used
  * @event: event for notifier
  * @ptr: if address
@@ -168,18 +168,36 @@ int i40iw_inetaddr_event(struct notifier_block *notifier,
 	if (netdev != event_netdev)
 		return NOTIFY_DONE;
 
-	if (upper_dev)
-		local_ipaddr = ntohl(
-			((struct in_device *)upper_dev->ip_ptr)->ifa_list->ifa_address);
-	else
+	if (upper_dev) {
+		struct in_device *in;
+
+		rcu_read_lock();
+		in = __in_dev_get_rcu(upper_dev);
+
+		local_ipaddr = 0;
+		if (in) {
+			struct in_ifaddr *ifa;
+
+			ifa = rcu_dereference(in->ifa_list);
+			if (ifa)
+				local_ipaddr = ntohl(ifa->ifa_address);
+		}
+
+		rcu_read_unlock();
+	} else {
 		local_ipaddr = ntohl(ifa->ifa_address);
+	}
 	switch (event) {
 	case NETDEV_DOWN:
 		action = I40IW_ARP_DELETE;
-		/* Fall through */
+		fallthrough;
 	case NETDEV_UP:
-		/* Fall through */
 	case NETDEV_CHANGEADDR:
+
+		/* Just skip if no need to handle ARP cache */
+		if (!local_ipaddr)
+			break;
+
 		i40iw_manage_arp_cache(iwdev,
 				       netdev->dev_addr,
 				       &local_ipaddr,
@@ -195,7 +213,7 @@ int i40iw_inetaddr_event(struct notifier_block *notifier,
 }
 
 /**
- * i40iw_inet6addr_event - system notifier for ipv6 netdev events
+ * i40iw_inet6addr_event - system notifier for ipv6 addr events
  * @notfier: not used
  * @event: event for notifier
  * @ptr: if address
@@ -228,9 +246,8 @@ int i40iw_inet6addr_event(struct notifier_block *notifier,
 	switch (event) {
 	case NETDEV_DOWN:
 		action = I40IW_ARP_DELETE;
-		/* Fall through */
+		fallthrough;
 	case NETDEV_UP:
-		/* Fall through */
 	case NETDEV_CHANGEADDR:
 		i40iw_manage_arp_cache(iwdev,
 				       netdev->dev_addr,
@@ -247,7 +264,7 @@ int i40iw_inet6addr_event(struct notifier_block *notifier,
 }
 
 /**
- * i40iw_net_event - system notifier for net events
+ * i40iw_net_event - system notifier for netevents
  * @notfier: not used
  * @event: event for notifier
  * @ptr: neighbor
@@ -284,6 +301,50 @@ int i40iw_net_event(struct notifier_block *notifier, unsigned long event, void *
 					       false,
 					       I40IW_ARP_DELETE);
 		}
+		break;
+	default:
+		break;
+	}
+	return NOTIFY_DONE;
+}
+
+/**
+ * i40iw_netdevice_event - system notifier for netdev events
+ * @notfier: not used
+ * @event: event for notifier
+ * @ptr: netdev
+ */
+int i40iw_netdevice_event(struct notifier_block *notifier,
+			  unsigned long event,
+			  void *ptr)
+{
+	struct net_device *event_netdev;
+	struct net_device *netdev;
+	struct i40iw_device *iwdev;
+	struct i40iw_handler *hdl;
+
+	event_netdev = netdev_notifier_info_to_dev(ptr);
+
+	hdl = i40iw_find_netdev(event_netdev);
+	if (!hdl)
+		return NOTIFY_DONE;
+
+	iwdev = &hdl->device;
+	if (iwdev->init_state < RDMA_DEV_REGISTERED || iwdev->closing)
+		return NOTIFY_DONE;
+
+	netdev = iwdev->ldev->netdev;
+	if (netdev != event_netdev)
+		return NOTIFY_DONE;
+
+	iwdev->iw_status = 1;
+
+	switch (event) {
+	case NETDEV_DOWN:
+		iwdev->iw_status = 0;
+		fallthrough;
+	case NETDEV_UP:
+		i40iw_port_ibevent(iwdev);
 		break;
 	default:
 		break;
@@ -417,25 +478,6 @@ void i40iw_cleanup_pending_cqp_op(struct i40iw_device *iwdev)
 }
 
 /**
- * i40iw_free_qp - callback after destroy cqp completes
- * @cqp_request: cqp request for destroy qp
- * @num: not used
- */
-static void i40iw_free_qp(struct i40iw_cqp_request *cqp_request, u32 num)
-{
-	struct i40iw_sc_qp *qp = (struct i40iw_sc_qp *)cqp_request->param;
-	struct i40iw_qp *iwqp = (struct i40iw_qp *)qp->back_qp;
-	struct i40iw_device *iwdev;
-	u32 qp_num = iwqp->ibqp.qp_num;
-
-	iwdev = iwqp->iwdev;
-
-	i40iw_rem_pdusecount(iwqp->iwpd, iwdev);
-	i40iw_free_qp_resources(iwdev, iwqp, qp_num);
-	i40iw_rem_devusecount(iwdev);
-}
-
-/**
  * i40iw_wait_event - wait for completion
  * @iwdev: iwarp device
  * @cqp_request: cqp request to wait
@@ -552,30 +594,26 @@ void i40iw_rem_pdusecount(struct i40iw_pd *iwpd, struct i40iw_device *iwdev)
 	if (!atomic_dec_and_test(&iwpd->usecount))
 		return;
 	i40iw_free_resource(iwdev, iwdev->allocated_pds, iwpd->sc_pd.pd_id);
-	kfree(iwpd);
 }
 
 /**
- * i40iw_add_ref - add refcount for qp
+ * i40iw_qp_add_ref - add refcount for qp
  * @ibqp: iqarp qp
  */
-void i40iw_add_ref(struct ib_qp *ibqp)
+void i40iw_qp_add_ref(struct ib_qp *ibqp)
 {
 	struct i40iw_qp *iwqp = (struct i40iw_qp *)ibqp;
 
-	atomic_inc(&iwqp->refcount);
+	refcount_inc(&iwqp->refcount);
 }
 
 /**
- * i40iw_rem_ref - rem refcount for qp and free if 0
+ * i40iw_qp_rem_ref - rem refcount for qp and free if 0
  * @ibqp: iqarp qp
  */
-void i40iw_rem_ref(struct ib_qp *ibqp)
+void i40iw_qp_rem_ref(struct ib_qp *ibqp)
 {
 	struct i40iw_qp *iwqp;
-	enum i40iw_status_code status;
-	struct i40iw_cqp_request *cqp_request;
-	struct cqp_commands_info *cqp_info;
 	struct i40iw_device *iwdev;
 	u32 qp_num;
 	unsigned long flags;
@@ -583,7 +621,7 @@ void i40iw_rem_ref(struct ib_qp *ibqp)
 	iwqp = to_iwqp(ibqp);
 	iwdev = iwqp->iwdev;
 	spin_lock_irqsave(&iwdev->qptable_lock, flags);
-	if (!atomic_dec_and_test(&iwqp->refcount)) {
+	if (!refcount_dec_and_test(&iwqp->refcount)) {
 		spin_unlock_irqrestore(&iwdev->qptable_lock, flags);
 		return;
 	}
@@ -591,25 +629,8 @@ void i40iw_rem_ref(struct ib_qp *ibqp)
 	qp_num = iwqp->ibqp.qp_num;
 	iwdev->qp_table[qp_num] = NULL;
 	spin_unlock_irqrestore(&iwdev->qptable_lock, flags);
-	cqp_request = i40iw_get_cqp_request(&iwdev->cqp, false);
-	if (!cqp_request)
-		return;
+	complete(&iwqp->free_qp);
 
-	cqp_request->callback_fcn = i40iw_free_qp;
-	cqp_request->param = (void *)&iwqp->sc_qp;
-	cqp_info = &cqp_request->info;
-	cqp_info->cqp_cmd = OP_QP_DESTROY;
-	cqp_info->post_sq = 1;
-	cqp_info->in.u.qp_destroy.qp = &iwqp->sc_qp;
-	cqp_info->in.u.qp_destroy.scratch = (uintptr_t)cqp_request;
-	cqp_info->in.u.qp_destroy.remove_hash_idx = true;
-	status = i40iw_handle_cqp_op(iwdev, cqp_request);
-	if (!status)
-		return;
-
-	i40iw_rem_pdusecount(iwqp->iwpd, iwdev);
-	i40iw_free_qp_resources(iwdev, iwqp, qp_num);
-	i40iw_rem_devusecount(iwdev);
 }
 
 /**
@@ -691,13 +712,13 @@ enum i40iw_status_code i40iw_allocate_dma_mem(struct i40iw_hw *hw,
 					      u64 size,
 					      u32 alignment)
 {
-	struct pci_dev *pcidev = (struct pci_dev *)hw->dev_context;
+	struct pci_dev *pcidev = hw->pcidev;
 
 	if (!mem)
 		return I40IW_ERR_PARAM;
 	mem->size = ALIGN(size, alignment);
-	mem->va = dma_zalloc_coherent(&pcidev->dev, mem->size,
-				      (dma_addr_t *)&mem->pa, GFP_KERNEL);
+	mem->va = dma_alloc_coherent(&pcidev->dev, mem->size,
+				     (dma_addr_t *)&mem->pa, GFP_KERNEL);
 	if (!mem->va)
 		return I40IW_ERR_NO_MEMORY;
 	return 0;
@@ -710,7 +731,7 @@ enum i40iw_status_code i40iw_allocate_dma_mem(struct i40iw_hw *hw,
  */
 void i40iw_free_dma_mem(struct i40iw_hw *hw, struct i40iw_dma_mem *mem)
 {
-	struct pci_dev *pcidev = (struct pci_dev *)hw->dev_context;
+	struct pci_dev *pcidev = hw->pcidev;
 
 	if (!mem || !mem->va)
 		return;
@@ -870,13 +891,13 @@ void i40iw_terminate_done(struct i40iw_sc_qp *qp, int timeout_occurred)
  * i40iw_terminate_imeout - timeout happened
  * @context: points to iwarp qp
  */
-static void i40iw_terminate_timeout(unsigned long context)
+static void i40iw_terminate_timeout(struct timer_list *t)
 {
-	struct i40iw_qp *iwqp = (struct i40iw_qp *)context;
+	struct i40iw_qp *iwqp = from_timer(iwqp, t, terminate_timer);
 	struct i40iw_sc_qp *qp = (struct i40iw_sc_qp *)&iwqp->sc_qp;
 
 	i40iw_terminate_done(qp, 1);
-	i40iw_rem_ref(&iwqp->ibqp);
+	i40iw_qp_rem_ref(&iwqp->ibqp);
 }
 
 /**
@@ -888,9 +909,8 @@ void i40iw_terminate_start_timer(struct i40iw_sc_qp *qp)
 	struct i40iw_qp *iwqp;
 
 	iwqp = (struct i40iw_qp *)qp->back_qp;
-	i40iw_add_ref(&iwqp->ibqp);
-	setup_timer(&iwqp->terminate_timer, i40iw_terminate_timeout,
-		    (unsigned long)iwqp);
+	i40iw_qp_add_ref(&iwqp->ibqp);
+	timer_setup(&iwqp->terminate_timer, i40iw_terminate_timeout, 0);
 	iwqp->terminate_timer.expires = jiffies + HZ;
 	add_timer(&iwqp->terminate_timer);
 }
@@ -905,7 +925,7 @@ void i40iw_terminate_del_timer(struct i40iw_sc_qp *qp)
 
 	iwqp = (struct i40iw_qp *)qp->back_qp;
 	if (del_timer(&iwqp->terminate_timer))
-		i40iw_rem_ref(&iwqp->ibqp);
+		i40iw_qp_rem_ref(&iwqp->ibqp);
 }
 
 /**
@@ -1236,15 +1256,13 @@ void i40iw_cqp_qp_destroy_cmd(struct i40iw_sc_dev *dev, struct i40iw_sc_qp *qp)
  */
 void i40iw_ieq_mpa_crc_ae(struct i40iw_sc_dev *dev, struct i40iw_sc_qp *qp)
 {
-	struct i40iw_qp_flush_info info;
+	struct i40iw_gen_ae_info info;
 	struct i40iw_device *iwdev = (struct i40iw_device *)dev->back_dev;
 
 	i40iw_debug(dev, I40IW_DEBUG_AEQ, "%s entered\n", __func__);
-	memset(&info, 0, sizeof(info));
 	info.ae_code = I40IW_AE_LLP_RECEIVED_MPA_CRC_ERROR;
-	info.generate_ae = true;
-	info.ae_source = 0x3;
-	(void)i40iw_hw_flush_wqes(iwdev, qp, &info, false);
+	info.ae_source = I40IW_AE_SOURCE_RQ;
+	i40iw_gen_ae(iwdev, qp, &info, false);
 }
 
 /**
@@ -1359,7 +1377,7 @@ struct i40iw_sc_qp *i40iw_ieq_get_qp(struct i40iw_sc_dev *dev,
 	rem_port = ntohs(tcph->source);
 
 	cm_node = i40iw_find_node(&iwdev->cm_core, rem_port, rem_addr, loc_port,
-				  loc_addr, false);
+				  loc_addr, false, true);
 	if (!cm_node)
 		return NULL;
 	iwqp = cm_node->iwqp;
@@ -1445,11 +1463,12 @@ enum i40iw_status_code i40iw_puda_get_tcpip_info(struct i40iw_puda_completion_in
  * i40iw_hw_stats_timeout - Stats timer-handler which updates all HW stats
  * @vsi: pointer to the vsi structure
  */
-static void i40iw_hw_stats_timeout(unsigned long vsi)
+static void i40iw_hw_stats_timeout(struct timer_list *t)
 {
-	struct i40iw_sc_vsi *sc_vsi =  (struct i40iw_sc_vsi *)vsi;
+	struct i40iw_vsi_pestat *pf_devstat = from_timer(pf_devstat, t,
+						       stats_timer);
+	struct i40iw_sc_vsi *sc_vsi = pf_devstat->vsi;
 	struct i40iw_sc_dev *pf_dev = sc_vsi->dev;
-	struct i40iw_vsi_pestat *pf_devstat = sc_vsi->pestat;
 	struct i40iw_vsi_pestat *vf_devstat = NULL;
 	u16 iw_vf_idx;
 	unsigned long flags;
@@ -1480,8 +1499,7 @@ void i40iw_hw_stats_start_timer(struct i40iw_sc_vsi *vsi)
 {
 	struct i40iw_vsi_pestat *devstat = vsi->pestat;
 
-	setup_timer(&devstat->stats_timer, i40iw_hw_stats_timeout,
-		    (unsigned long)vsi);
+	timer_setup(&devstat->stats_timer, i40iw_hw_stats_timeout, 0);
 	mod_timer(&devstat->stats_timer,
 		  jiffies + msecs_to_jiffies(STATS_TIMER_DELAY));
 }

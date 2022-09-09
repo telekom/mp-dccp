@@ -13,7 +13,8 @@ extern int of_get_dma_window(struct device_node *dn, const char *prefix,
 			     size_t *size);
 
 extern const struct iommu_ops *of_iommu_configure(struct device *dev,
-					struct device_node *master_np);
+					struct device_node *master_np,
+					const u32 *id);
 
 #else
 
@@ -25,18 +26,12 @@ static inline int of_get_dma_window(struct device_node *dn, const char *prefix,
 }
 
 static inline const struct iommu_ops *of_iommu_configure(struct device *dev,
-					 struct device_node *master_np)
+					 struct device_node *master_np,
+					 const u32 *id)
 {
 	return NULL;
 }
 
 #endif	/* CONFIG_OF_IOMMU */
-
-extern struct of_device_id __iommu_of_table;
-
-typedef int (*of_iommu_init_fn)(struct device_node *);
-
-#define IOMMU_OF_DECLARE(name, compat, fn) \
-	_OF_DECLARE(iommu, name, compat, fn, of_iommu_init_fn)
 
 #endif /* __OF_IOMMU_H */

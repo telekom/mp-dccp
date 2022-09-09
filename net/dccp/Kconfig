@@ -1,10 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
 menuconfig IP_DCCP
 	tristate "The DCCP Protocol"
 	depends on INET
-	---help---
+	help
 	  Datagram Congestion Control Protocol (RFC 4340)
 
-	  From http://www.ietf.org/rfc/rfc4340.txt:
+	  From https://www.ietf.org/rfc/rfc4340.txt:
 
 	  The Datagram Congestion Control Protocol (DCCP) is a transport
 	  protocol that implements bidirectional, unicast connections of
@@ -27,7 +28,7 @@ config INET_DCCP_DIAG
 config DCCP_KEEPALIVE
 	bool "DCCP keepalive"
 	default y
-	---help---
+	help
 	  Enables Keepalive for DCCP
 
 	  If in doubt, say Y.
@@ -39,7 +40,7 @@ menu "DCCP Kernel Hacking"
 
 config IP_DCCP_DEBUG
 	bool "DCCP debug messages"
-	---help---
+	help
 	  Only use this if you're hacking DCCP.
 
 	  When compiling DCCP as a module, this debugging output can be toggled
@@ -47,38 +48,23 @@ config IP_DCCP_DEBUG
 
 	  Just say N.
 
-config NET_DCCPPROBE
-	tristate "DCCP connection probing"
-	depends on PROC_FS && KPROBES
-	---help---
-	This module allows for capturing the changes to DCCP connection
-	state in response to incoming packets. It is used for debugging
-	DCCP congestion avoidance modules. If you don't understand
-	what was just said, you don't need it: say N.
 
-	Documentation on how to use DCCP connection probing can be found
-	at:
-	
-	  http://www.linuxfoundation.org/collaborate/workgroups/networking/dccpprobe
-
-	To compile this code as a module, choose M here: the
-	module will be called dccp_probe.
 endmenu
 
 menuconfig IP_MPDCCP
 	tristate "Multipath DCCP"
-	---help---
-	This module enables bundling of multiple physical connections over
-	the DCCP protocol. If you don't understand what was just said, 
-	you don't need it: say N.
+	help
+	   This module enables bundling of multiple physical connections over
+	   the DCCP protocol. If you don't understand what was just said, 
+	   you don't need it: say N.
 
-	To compile this code as a module, choose M here: the
-	module will be called dccp_mpdccp.
+	   To compile this code as a module, choose M here: the
+	   module will be called dccp_mpdccp.
 
 if IP_MPDCCP
 config IP_MPDCCP_DEBUG
 	bool "MPDCCP debug messages"
-	---help---
+	help
 	  Only use this if you're hacking MPDCCP.
 
 	  When compiling MPDCCP as a module, this debugging output can be toggled
@@ -87,18 +73,17 @@ config IP_MPDCCP_DEBUG
 	  Just say N.
 
 
-source net/dccp/pm/Kconfig
-source net/dccp/scheduler/Kconfig
-source net/dccp/reordering/Kconfig
-source net/dccp/non_gpl_scheduler/Kconfig
-source net/dccp/non_gpl_reordering/Kconfig
-
+source "net/dccp/pm/Kconfig"
+source "net/dccp/scheduler/Kconfig"
+source "net/dccp/reordering/Kconfig"
+source "net/dccp/non_gpl_scheduler/Kconfig"
+source "net/dccp/non_gpl_reordering/Kconfig"
 
 
 config MPDCCP_STATS
 	bool "MPDCCP Statistics"
 	depends on IP_MPDCCP
-	---help---
+	help
 		Creates some statistics in /sys/class/net/<dev>
 
 

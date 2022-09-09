@@ -1,5 +1,6 @@
 /*
  *    Disk Array driver for HP Smart Array SAS controllers
+ *    Copyright (c) 2019-2020 Microchip Technology Inc. and its subsidiaries
  *    Copyright 2016 Microsemi Corporation
  *    Copyright 2014-2015 PMC-Sierra, Inc.
  *    Copyright 2000,2009-2015 Hewlett-Packard Development Company, L.P.
@@ -142,6 +143,7 @@
 #define DOORBELL_CTLR_RESET	0x00000004l
 #define DOORBELL_CTLR_RESET2	0x00000020l
 #define DOORBELL_CLEAR_EVENTS	0x00000040l
+#define DOORBELL_GENERATE_CHKPT	0x00000080l
 
 #define CFGTBL_Trans_Simple     0x00000002l
 #define CFGTBL_Trans_Performant 0x00000004l
@@ -447,7 +449,7 @@ struct CommandList {
 	struct hpsa_scsi_dev_t *phys_disk;
 
 	int abort_pending;
-	struct hpsa_scsi_dev_t *reset_pending;
+	struct hpsa_scsi_dev_t *device;
 	atomic_t refcount; /* Must be last to avoid memset in hpsa_cmd_init() */
 } __aligned(COMMANDLIST_ALIGNMENT);
 
@@ -516,6 +518,7 @@ struct ioaccel2_sg_element {
 	u8 reserved[3];
 	u8 chain_indicator;
 #define IOACCEL2_CHAIN 0x80
+#define IOACCEL2_LAST_SG 0x40
 };
 
 /*
@@ -779,6 +782,8 @@ struct bmic_identify_physical_device {
 	u8     phys_bay_in_box;  /* phys drv bay this drive resides */
 	__le32 rpm;              /* Drive rotational speed in rpm */
 	u8     device_type;       /* type of drive */
+#define BMIC_DEVICE_TYPE_CONTROLLER	0x07
+
 	u8     sata_version;     /* only valid when drive_type is SATA */
 	__le64 big_total_block_count;
 	__le64 ris_starting_lba;

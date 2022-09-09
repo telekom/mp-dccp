@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * SPCA506 chip based cameras function
  * M Xhaard 15/04/2004 based on different work Mark Taylor and others
@@ -5,16 +6,6 @@
  *                "Firma Frank Gmbh" from  Saarbruecken
  *
  * V4L2 by Jean-Francois Moine <http://moinejf.free.fr>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
  */
 
 #define MODULE_NAME "spca506"
@@ -126,7 +117,7 @@ static void spca506_SetNormeInput(struct gspca_dev *gspca_dev,
 	__u8 setbit1 = 0x00;
 	__u8 videomask = 0x00;
 
-	PDEBUG(D_STREAM, "** Open Set Norme **");
+	gspca_dbg(gspca_dev, D_STREAM, "** Open Set Norme **\n");
 	spca506_Initi2c(gspca_dev);
 	/* NTSC bit0 -> 1(525 l) PAL SECAM bit0 -> 0 (625 l) */
 	/* Composite channel bit1 -> 1 S-video bit 1 -> 0 */
@@ -153,8 +144,9 @@ static void spca506_SetNormeInput(struct gspca_dev *gspca_dev,
 
 	sd->norme = norme;
 	sd->channel = channel;
-	PDEBUG(D_STREAM, "Set Video Byte to 0x%2x", videomask);
-	PDEBUG(D_STREAM, "Set Norme: %08x Channel %d", norme, channel);
+	gspca_dbg(gspca_dev, D_STREAM, "Set Video Byte to 0x%2x\n", videomask);
+	gspca_dbg(gspca_dev, D_STREAM, "Set Norme: %08x Channel %d",
+		  norme, channel);
 }
 
 static void spca506_GetNormeInput(struct gspca_dev *gspca_dev,
@@ -166,7 +158,8 @@ static void spca506_GetNormeInput(struct gspca_dev *gspca_dev,
 	   we use your own copy in spca50x struct */
 	*norme = sd->norme;
 	*channel = sd->channel;
-	PDEBUG(D_STREAM, "Get Norme: %d Channel %d", *norme, *channel);
+	gspca_dbg(gspca_dev, D_STREAM, "Get Norme: %d Channel %d\n",
+		  *norme, *channel);
 }
 
 static void spca506_Setsize(struct gspca_dev *gspca_dev, __u16 code,
@@ -174,7 +167,7 @@ static void spca506_Setsize(struct gspca_dev *gspca_dev, __u16 code,
 {
 	struct usb_device *dev = gspca_dev->dev;
 
-	PDEBUG(D_STREAM, "** SetSize **");
+	gspca_dbg(gspca_dev, D_STREAM, "** SetSize **\n");
 	reg_w(dev, 0x04, (0x18 | (code & 0x07)), 0x0000);
 	/* Soft snap 0x40 Hard 0x41 */
 	reg_w(dev, 0x04, 0x41, 0x0001);
@@ -317,7 +310,7 @@ static int sd_init(struct gspca_dev *gspca_dev)
 	spca506_WriteI2c(gspca_dev, 0x00, 0x60);
 	spca506_WriteI2c(gspca_dev, 0x05, 0x61);
 	spca506_WriteI2c(gspca_dev, 0x9f, 0x62);
-	PDEBUG(D_STREAM, "** Close Init *");
+	gspca_dbg(gspca_dev, D_STREAM, "** Close Init *\n");
 	return 0;
 }
 
@@ -445,7 +438,7 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	reg_w(dev, 0x02, 0x01, 0x0000);
 	reg_w(dev, 0x03, 0x12, 0x0000);
 	reg_r(gspca_dev, 0x04, 0x0001, 2);
-	PDEBUG(D_STREAM, "webcam started");
+	gspca_dbg(gspca_dev, D_STREAM, "webcam started\n");
 	spca506_GetNormeInput(gspca_dev, &norme, &channel);
 	spca506_SetNormeInput(gspca_dev, norme, channel);
 	return 0;

@@ -1,12 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * NAU85L40 ALSA SoC audio driver
  *
  * Copyright 2016 Nuvoton Technology Corp.
  * Author: John Hsu <KCHSU0@nuvoton.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef __NAU8540_H__
@@ -100,9 +97,13 @@
 #define NAU8540_CLK_MCLK_SRC_MASK	0xf
 
 /* FLL1 (0x04) */
+#define NAU8540_ICTRL_LATCH_SFT	10
+#define NAU8540_ICTRL_LATCH_MASK	(0x7 << NAU8540_ICTRL_LATCH_SFT)
 #define NAU8540_FLL_RATIO_MASK	0x7f
 
 /* FLL3 (0x06) */
+#define NAU8540_GAIN_ERR_SFT		12
+#define NAU8540_GAIN_ERR_MASK		(0xf << NAU8540_GAIN_ERR_SFT)
 #define NAU8540_FLL_CLK_SRC_SFT	10
 #define NAU8540_FLL_CLK_SRC_MASK	(0x3 << NAU8540_FLL_CLK_SRC_SFT)
 #define NAU8540_FLL_CLK_SRC_MCLK	(0 << NAU8540_FLL_CLK_SRC_SFT)
@@ -127,6 +128,7 @@
 /* FLL6 (0x9) */
 #define NAU8540_DCO_EN			(0x1 << 15)
 #define NAU8540_SDM_EN			(0x1 << 14)
+#define NAU8540_CUTOFF500		(0x1 << 13)
 
 /* PCM_CTRL0 (0x10) */
 #define NAU8540_I2S_BP_SFT		7
@@ -146,6 +148,7 @@
 #define NAU8540_I2S_DF_PCM_AB		0x3
 
 /* PCM_CTRL1 (0x11) */
+#define NAU8540_I2S_DO12_TRI		(0x1 << 15)
 #define NAU8540_I2S_LRC_DIV_SFT	12
 #define NAU8540_I2S_LRC_DIV_MASK	(0x3 << NAU8540_I2S_LRC_DIV_SFT)
 #define NAU8540_I2S_DO12_OE		(0x1 << 4)
@@ -156,6 +159,7 @@
 #define NAU8540_I2S_BLK_DIV_MASK	0x7
 
 /* PCM_CTRL1 (0x12) */
+#define NAU8540_I2S_DO34_TRI		(0x1 << 15)
 #define NAU8540_I2S_DO34_OE		(0x1 << 11)
 #define NAU8540_I2S_TSLOT_L_MASK	0x3ff
 
@@ -165,6 +169,7 @@
 #define NAU8540_TDM_TX_MASK		0xf
 
 /* ADC_SAMPLE_RATE (0x3A) */
+#define NAU8540_CH_SYNC		(0x1 << 14)
 #define NAU8540_ADC_OSR_MASK		0x3
 #define NAU8540_ADC_OSR_256		0x3
 #define NAU8540_ADC_OSR_128		0x2
@@ -182,6 +187,18 @@
 /* REFERENCE (0x68) */
 #define NAU8540_PRECHARGE_DIS		(0x1 << 13)
 #define NAU8540_GLOBAL_BIAS_EN	(0x1 << 12)
+
+/* FEPGA1 (0x69) */
+#define NAU8540_FEPGA1_MODCH2_SHT_SFT	7
+#define NAU8540_FEPGA1_MODCH2_SHT	(0x1 << NAU8540_FEPGA1_MODCH2_SHT_SFT)
+#define NAU8540_FEPGA1_MODCH1_SHT_SFT	3
+#define NAU8540_FEPGA1_MODCH1_SHT	(0x1 << NAU8540_FEPGA1_MODCH1_SHT_SFT)
+
+/* FEPGA2 (0x6A) */
+#define NAU8540_FEPGA2_MODCH4_SHT_SFT	7
+#define NAU8540_FEPGA2_MODCH4_SHT	(0x1 << NAU8540_FEPGA2_MODCH4_SHT_SFT)
+#define NAU8540_FEPGA2_MODCH3_SHT_SFT	3
+#define NAU8540_FEPGA2_MODCH3_SHT	(0x1 << NAU8540_FEPGA2_MODCH3_SHT_SFT)
 
 
 /* System Clock Source */

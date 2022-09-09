@@ -1,14 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright 2016-17 IBM Corp.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #ifndef _ASM_POWERPC_VAS_H
 #define _ASM_POWERPC_VAS_H
+
+struct vas_window;
 
 /*
  * Min and max FIFO sizes are based on Version 1.05 Section 3.1.4.25
@@ -54,7 +52,7 @@ enum vas_cop_type {
  * Receive window attributes specified by the (in-kernel) owner of window.
  */
 struct vas_rx_win_attr {
-	void *rx_fifo;
+	u64 rx_fifo;
 	int rx_fifo_size;
 	int wcreds_max;
 
@@ -88,7 +86,6 @@ struct vas_tx_win_attr {
 	int wcreds_max;
 	int lpid;
 	int pidr;		/* hardware PID (from SPRN_PID) */
-	int pid;		/* linux process id */
 	int pswid;
 	int rsvd_txbuf_count;
 	int tc_mode;
@@ -102,6 +99,15 @@ struct vas_tx_win_attr {
 	bool tx_win_ord_mode;
 	bool rx_win_ord_mode;
 };
+
+/*
+ * Helper to map a chip id to VAS id.
+ * For POWER9, this is a 1:1 mapping. In the future this maybe a 1:N
+ * mapping in which case, we will need to update this helper.
+ *
+ * Return the VAS id or -1 if no matching vasid is found.
+ */
+int chip_to_vas_id(int chipid);
 
 /*
  * Helper to initialize receive window attributes to defaults for an
@@ -155,5 +161,17 @@ int vas_copy_crb(void *crb, int offset);
  * assumed to be true for NX windows.
  */
 int vas_paste_crb(struct vas_window *win, int offset, bool re);
+
+/*
+ * Register / unregister coprocessor type to VAS API which will be exported
+ * to user space. Applications can use this API to open / close window
+ * which can be used to send / receive requests directly to cooprcessor.
+ *
+ * Only NX GZIP coprocessor type is supported now, but this API can be
+ * used for others in future.
+ */
+int vas_register_coproc_api(struct module *mod, enum vas_cop_type cop_type,
+				const char *name);
+void vas_unregister_coproc_api(void);
 
 #endif /* __ASM_POWERPC_VAS_H */

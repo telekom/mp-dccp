@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * tascam-transaction.c - a part of driver for TASCAM FireWire series
  *
  * Copyright (c) 2015 Takashi Sakamoto
- *
- * Licensed under the terms of the GNU General Public License, version 2.
  */
 
 #include "tascam.h"
@@ -148,7 +147,7 @@ static void async_midi_port_callback(struct fw_card *card, int rcode,
 				     void *callback_data)
 {
 	struct snd_fw_async_midi_port *port = callback_data;
-	struct snd_rawmidi_substream *substream = ACCESS_ONCE(port->substream);
+	struct snd_rawmidi_substream *substream = READ_ONCE(port->substream);
 
 	/* This port is closed. */
 	if (substream == NULL)
@@ -173,7 +172,7 @@ static void midi_port_work(struct work_struct *work)
 {
 	struct snd_fw_async_midi_port *port =
 			container_of(work, struct snd_fw_async_midi_port, work);
-	struct snd_rawmidi_substream *substream = ACCESS_ONCE(port->substream);
+	struct snd_rawmidi_substream *substream = READ_ONCE(port->substream);
 	int generation;
 
 	/* Under transacting or error state. */
@@ -210,7 +209,7 @@ static void midi_port_work(struct work_struct *work)
 
 	/* Set interval to next transaction. */
 	port->next_ktime = ktime_add_ns(ktime_get(),
-				port->consume_bytes * 8 * NSEC_PER_SEC / 31250);
+			port->consume_bytes * 8 * (NSEC_PER_SEC / 31250));
 
 	/* Start this transaction. */
 	port->idling = false;
@@ -282,7 +281,7 @@ static void handle_midi_tx(struct fw_card *card, struct fw_request *request,
 				bytes = 3;
 		}
 
-		substream = ACCESS_ONCE(tscm->tx_midi_substreams[port]);
+		substream = READ_ONCE(tscm->tx_midi_substreams[port]);
 		if (substream != NULL)
 			snd_rawmidi_receive(substream, b + 1, bytes);
 	}

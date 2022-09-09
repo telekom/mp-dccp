@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * ci_hdrc_pci.c - MIPS USB IP core family device controller
  *
  * Copyright (C) 2008 Chipidea - MIPS Technologies, Inc. All rights reserved.
  *
  * Author: David Lopo
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/platform_device.h>
@@ -123,7 +120,7 @@ static void ci_hdrc_pci_remove(struct pci_dev *pdev)
 	usb_phy_generic_unregister(ci->phy);
 }
 
-/**
+/*
  * PCI device table
  * PCI device structure
  *

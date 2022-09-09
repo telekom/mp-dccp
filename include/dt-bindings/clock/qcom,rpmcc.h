@@ -1,14 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright 2015 Linaro Limited
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #ifndef _DT_BINDINGS_CLK_MSM_RPMCC_H
@@ -37,6 +29,18 @@
 #define RPM_SYS_FABRIC_A_CLK			19
 #define RPM_SFPB_CLK				20
 #define RPM_SFPB_A_CLK				21
+#define RPM_SMI_CLK				22
+#define RPM_SMI_A_CLK				23
+#define RPM_PLL4_CLK				24
+#define RPM_XO_D0				25
+#define RPM_XO_D1				26
+#define RPM_XO_A0				27
+#define RPM_XO_A1				28
+#define RPM_XO_A2				29
+#define RPM_NSS_FABRIC_0_CLK			30
+#define RPM_NSS_FABRIC_0_A_CLK			31
+#define RPM_NSS_FABRIC_1_CLK			32
+#define RPM_NSS_FABRIC_1_A_CLK			33
 
 /* SMD RPM clocks */
 #define RPM_SMD_XO_CLK_SRC				0
@@ -101,5 +105,49 @@
 #define RPM_SMD_CXO_A1_A_PIN			59
 #define RPM_SMD_CXO_A2_PIN			60
 #define RPM_SMD_CXO_A2_A_PIN			61
+#define RPM_SMD_AGGR1_NOC_CLK			62
+#define RPM_SMD_AGGR1_NOC_A_CLK			63
+#define RPM_SMD_AGGR2_NOC_CLK			64
+#define RPM_SMD_AGGR2_NOC_A_CLK			65
+#define RPM_SMD_MMAXI_CLK			66
+#define RPM_SMD_MMAXI_A_CLK			67
+#define RPM_SMD_IPA_CLK				68
+#define RPM_SMD_IPA_A_CLK			69
+#define RPM_SMD_CE1_CLK				70
+#define RPM_SMD_CE1_A_CLK			71
+#define RPM_SMD_DIV_CLK3			72
+#define RPM_SMD_DIV_A_CLK3			73
+#define RPM_SMD_LN_BB_CLK			74
+#define RPM_SMD_LN_BB_A_CLK			75
+#define RPM_SMD_BIMC_GPU_CLK			76
+#define RPM_SMD_BIMC_GPU_A_CLK			77
+#define RPM_SMD_QPIC_CLK			78
+#define RPM_SMD_QPIC_CLK_A			79
+#define RPM_SMD_LN_BB_CLK1			80
+#define RPM_SMD_LN_BB_CLK1_A			81
+#define RPM_SMD_LN_BB_CLK2			82
+#define RPM_SMD_LN_BB_CLK2_A			83
+#define RPM_SMD_LN_BB_CLK3_PIN			84
+#define RPM_SMD_LN_BB_CLK3_A_PIN		85
+#define RPM_SMD_RF_CLK3				86
+#define RPM_SMD_RF_CLK3_A			87
+#define RPM_SMD_RF_CLK3_PIN			88
+#define RPM_SMD_RF_CLK3_A_PIN			89
+#define RPM_SMD_MMSSNOC_AXI_CLK			90
+#define RPM_SMD_MMSSNOC_AXI_CLK_A		91
+#define RPM_SMD_CNOC_PERIPH_CLK			92
+#define RPM_SMD_CNOC_PERIPH_A_CLK		93
+#define RPM_SMD_LN_BB_CLK3			94
+#define RPM_SMD_LN_BB_CLK3_A			95
+#define RPM_SMD_LN_BB_CLK1_PIN			96
+#define RPM_SMD_LN_BB_CLK1_A_PIN		97
+#define RPM_SMD_LN_BB_CLK2_PIN			98
+#define RPM_SMD_LN_BB_CLK2_A_PIN		99
+#define RPM_SMD_SYSMMNOC_CLK			100
+#define RPM_SMD_SYSMMNOC_A_CLK			101
+#define RPM_SMD_CE2_CLK				102
+#define RPM_SMD_CE2_A_CLK			103
+#define RPM_SMD_CE3_CLK				104
+#define RPM_SMD_CE3_A_CLK			105
 
 #endif

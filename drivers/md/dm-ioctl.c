@@ -17,6 +17,7 @@
 #include <linux/dm-ioctl.h>
 #include <linux/hdreg.h>
 #include <linux/compat.h>
+#include <linux/nospec.h>
 
 #include <linux/uaccess.h>
 
@@ -529,7 +530,7 @@ static int list_devices(struct file *filp, struct dm_ioctl *param, size_t param_
 	 * Grab our output buffer.
 	 */
 	nl = orig_nl = get_result_buffer(param, param_size, &len);
-	if (len < needed) {
+	if (len < needed || len < sizeof(nl->dev)) {
 		param->flags |= DM_BUFFER_FULL_FLAG;
 		goto out;
 	}
@@ -601,17 +602,27 @@ static void list_version_get_info(struct target_type *tt, void *param)
     info->vers = align_ptr(((void *) ++info->vers) + strlen(tt->name) + 1);
 }
 
-static int list_versions(struct file *filp, struct dm_ioctl *param, size_t param_size)
+static int __list_versions(struct dm_ioctl *param, size_t param_size, const char *name)
 {
 	size_t len, needed = 0;
 	struct dm_target_versions *vers;
 	struct vers_iter iter_info;
+	struct target_type *tt = NULL;
+
+	if (name) {
+		tt = dm_get_target_type(name);
+		if (!tt)
+			return -EINVAL;
+	}
 
 	/*
 	 * Loop through all the devices working out how much
 	 * space we need.
 	 */
-	dm_target_iterate(list_version_get_needed, &needed);
+	if (!tt)
+		dm_target_iterate(list_version_get_needed, &needed);
+	else
+		list_version_get_needed(tt, &needed);
 
 	/*
 	 * Grab our output buffer.
@@ -632,11 +643,26 @@ static int list_versions(struct file *filp, struct dm_ioctl *param, size_t param
 	/*
 	 * Now loop through filling out the names & versions.
 	 */
-	dm_target_iterate(list_version_get_info, &iter_info);
+	if (!tt)
+		dm_target_iterate(list_version_get_info, &iter_info);
+	else
+		list_version_get_info(tt, &iter_info);
 	param->flags |= iter_info.flags;
 
  out:
+	if (tt)
+		dm_put_target_type(tt);
 	return 0;
+}
+
+static int list_versions(struct file *filp, struct dm_ioctl *param, size_t param_size)
+{
+	return __list_versions(param, param_size, NULL);
+}
+
+static int get_target_version(struct file *filp, struct dm_ioctl *param, size_t param_size)
+{
+	return __list_versions(param, param_size, param->name);
 }
 
 static int check_name(const char *name)
@@ -1143,7 +1169,7 @@ static void retrieve_status(struct dm_table *table,
 		spec->sector_start = ti->begin;
 		spec->length = ti->len;
 		strncpy(spec->target_type, ti->type->name,
-			sizeof(spec->target_type));
+			sizeof(spec->target_type) - 1);
 
 		outptr += sizeof(struct dm_target_spec);
 		remaining = len - (outptr - outbuf);
@@ -1344,7 +1370,8 @@ static int table_load(struct file *filp, struct dm_ioctl *param, size_t param_si
 			goto err_unlock_md_type;
 		}
 	} else if (!is_valid_type(dm_get_md_type(md), dm_table_get_type(t))) {
-		DMWARN("can't change device type after initial table load.");
+		DMWARN("can't change device type (old=%u vs new=%u) after initial table load.",
+		       dm_get_md_type(md), dm_table_get_type(t));
 		r = -EINVAL;
 		goto err_unlock_md_type;
 	}
@@ -1445,7 +1472,7 @@ static void retrieve_deps(struct dm_table *table,
 	/*
 	 * Check we have enough space.
 	 */
-	needed = sizeof(*deps) + (sizeof(*deps->dev) * count);
+	needed = struct_size(deps, dev, count);
 	if (len < needed) {
 		param->flags |= DM_BUFFER_FULL_FLAG;
 		return;
@@ -1574,6 +1601,7 @@ static int target_message(struct file *filp, struct dm_ioctl *param, size_t para
 
 	if (!argc) {
 		DMWARN("Empty message received.");
+		r = -EINVAL;
 		goto out_argv;
 	}
 
@@ -1591,11 +1619,11 @@ static int target_message(struct file *filp, struct dm_ioctl *param, size_t para
 	}
 
 	ti = dm_table_find_target(table, tmsg->sector);
-	if (!dm_target_is_valid(ti)) {
+	if (!ti) {
 		DMWARN("Target message sector outside device.");
 		r = -EINVAL;
 	} else if (ti->type->message)
-		r = ti->type->message(ti, argc, argv);
+		r = ti->type->message(ti, argc, argv, result, maxlen);
 	else {
 		DMWARN("Target type does not support messages");
 		r = -EINVAL;
@@ -1663,11 +1691,13 @@ static ioctl_fn lookup_ioctl(unsigned int cmd, int *ioctl_flags)
 		{DM_TARGET_MSG_CMD, 0, target_message},
 		{DM_DEV_SET_GEOMETRY_CMD, 0, dev_set_geometry},
 		{DM_DEV_ARM_POLL, IOCTL_FLAGS_NO_PARAMS, dev_arm_poll},
+		{DM_GET_TARGET_VERSION, 0, get_target_version},
 	};
 
 	if (unlikely(cmd >= ARRAY_SIZE(_ioctls)))
 		return NULL;
 
+	cmd = array_index_nospec(cmd, ARRAY_SIZE(_ioctls));
 	*ioctl_flags = _ioctls[cmd].flags;
 	return _ioctls[cmd].fn;
 }
@@ -1817,7 +1847,7 @@ static int ctl_ioctl(struct file *file, uint command, struct dm_ioctl __user *us
 	int ioctl_flags;
 	int param_flags;
 	unsigned int cmd;
-	struct dm_ioctl *uninitialized_var(param);
+	struct dm_ioctl *param;
 	ioctl_fn fn = NULL;
 	size_t input_param_size;
 	struct dm_ioctl param_kernel;
@@ -1923,15 +1953,15 @@ static int dm_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-static unsigned dm_poll(struct file *filp, poll_table *wait)
+static __poll_t dm_poll(struct file *filp, poll_table *wait)
 {
 	struct dm_file *priv = filp->private_data;
-	unsigned mask = 0;
+	__poll_t mask = 0;
 
 	poll_wait(filp, &dm_global_eventq, wait);
 
 	if ((int)(atomic_read(&dm_global_event_nr) - priv->global_event_nr) > 0)
-		mask |= POLLIN;
+		mask |= EPOLLIN;
 
 	return mask;
 }
@@ -2015,5 +2045,112 @@ int dm_copy_name_and_uuid(struct mapped_device *md, char *name, char *uuid)
 out:
 	mutex_unlock(&dm_hash_cells_mutex);
 
+	return r;
+}
+EXPORT_SYMBOL_GPL(dm_copy_name_and_uuid);
+
+/**
+ * dm_early_create - create a mapped device in early boot.
+ *
+ * @dmi: Contains main information of the device mapping to be created.
+ * @spec_array: array of pointers to struct dm_target_spec. Describes the
+ * mapping table of the device.
+ * @target_params_array: array of strings with the parameters to a specific
+ * target.
+ *
+ * Instead of having the struct dm_target_spec and the parameters for every
+ * target embedded at the end of struct dm_ioctl (as performed in a normal
+ * ioctl), pass them as arguments, so the caller doesn't need to serialize them.
+ * The size of the spec_array and target_params_array is given by
+ * @dmi->target_count.
+ * This function is supposed to be called in early boot, so locking mechanisms
+ * to protect against concurrent loads are not required.
+ */
+int __init dm_early_create(struct dm_ioctl *dmi,
+			   struct dm_target_spec **spec_array,
+			   char **target_params_array)
+{
+	int r, m = DM_ANY_MINOR;
+	struct dm_table *t, *old_map;
+	struct mapped_device *md;
+	unsigned int i;
+
+	if (!dmi->target_count)
+		return -EINVAL;
+
+	r = check_name(dmi->name);
+	if (r)
+		return r;
+
+	if (dmi->flags & DM_PERSISTENT_DEV_FLAG)
+		m = MINOR(huge_decode_dev(dmi->dev));
+
+	/* alloc dm device */
+	r = dm_create(m, &md);
+	if (r)
+		return r;
+
+	/* hash insert */
+	r = dm_hash_insert(dmi->name, *dmi->uuid ? dmi->uuid : NULL, md);
+	if (r)
+		goto err_destroy_dm;
+
+	/* alloc table */
+	r = dm_table_create(&t, get_mode(dmi), dmi->target_count, md);
+	if (r)
+		goto err_hash_remove;
+
+	/* add targets */
+	for (i = 0; i < dmi->target_count; i++) {
+		r = dm_table_add_target(t, spec_array[i]->target_type,
+					(sector_t) spec_array[i]->sector_start,
+					(sector_t) spec_array[i]->length,
+					target_params_array[i]);
+		if (r) {
+			DMWARN("error adding target to table");
+			goto err_destroy_table;
+		}
+	}
+
+	/* finish table */
+	r = dm_table_complete(t);
+	if (r)
+		goto err_destroy_table;
+
+	md->type = dm_table_get_type(t);
+	/* setup md->queue to reflect md's type (may block) */
+	r = dm_setup_md_queue(md, t);
+	if (r) {
+		DMWARN("unable to set up device queue for new table.");
+		goto err_destroy_table;
+	}
+
+	/* Set new map */
+	dm_suspend(md, 0);
+	old_map = dm_swap_table(md, t);
+	if (IS_ERR(old_map)) {
+		r = PTR_ERR(old_map);
+		goto err_destroy_table;
+	}
+	set_disk_ro(dm_disk(md), !!(dmi->flags & DM_READONLY_FLAG));
+
+	/* resume device */
+	r = dm_resume(md);
+	if (r)
+		goto err_destroy_table;
+
+	DMINFO("%s (%s) is ready", md->disk->disk_name, dmi->name);
+	dm_put(md);
+	return 0;
+
+err_destroy_table:
+	dm_table_destroy(t);
+err_hash_remove:
+	(void) __hash_remove(__get_name_cell(dmi->name));
+	/* release reference from __get_name_cell */
+	dm_put(md);
+err_destroy_dm:
+	dm_put(md);
+	dm_destroy(md);
 	return r;
 }

@@ -43,11 +43,12 @@ gk104_sor = {
 	.hda = {
 		.hpd = gf119_hda_hpd,
 		.eld = gf119_hda_eld,
+		.device_entry = gf119_hda_device_entry,
 	},
 };
 
 int
 gk104_sor_new(struct nvkm_disp *disp, int id)
 {
-	return gf119_sor_new_(&gk104_sor, disp, id);
+	return nvkm_ior_new_(&gk104_sor, disp, SOR, id);
 }

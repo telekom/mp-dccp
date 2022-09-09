@@ -35,9 +35,6 @@ Rules on what kind of patches are accepted, and which ones are not, into the
 Procedure for submitting patches to the -stable tree
 ----------------------------------------------------
 
- - If the patch covers files in net/ or drivers/net please follow netdev stable
-   submission guidelines as described in
-   Documentation/networking/netdev-FAQ.txt
  - Security patches should not be handled (solely) by the -stable review
    process but should follow the procedures in
    :ref:`Documentation/admin-guide/security-bugs.rst <securitybugs>`.
@@ -98,9 +95,9 @@ text, like this:
 
     commit <sha1> upstream.
 
-Additionally, some patches submitted via Option 1 may have additional patch
-prerequisites which can be cherry-picked. This can be specified in the following
-format in the sign-off area:
+Additionally, some patches submitted via :ref:`option_1` may have additional
+patch prerequisites which can be cherry-picked. This can be specified in the
+following format in the sign-off area:
 
 .. code-block:: none
 
@@ -171,7 +168,16 @@ Trees
  - The finalized and tagged releases of all stable kernels can be found
    in separate branches per version at:
 
-	https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
+	https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+
+ - The release candidate of all stable kernel versions can be found at:
+
+        https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable-rc.git/
+
+   .. warning::
+      The -stable-rc tree is a snapshot in time of the stable-queue tree and
+      will change frequently, hence will be rebased often. It should only be
+      used for testing purposes (e.g. to be consumed by CI systems).
 
 
 Review committee

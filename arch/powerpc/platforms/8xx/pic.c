@@ -125,7 +125,7 @@ static const struct irq_domain_ops mpc8xx_pic_host_ops = {
 	.xlate = mpc8xx_pic_host_xlate,
 };
 
-int mpc8xx_pic_init(void)
+int __init mpc8xx_pic_init(void)
 {
 	struct resource res;
 	struct device_node *np;
@@ -155,8 +155,8 @@ int mpc8xx_pic_init(void)
 		ret = -ENOMEM;
 		goto out;
 	}
-	return 0;
 
+	ret = 0;
 out:
 	of_node_put(np);
 	return ret;

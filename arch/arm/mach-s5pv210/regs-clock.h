@@ -1,18 +1,17 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (c) 2010 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com/
  *
  * S5PV210 - Clock register definitions
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
-*/
+ */
 
 #ifndef __ASM_ARCH_REGS_CLOCK_H
 #define __ASM_ARCH_REGS_CLOCK_H __FILE__
 
-#include <plat/map-base.h>
+#define S3C_ADDR_BASE		0xF6000000
+#define S3C_ADDR(x)		((void __iomem __force *)S3C_ADDR_BASE + (x))
+#define S3C_VA_SYS		S3C_ADDR(0x00100000)
 
 #define S5P_CLKREG(x)		(S3C_VA_SYS + (x))
 

@@ -31,6 +31,10 @@
 #include "../dccp.h"
 #include <linux/win_minmax.h>
 
+/*
+ * CCID-2 timestamping faces the same issues as TCP timestamping.
+ * Hence we reuse/share as much of the code as possible.
+ */
 //#define ccid5_time_stamp	tcp_time_stamp
 #define ccid5_jiffies32	((u32)jiffies)
 
@@ -82,6 +86,7 @@ struct ccid5_hc_tx_sock {
 				tx_rto;
 	u64			tx_rtt_seq:48;
 	struct timer_list	tx_rtotimer;
+	struct sock		*sk;
 
 	/* Congestion Window validation (optional, RFC 2861) */
 	u32			tx_cwnd_used,
@@ -238,4 +243,3 @@ static inline struct ccid5_hc_rx_sock *ccid5_hc_rx_sk(const struct sock *sk)
 	return ccid_priv(dccp_sk(sk)->dccps_hc_rx_ccid);
 }
 #endif /* _DCCP_CCID5_H_ */
-

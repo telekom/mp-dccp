@@ -1,13 +1,53 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright 2016,2017 IBM Corporation.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 #ifndef _ASM_POWERPC_XIVE_REGS_H
 #define _ASM_POWERPC_XIVE_REGS_H
+
+/*
+ * "magic" Event State Buffer (ESB) MMIO offsets.
+ *
+ * Each interrupt source has a 2-bit state machine called ESB
+ * which can be controlled by MMIO. It's made of 2 bits, P and
+ * Q. P indicates that an interrupt is pending (has been sent
+ * to a queue and is waiting for an EOI). Q indicates that the
+ * interrupt has been triggered while pending.
+ *
+ * This acts as a coalescing mechanism in order to guarantee
+ * that a given interrupt only occurs at most once in a queue.
+ *
+ * When doing an EOI, the Q bit will indicate if the interrupt
+ * needs to be re-triggered.
+ *
+ * The following offsets into the ESB MMIO allow to read or
+ * manipulate the PQ bits. They must be used with an 8-bytes
+ * load instruction. They all return the previous state of the
+ * interrupt (atomically).
+ *
+ * Additionally, some ESB pages support doing an EOI via a
+ * store at 0 and some ESBs support doing a trigger via a
+ * separate trigger page.
+ */
+#define XIVE_ESB_STORE_EOI	0x400 /* Store */
+#define XIVE_ESB_LOAD_EOI	0x000 /* Load */
+#define XIVE_ESB_GET		0x800 /* Load */
+#define XIVE_ESB_SET_PQ_00	0xc00 /* Load */
+#define XIVE_ESB_SET_PQ_01	0xd00 /* Load */
+#define XIVE_ESB_SET_PQ_10	0xe00 /* Load */
+#define XIVE_ESB_SET_PQ_11	0xf00 /* Load */
+
+/*
+ * Load-after-store ordering
+ *
+ * Adding this offset to the load address will enforce
+ * load-after-store ordering. This is required to use StoreEOI.
+ */
+#define XIVE_ESB_LD_ST_MO	0x40 /* Load-after-store ordering */
+
+#define XIVE_ESB_VAL_P		0x2
+#define XIVE_ESB_VAL_Q		0x1
+#define XIVE_ESB_INVALID	0xFF
 
 /*
  * Thread Management (aka "TM") registers
@@ -87,11 +127,5 @@
 #define  TM_QW3_NSR_HE_LSI	3
 #define TM_QW3_NSR_I		PPC_BIT8(2)
 #define TM_QW3_NSR_GRP_LVL	PPC_BIT8(3,7)
-
-/* Utilities to manipulate these (originaly from OPAL) */
-#define MASK_TO_LSH(m)		(__builtin_ffsl(m) - 1)
-#define GETFIELD(m, v)		(((v) & (m)) >> MASK_TO_LSH(m))
-#define SETFIELD(m, v, val)				\
-	(((v) & ~(m)) |	((((typeof(v))(val)) << MASK_TO_LSH(m)) & (m)))
 
 #endif /* _ASM_POWERPC_XIVE_REGS_H */

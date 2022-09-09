@@ -9,8 +9,6 @@ Required properties:
  - interrupts: <a b> where a is the interrupt number and b is a
    field that represents an encoding of the sense and level
    information for the interrupt.
- - interrupt-parent: the phandle for the interrupt controller that
-   services interrupts for this device.
 
 Optional properties:
  - active-semi,input-voltage-threshold-microvolt: unit: mV;
@@ -35,7 +33,7 @@ Example:
 			pinctrl-names = "default";
 			pinctrl-0 = <&pinctrl_charger_chglev &pinctrl_charger_lbo &pinctrl_charger_irq>;
 			interrupt-parent = <&pioA>;
-			interrupts = <45 GPIO_ACTIVE_LOW>;
+			interrupts = <45 IRQ_TYPE_LEVEL_LOW>;
 
 			active-semi,chglev-gpios = <&pioA 12 GPIO_ACTIVE_HIGH>;
 			active-semi,lbo-gpios = <&pioA 72 GPIO_ACTIVE_LOW>;

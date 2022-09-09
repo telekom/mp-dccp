@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * POWER Data Stream Control Register (DSCR)
  *
@@ -6,10 +7,6 @@
  *
  * Copyright 2012, Anton Blanchard, IBM Corporation.
  * Copyright 2015, Anshuman Khandual, IBM Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
  */
 #ifndef _SELFTESTS_POWERPC_DSCR_DSCR_H
 #define _SELFTESTS_POWERPC_DSCR_DSCR_H
@@ -39,7 +36,7 @@
 #define rmb()  asm volatile("lwsync":::"memory")
 #define wmb()  asm volatile("lwsync":::"memory")
 
-#define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
+#define READ_ONCE(x) (*(volatile typeof(x) *)&(x))
 
 /* Prilvilege state DSCR access */
 inline unsigned long get_dscr(void)

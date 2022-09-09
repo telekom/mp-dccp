@@ -282,9 +282,9 @@ static void raw3215_start_io(struct raw3215_info *raw)
 /*
  * Function to start a delayed output after RAW3215_TIMEOUT seconds
  */
-static void raw3215_timeout(unsigned long __data)
+static void raw3215_timeout(struct timer_list *t)
 {
-	struct raw3215_info *raw = (struct raw3215_info *) __data;
+	struct raw3215_info *raw = from_timer(raw, t, timer);
 	unsigned long flags;
 
 	spin_lock_irqsave(get_ccwdev_lock(raw->cdev), flags);
@@ -398,6 +398,7 @@ static void raw3215_irq(struct ccw_device *cdev, unsigned long intparm,
 		}
 		if (dstat == 0x08)
 			break;
+		fallthrough;
 	case 0x04:
 		/* Device end interrupt. */
 		if ((raw = req->info) == NULL)
@@ -670,7 +671,7 @@ static struct raw3215_info *raw3215_alloc_info(void)
 		return NULL;
 	}
 
-	setup_timer(&info->timer, raw3215_timeout, (unsigned long)info);
+	timer_setup(&info->timer, raw3215_timeout, 0);
 	init_waitqueue_head(&info->empty_wait);
 	tasklet_init(&info->tlet, raw3215_wakeup, (unsigned long)info);
 	tty_port_init(&info->port);
@@ -977,7 +978,6 @@ static int tty3215_install(struct tty_driver *driver, struct tty_struct *tty)
 static int tty3215_open(struct tty_struct *tty, struct file * filp)
 {
 	struct raw3215_info *raw = tty->driver_data;
-	int retval;
 
 	tty_port_tty_set(&raw->port, tty);
 
@@ -985,11 +985,7 @@ static int tty3215_open(struct tty_struct *tty, struct file * filp)
 	/*
 	 * Start up 3215 device
 	 */
-	retval = raw3215_startup(raw);
-	if (retval)
-		return retval;
-
-	return 0;
+	return raw3215_startup(raw);
 }
 
 /*

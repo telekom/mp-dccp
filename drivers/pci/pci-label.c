@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Purpose: Export the firmware instance and label associated with
- * a pci device to sysfs
+ * Export the firmware instance and label associated with a PCI device to
+ * sysfs
+ *
  * Copyright (C) 2010 Dell Inc.
  * by Narendra K <Narendra_K@dell.com>,
  * Jordan Hargrave <Jordan_Hargrave@dell.com>
@@ -17,7 +18,7 @@
  * the instance number and string from the type 41 record and exports
  * it to sysfs.
  *
- * Please see http://linux.dell.com/files/biosdevname/ for more
+ * Please see https://linux.dell.com/files/biosdevname/ for more
  * information.
  */
 
@@ -161,7 +162,7 @@ static void dsm_label_utf16s_to_utf8s(union acpi_object *obj, char *buf)
 	len = utf16s_to_utf8s((const wchar_t *)obj->buffer.pointer,
 			      obj->buffer.length,
 			      UTF16_LITTLE_ENDIAN,
-			      buf, PAGE_SIZE);
+			      buf, PAGE_SIZE - 1);
 	buf[len] = '\n';
 }
 
@@ -177,7 +178,7 @@ static int dsm_get_label(struct device *dev, char *buf,
 		return -1;
 
 	obj = acpi_evaluate_dsm(handle, &pci_acpi_dsm_guid, 0x2,
-				DEVICE_LABEL_DSM, NULL);
+				DSM_PCI_DEVICE_NAME, NULL);
 	if (!obj)
 		return -1;
 
@@ -217,7 +218,7 @@ static bool device_has_dsm(struct device *dev)
 		return false;
 
 	return !!acpi_check_dsm(handle, &pci_acpi_dsm_guid, 0x2,
-				1 << DEVICE_LABEL_DSM);
+				1 << DSM_PCI_DEVICE_NAME);
 }
 
 static umode_t acpi_index_string_exist(struct kobject *kobj,

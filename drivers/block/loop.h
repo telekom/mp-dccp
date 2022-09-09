@@ -66,12 +66,12 @@ struct loop_device {
 
 struct loop_cmd {
 	struct kthread_work work;
-	struct request *rq;
 	bool use_aio; /* use AIO interface to handle I/O */
 	atomic_t ref; /* only for aio */
 	long ret;
 	struct kiocb iocb;
 	struct bio_vec *bvec;
+	struct cgroup_subsys_state *css;
 };
 
 /* Support for loadable transfer modules */

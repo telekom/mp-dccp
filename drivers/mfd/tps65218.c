@@ -1,7 +1,7 @@
 /*
  * Driver for TPS65218 Integrated power management chipsets
  *
- * Copyright (C) 2014 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2014 Texas Instruments Incorporated - https://www.ti.com/
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License version 2 as
@@ -48,7 +48,7 @@ static const struct mfd_cell tps65218_cells[] = {
 /**
  * tps65218_reg_write: Write a single tps65218 register.
  *
- * @tps65218: Device to write to.
+ * @tps: Device to write to.
  * @reg: Register to write to.
  * @val: Value to write.
  * @level: Password protected level
@@ -79,7 +79,7 @@ EXPORT_SYMBOL_GPL(tps65218_reg_write);
 /**
  * tps65218_update_bits: Modify bits w.r.t mask, val and level.
  *
- * @tps65218: Device to write to.
+ * @tps: Device to write to.
  * @reg: Register to read-write to.
  * @mask: Mask.
  * @val: Value to write.
@@ -211,20 +211,89 @@ static const struct of_device_id of_tps65218_match_table[] = {
 };
 MODULE_DEVICE_TABLE(of, of_tps65218_match_table);
 
+static int tps65218_voltage_set_strict(struct tps65218 *tps)
+{
+	u32 strict;
+
+	if (of_property_read_u32(tps->dev->of_node,
+				 "ti,strict-supply-voltage-supervision",
+				 &strict))
+		return 0;
+
+	if (strict != 0 && strict != 1) {
+		dev_err(tps->dev,
+			"Invalid ti,strict-supply-voltage-supervision value\n");
+		return -EINVAL;
+	}
+
+	tps65218_update_bits(tps, TPS65218_REG_CONFIG1,
+			     TPS65218_CONFIG1_STRICT,
+			     strict ? TPS65218_CONFIG1_STRICT : 0,
+			     TPS65218_PROTECT_L1);
+	return 0;
+}
+
+static int tps65218_voltage_set_uv_hyst(struct tps65218 *tps)
+{
+	u32 hyst;
+
+	if (of_property_read_u32(tps->dev->of_node,
+				 "ti,under-voltage-hyst-microvolt", &hyst))
+		return 0;
+
+	if (hyst != 400000 && hyst != 200000) {
+		dev_err(tps->dev,
+			"Invalid ti,under-voltage-hyst-microvolt value\n");
+		return -EINVAL;
+	}
+
+	tps65218_update_bits(tps, TPS65218_REG_CONFIG2,
+			     TPS65218_CONFIG2_UVLOHYS,
+			     hyst == 400000 ? TPS65218_CONFIG2_UVLOHYS : 0,
+			     TPS65218_PROTECT_L1);
+	return 0;
+}
+
+static int tps65218_voltage_set_uvlo(struct tps65218 *tps)
+{
+	u32 uvlo;
+	int uvloval;
+
+	if (of_property_read_u32(tps->dev->of_node,
+				 "ti,under-voltage-limit-microvolt", &uvlo))
+		return 0;
+
+	switch (uvlo) {
+	case 2750000:
+		uvloval = TPS65218_CONFIG1_UVLO_2750000;
+		break;
+	case 2950000:
+		uvloval = TPS65218_CONFIG1_UVLO_2950000;
+		break;
+	case 3250000:
+		uvloval = TPS65218_CONFIG1_UVLO_3250000;
+		break;
+	case 3350000:
+		uvloval = TPS65218_CONFIG1_UVLO_3350000;
+		break;
+	default:
+		dev_err(tps->dev,
+			"Invalid ti,under-voltage-limit-microvolt value\n");
+		return -EINVAL;
+	}
+
+	tps65218_update_bits(tps, TPS65218_REG_CONFIG1,
+			     TPS65218_CONFIG1_UVLO_MASK, uvloval,
+			     TPS65218_PROTECT_L1);
+	return 0;
+}
+
 static int tps65218_probe(struct i2c_client *client,
 				const struct i2c_device_id *ids)
 {
 	struct tps65218 *tps;
-	const struct of_device_id *match;
 	int ret;
 	unsigned int chipid;
-
-	match = of_match_device(of_tps65218_match_table, &client->dev);
-	if (!match) {
-		dev_err(&client->dev,
-			"Failed to find matching dt id\n");
-		return -EINVAL;
-	}
 
 	tps = devm_kzalloc(&client->dev, sizeof(*tps), GFP_KERNEL);
 	if (!tps)
@@ -256,6 +325,18 @@ static int tps65218_probe(struct i2c_client *client,
 	}
 
 	tps->rev = chipid & TPS65218_CHIPID_REV_MASK;
+
+	ret = tps65218_voltage_set_strict(tps);
+	if (ret)
+		return ret;
+
+	ret = tps65218_voltage_set_uvlo(tps);
+	if (ret)
+		return ret;
+
+	ret = tps65218_voltage_set_uv_hyst(tps);
+	if (ret)
+		return ret;
 
 	ret = mfd_add_devices(tps->dev, PLATFORM_DEVID_AUTO, tps65218_cells,
 			      ARRAY_SIZE(tps65218_cells), NULL, 0,

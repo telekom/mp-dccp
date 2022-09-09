@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Basic HP/COMPAQ MSA 1000 support. This is only needed if your HW cannot be
  * upgraded.
@@ -5,20 +6,6 @@
  * Copyright (C) 2006 Red Hat, Inc.  All rights reserved.
  * Copyright (C) 2006 Mike Christie
  * Copyright (C) 2008 Hannes Reinecke <hare@suse.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; see the file COPYING.  If not, write to
- * the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/slab.h>
@@ -73,7 +60,7 @@ static int tur_done(struct scsi_device *sdev, struct hp_sw_dh_data *h,
 			ret = SCSI_DH_OK;
 			break;
 		}
-		/* Fallthrough */
+		fallthrough;
 	default:
 		sdev_printk(KERN_WARNING, sdev,
 			   "%s: sending tur failed, sense %x/%x/%x\n",
@@ -160,7 +147,7 @@ retry:
 				rc = SCSI_DH_RETRY;
 				break;
 			}
-			/* fall through */
+			fallthrough;
 		default:
 			sdev_printk(KERN_WARNING, sdev,
 				    "%s: sending start_stop_unit failed, "
@@ -172,17 +159,16 @@ retry:
 	return rc;
 }
 
-static int hp_sw_prep_fn(struct scsi_device *sdev, struct request *req)
+static blk_status_t hp_sw_prep_fn(struct scsi_device *sdev, struct request *req)
 {
 	struct hp_sw_dh_data *h = sdev->handler_data;
-	int ret = BLKPREP_OK;
 
 	if (h->path_state != HP_SW_PATH_ACTIVE) {
-		ret = BLKPREP_KILL;
 		req->rq_flags |= RQF_QUIET;
+		return BLK_STS_IOERR;
 	}
-	return ret;
 
+	return BLK_STS_OK;
 }
 
 /*
@@ -218,24 +204,28 @@ static int hp_sw_bus_attach(struct scsi_device *sdev)
 
 	h = kzalloc(sizeof(*h), GFP_KERNEL);
 	if (!h)
-		return -ENOMEM;
+		return SCSI_DH_NOMEM;
 	h->path_state = HP_SW_PATH_UNINITIALIZED;
 	h->retries = HP_SW_RETRIES;
 	h->sdev = sdev;
 
 	ret = hp_sw_tur(sdev, h);
-	if (ret != SCSI_DH_OK || h->path_state == HP_SW_PATH_UNINITIALIZED)
+	if (ret != SCSI_DH_OK)
 		goto failed;
+	if (h->path_state == HP_SW_PATH_UNINITIALIZED) {
+		ret = SCSI_DH_NOSYS;
+		goto failed;
+	}
 
 	sdev_printk(KERN_INFO, sdev, "%s: attached to %s path\n",
 		    HP_SW_NAME, h->path_state == HP_SW_PATH_ACTIVE?
 		    "active":"passive");
 
 	sdev->handler_data = h;
-	return 0;
+	return SCSI_DH_OK;
 failed:
 	kfree(h);
-	return -EINVAL;
+	return ret;
 }
 
 static void hp_sw_bus_detach( struct scsi_device *sdev )

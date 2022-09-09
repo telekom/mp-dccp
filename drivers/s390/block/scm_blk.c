@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Block driver for s390 storage class memory.
  *
@@ -255,7 +256,8 @@ static void scm_request_finish(struct scm_request *scmrq)
 	for (i = 0; i < nr_requests_per_io && scmrq->request[i]; i++) {
 		error = blk_mq_rq_to_pdu(scmrq->request[i]);
 		*error = scmrq->error;
-		blk_mq_complete_request(scmrq->request[i]);
+		if (likely(!blk_should_fake_timeout(scmrq->request[i]->q)))
+			blk_mq_complete_request(scmrq->request[i]);
 	}
 
 	atomic_dec(&bdev->queued_reqs);
@@ -472,8 +474,8 @@ int scm_blk_dev_setup(struct scm_blk_dev *bdev, struct scm_device *scmdev)
 	blk_queue_logical_block_size(rq, 1 << 12);
 	blk_queue_max_hw_sectors(rq, nr_max_blk << 3); /* 8 * 512 = blk_size */
 	blk_queue_max_segments(rq, nr_max_blk);
-	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, rq);
-	queue_flag_clear_unlocked(QUEUE_FLAG_ADD_RANDOM, rq);
+	blk_queue_flag_set(QUEUE_FLAG_NONROT, rq);
+	blk_queue_flag_clear(QUEUE_FLAG_ADD_RANDOM, rq);
 
 	bdev->gendisk = alloc_disk(SCM_NR_PARTS);
 	if (!bdev->gendisk) {
@@ -499,7 +501,7 @@ int scm_blk_dev_setup(struct scm_blk_dev *bdev, struct scm_device *scmdev)
 
 	/* 512 byte sectors */
 	set_capacity(bdev->gendisk, scmdev->size >> 9);
-	device_add_disk(&scmdev->dev, bdev->gendisk);
+	device_add_disk(&scmdev->dev, bdev->gendisk, NULL);
 	return 0;
 
 out_queue:

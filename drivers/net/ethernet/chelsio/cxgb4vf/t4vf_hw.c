@@ -313,7 +313,17 @@ int t4vf_wr_mbox_core(struct adapter *adapter, const void *cmd, int size,
 	return ret;
 }
 
+/* In the Physical Function Driver Common Code, the ADVERT_MASK is used to
+ * mask out bits in the Advertised Port Capabilities which are managed via
+ * separate controls, like Pause Frames and Forward Error Correction.  In the
+ * Virtual Function Common Code, since we never perform L1 Configuration on
+ * the Link, the only things we really need to filter out are things which
+ * we decode and report separately like Speed.
+ */
 #define ADVERT_MASK (FW_PORT_CAP32_SPEED_V(FW_PORT_CAP32_SPEED_M) | \
+		     FW_PORT_CAP32_802_3_PAUSE | \
+		     FW_PORT_CAP32_802_3_ASM_DIR | \
+		     FW_PORT_CAP32_FEC_V(FW_PORT_CAP32_FEC_M) | \
 		     FW_PORT_CAP32_ANEG)
 
 /**
@@ -341,8 +351,8 @@ static fw_port_cap32_t fwcaps16_to_caps32(fw_port_cap16_t caps16)
 	CAP16_TO_CAP32(FC_RX);
 	CAP16_TO_CAP32(FC_TX);
 	CAP16_TO_CAP32(ANEG);
-	CAP16_TO_CAP32(MDIX);
 	CAP16_TO_CAP32(MDIAUTO);
+	CAP16_TO_CAP32(MDISTRAIGHT);
 	CAP16_TO_CAP32(FEC_RS);
 	CAP16_TO_CAP32(FEC_BASER_RS);
 	CAP16_TO_CAP32(802_3_PAUSE);
@@ -379,9 +389,7 @@ static inline enum cc_fec fwcap_to_cc_fec(fw_port_cap32_t fw_fec)
 	return cc_fec;
 }
 
-/**
- * Return the highest speed set in the port capabilities, in Mb/s.
- */
+/* Return the highest speed set in the port capabilities, in Mb/s. */
 static unsigned int fwcap_to_speed(fw_port_cap32_t caps)
 {
 	#define TEST_SPEED_RETURN(__caps_speed, __speed) \
@@ -402,6 +410,36 @@ static unsigned int fwcap_to_speed(fw_port_cap32_t caps)
 
 	#undef TEST_SPEED_RETURN
 
+	return 0;
+}
+
+/**
+ *      fwcap_to_fwspeed - return highest speed in Port Capabilities
+ *      @acaps: advertised Port Capabilities
+ *
+ *      Get the highest speed for the port from the advertised Port
+ *      Capabilities.  It will be either the highest speed from the list of
+ *      speeds or whatever user has set using ethtool.
+ */
+static fw_port_cap32_t fwcap_to_fwspeed(fw_port_cap32_t acaps)
+{
+	#define TEST_SPEED_RETURN(__caps_speed) \
+		do { \
+			if (acaps & FW_PORT_CAP32_SPEED_##__caps_speed) \
+				return FW_PORT_CAP32_SPEED_##__caps_speed; \
+		} while (0)
+
+	TEST_SPEED_RETURN(400G);
+	TEST_SPEED_RETURN(200G);
+	TEST_SPEED_RETURN(100G);
+	TEST_SPEED_RETURN(50G);
+	TEST_SPEED_RETURN(40G);
+	TEST_SPEED_RETURN(25G);
+	TEST_SPEED_RETURN(10G);
+	TEST_SPEED_RETURN(1G);
+	TEST_SPEED_RETURN(100M);
+
+	#undef TEST_SPEED_RETURN
 	return 0;
 }
 
@@ -431,6 +469,13 @@ static void init_link_config(struct link_config *lc,
 	lc->requested_fec = FEC_AUTO;
 	lc->fec = lc->auto_fec;
 
+	/* If the Port is capable of Auto-Negtotiation, initialize it as
+	 * "enabled" and copy over all of the Physical Port Capabilities
+	 * to the Advertised Port Capabilities.  Otherwise mark it as
+	 * Auto-Negotiate disabled and select the highest supported speed
+	 * for the link.  Note parallel structure in t4_link_l1cfg_core()
+	 * and t4_handle_get_port_info().
+	 */
 	if (lc->pcaps & FW_PORT_CAP32_ANEG) {
 		lc->acaps = acaps & ADVERT_MASK;
 		lc->autoneg = AUTONEG_ENABLE;
@@ -438,6 +483,7 @@ static void init_link_config(struct link_config *lc,
 	} else {
 		lc->acaps = 0;
 		lc->autoneg = AUTONEG_DISABLE;
+		lc->speed_caps = fwcap_to_fwspeed(acaps);
 	}
 }
 
@@ -1362,6 +1408,30 @@ int t4vf_enable_vi(struct adapter *adapter, unsigned int viid,
 }
 
 /**
+ *	t4vf_enable_pi - enable/disable a Port's virtual interface
+ *	@adapter: the adapter
+ *	@pi: the Port Information structure
+ *	@rx_en: 1=enable Rx, 0=disable Rx
+ *	@tx_en: 1=enable Tx, 0=disable Tx
+ *
+ *	Enables/disables a Port's virtual interface.  If the Virtual
+ *	Interface enable/disable operation is successful, we notify the
+ *	OS-specific code of a potential Link Status change via the OS Contract
+ *	API t4vf_os_link_changed().
+ */
+int t4vf_enable_pi(struct adapter *adapter, struct port_info *pi,
+		   bool rx_en, bool tx_en)
+{
+	int ret = t4vf_enable_vi(adapter, pi->viid, rx_en, tx_en);
+
+	if (ret)
+		return ret;
+	t4vf_os_link_changed(adapter, pi->pidx,
+			     rx_en && tx_en && pi->link_cfg.link_ok);
+	return 0;
+}
+
+/**
  *	t4vf_identify_port - identify a VI's port by blinking its LED
  *	@adapter: the adapter
  *	@viid: the Virtual Interface ID
@@ -1395,6 +1465,7 @@ int t4vf_identify_port(struct adapter *adapter, unsigned int viid,
  *	@bcast: 1 to enable broadcast Rx, 0 to disable it, -1 no change
  *	@vlanex: 1 to enable hardware VLAN Tag extraction, 0 to disable it,
  *		-1 no change
+ *	@sleep_ok: call is allowed to sleep
  *
  *	Sets Rx properties of a virtual interface.
  */
@@ -1812,7 +1883,7 @@ int t4vf_eth_eq_free(struct adapter *adapter, unsigned int eqid)
  *
  *	Returns a string representation of the Link Down Reason Code.
  */
-const char *t4vf_link_down_rc_str(unsigned char link_down_rc)
+static const char *t4vf_link_down_rc_str(unsigned char link_down_rc)
 {
 	static const char * const reason[] = {
 		"Link Down",
@@ -1834,23 +1905,23 @@ const char *t4vf_link_down_rc_str(unsigned char link_down_rc)
 /**
  *	t4vf_handle_get_port_info - process a FW reply message
  *	@pi: the port info
- *	@rpl: start of the FW message
+ *	@cmd: start of the FW message
  *
  *	Processes a GET_PORT_INFO FW reply message.
  */
-void t4vf_handle_get_port_info(struct port_info *pi,
-			       const struct fw_port_cmd *cmd)
+static void t4vf_handle_get_port_info(struct port_info *pi,
+				      const struct fw_port_cmd *cmd)
 {
-	int action = FW_PORT_CMD_ACTION_G(be32_to_cpu(cmd->action_to_len16));
-	struct adapter *adapter = pi->adapter;
-	struct link_config *lc = &pi->link_cfg;
-	int link_ok, linkdnrc;
-	enum fw_port_type port_type;
-	enum fw_port_module_type mod_type;
-	unsigned int speed, fc, fec;
 	fw_port_cap32_t pcaps, acaps, lpacaps, linkattr;
+	struct link_config *lc = &pi->link_cfg;
+	struct adapter *adapter = pi->adapter;
+	unsigned int speed, fc, fec, adv_fc;
+	enum fw_port_module_type mod_type;
+	int action, link_ok, linkdnrc;
+	enum fw_port_type port_type;
 
 	/* Extract the various fields from the Port Information message. */
+	action = FW_PORT_CMD_ACTION_G(be32_to_cpu(cmd->action_to_len16));
 	switch (action) {
 	case FW_PORT_ACTION_GET_PORT_INFO: {
 		u32 lstatus = be32_to_cpu(cmd->u.info.lstatus_to_modtype);
@@ -1910,6 +1981,7 @@ void t4vf_handle_get_port_info(struct port_info *pi,
 	}
 
 	fec = fwcap_to_cc_fec(acaps);
+	adv_fc = fwcap_to_cc_pause(acaps);
 	fc = fwcap_to_cc_pause(linkattr);
 	speed = fwcap_to_speed(linkattr);
 
@@ -1940,14 +2012,19 @@ void t4vf_handle_get_port_info(struct port_info *pi,
 	}
 
 	if (link_ok != lc->link_ok || speed != lc->speed ||
-	    fc != lc->fc || fec != lc->fec) {	/* something changed */
+	    fc != lc->fc || adv_fc != lc->advertised_fc ||
+	    fec != lc->fec) {
+		/* something changed */
 		if (!link_ok && lc->link_ok) {
 			lc->link_down_rc = linkdnrc;
-			dev_warn(adapter->pdev_dev, "Port %d link down, reason: %s\n",
-				 pi->port_id, t4vf_link_down_rc_str(linkdnrc));
+			dev_warn_ratelimited(adapter->pdev_dev,
+					     "Port %d link down, reason: %s\n",
+					     pi->port_id,
+					     t4vf_link_down_rc_str(linkdnrc));
 		}
 		lc->link_ok = link_ok;
 		lc->speed = speed;
+		lc->advertised_fc = adv_fc;
 		lc->fc = fc;
 		lc->fec = fec;
 
@@ -1955,7 +2032,14 @@ void t4vf_handle_get_port_info(struct port_info *pi,
 		lc->lpacaps = lpacaps;
 		lc->acaps = acaps & ADVERT_MASK;
 
-		if (lc->acaps & FW_PORT_CAP32_ANEG) {
+		/* If we're not physically capable of Auto-Negotiation, note
+		 * this as Auto-Negotiation disabled.  Otherwise, we track
+		 * what Auto-Negotiation settings we have.  Note parallel
+		 * structure in init_link_config().
+		 */
+		if (!(lc->pcaps & FW_PORT_CAP32_ANEG)) {
+			lc->autoneg = AUTONEG_DISABLE;
+		} else if (lc->acaps & FW_PORT_CAP32_ANEG) {
 			lc->autoneg = AUTONEG_ENABLE;
 		} else {
 			/* When Autoneg is disabled, user needs to set
@@ -2052,8 +2136,6 @@ int t4vf_handle_fw_rpl(struct adapter *adapter, const __be64 *rpl)
 	return 0;
 }
 
-/**
- */
 int t4vf_prep_adapter(struct adapter *adapter)
 {
 	int err;
@@ -2105,14 +2187,14 @@ int t4vf_prep_adapter(struct adapter *adapter)
  *	t4vf_get_vf_mac_acl - Get the MAC address to be set to
  *			      the VI of this VF.
  *	@adapter: The adapter
- *	@pf: The pf associated with vf
+ *	@port: The port associated with vf
  *	@naddr: the number of ACL MAC addresses returned in addr
  *	@addr: Placeholder for MAC addresses
  *
  *	Find the MAC address to be set to the VF's VI. The requested MAC address
  *	is from the host OS via callback in the PF driver.
  */
-int t4vf_get_vf_mac_acl(struct adapter *adapter, unsigned int pf,
+int t4vf_get_vf_mac_acl(struct adapter *adapter, unsigned int port,
 			unsigned int *naddr, u8 *addr)
 {
 	struct fw_acl_mac_cmd cmd;
@@ -2130,7 +2212,7 @@ int t4vf_get_vf_mac_acl(struct adapter *adapter, unsigned int pf,
 	if (cmd.nmac < *naddr)
 		*naddr = cmd.nmac;
 
-	switch (pf) {
+	switch (port) {
 	case 3:
 		memcpy(addr, cmd.macaddr3, sizeof(cmd.macaddr3));
 		break;
@@ -2146,4 +2228,32 @@ int t4vf_get_vf_mac_acl(struct adapter *adapter, unsigned int pf,
 	}
 
 	return ret;
+}
+
+/**
+ *	t4vf_get_vf_vlan_acl - Get the VLAN ID to be set to
+ *                             the VI of this VF.
+ *	@adapter: The adapter
+ *
+ *	Find the VLAN ID to be set to the VF's VI. The requested VLAN ID
+ *	is from the host OS via callback in the PF driver.
+ */
+int t4vf_get_vf_vlan_acl(struct adapter *adapter)
+{
+	struct fw_acl_vlan_cmd cmd;
+	int vlan = 0;
+	int ret = 0;
+
+	cmd.op_to_vfn = htonl(FW_CMD_OP_V(FW_ACL_VLAN_CMD) |
+			      FW_CMD_REQUEST_F | FW_CMD_READ_F);
+
+	/* Note: Do not enable the ACL */
+	cmd.en_to_len16 = cpu_to_be32((unsigned int)FW_LEN16(cmd));
+
+	ret = t4vf_wr_mbox(adapter, &cmd, sizeof(cmd), &cmd);
+
+	if (!ret)
+		vlan = be16_to_cpu(cmd.vlanid[0]);
+
+	return vlan;
 }

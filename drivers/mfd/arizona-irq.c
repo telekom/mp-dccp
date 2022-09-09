@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Arizona interrupt support
  *
  * Copyright 2012 Wolfson Microelectronics plc
  *
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/delay.h>
@@ -103,7 +100,7 @@ static irqreturn_t arizona_irq_thread(int irq, void *data)
 	unsigned int val;
 	int ret;
 
-	ret = pm_runtime_get_sync(arizona->dev);
+	ret = pm_runtime_resume_and_get(arizona->dev);
 	if (ret < 0) {
 		dev_err(arizona->dev, "Failed to resume device: %d\n", ret);
 		return IRQ_NONE;
@@ -184,6 +181,7 @@ static struct irq_chip arizona_irq_chip = {
 };
 
 static struct lock_class_key arizona_irq_lock_class;
+static struct lock_class_key arizona_irq_request_class;
 
 static int arizona_irq_map(struct irq_domain *h, unsigned int virq,
 			      irq_hw_number_t hw)
@@ -191,7 +189,8 @@ static int arizona_irq_map(struct irq_domain *h, unsigned int virq,
 	struct arizona *data = h->host_data;
 
 	irq_set_chip_data(virq, data);
-	irq_set_lockdep_class(virq, &arizona_irq_lock_class);
+	irq_set_lockdep_class(virq, &arizona_irq_lock_class,
+		&arizona_irq_request_class);
 	irq_set_chip_and_handler(virq, &arizona_irq_chip, handle_simple_irq);
 	irq_set_nested_thread(virq, 1);
 	irq_set_noprobe(virq);

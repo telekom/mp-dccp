@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Network Service Header
  *
  * Copyright (c) 2017 Red Hat, Inc. -- Jiri Benc <jbenc@redhat.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -13,6 +10,68 @@
 #include <linux/skbuff.h>
 #include <net/nsh.h>
 #include <net/tun_proto.h>
+
+int nsh_push(struct sk_buff *skb, const struct nshhdr *pushed_nh)
+{
+	struct nshhdr *nh;
+	size_t length = nsh_hdr_len(pushed_nh);
+	u8 next_proto;
+
+	if (skb->mac_len) {
+		next_proto = TUN_P_ETHERNET;
+	} else {
+		next_proto = tun_p_from_eth_p(skb->protocol);
+		if (!next_proto)
+			return -EAFNOSUPPORT;
+	}
+
+	/* Add the NSH header */
+	if (skb_cow_head(skb, length) < 0)
+		return -ENOMEM;
+
+	skb_push(skb, length);
+	nh = (struct nshhdr *)(skb->data);
+	memcpy(nh, pushed_nh, length);
+	nh->np = next_proto;
+	skb_postpush_rcsum(skb, nh, length);
+
+	skb->protocol = htons(ETH_P_NSH);
+	skb_reset_mac_header(skb);
+	skb_reset_network_header(skb);
+	skb_reset_mac_len(skb);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(nsh_push);
+
+int nsh_pop(struct sk_buff *skb)
+{
+	struct nshhdr *nh;
+	size_t length;
+	__be16 inner_proto;
+
+	if (!pskb_may_pull(skb, NSH_BASE_HDR_LEN))
+		return -ENOMEM;
+	nh = (struct nshhdr *)(skb->data);
+	length = nsh_hdr_len(nh);
+	if (length < NSH_BASE_HDR_LEN)
+		return -EINVAL;
+	inner_proto = tun_p_to_eth_p(nh->np);
+	if (!pskb_may_pull(skb, length))
+		return -ENOMEM;
+
+	if (!inner_proto)
+		return -EAFNOSUPPORT;
+
+	skb_pull_rcsum(skb, length);
+	skb_reset_mac_header(skb);
+	skb_reset_network_header(skb);
+	skb_reset_mac_len(skb);
+	skb->protocol = inner_proto;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(nsh_pop);
 
 static struct sk_buff *nsh_gso_segment(struct sk_buff *skb,
 				       netdev_features_t features)

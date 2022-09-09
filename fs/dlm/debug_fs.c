@@ -1,11 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /******************************************************************************
 *******************************************************************************
 **
 **  Copyright (C) 2005-2009 Red Hat, Inc.  All rights reserved.
 **
-**  This copyrighted material is made available to anyone wishing to use,
-**  modify, copy, or redistribute it subject to the terms and conditions
-**  of the GNU General Public License v.2.
 **
 *******************************************************************************
 ******************************************************************************/
@@ -544,6 +542,7 @@ static void *table_seq_next(struct seq_file *seq, void *iter_ptr, loff_t *pos)
 
 		if (bucket >= ls->ls_rsbtbl_size) {
 			kfree(ri);
+			++*pos;
 			return NULL;
 		}
 		tree = toss ? &ls->ls_rsbtbl[bucket].toss : &ls->ls_rsbtbl[bucket].keep;
@@ -739,7 +738,7 @@ void dlm_delete_debug_file(struct dlm_ls *ls)
 	debugfs_remove(ls->ls_debug_toss_dentry);
 }
 
-int dlm_create_debug_file(struct dlm_ls *ls)
+void dlm_create_debug_file(struct dlm_ls *ls)
 {
 	char name[DLM_LOCKSPACE_LEN + 8];
 
@@ -750,8 +749,6 @@ int dlm_create_debug_file(struct dlm_ls *ls)
 						      dlm_root,
 						      ls,
 						      &format1_fops);
-	if (!ls->ls_debug_rsb_dentry)
-		goto fail;
 
 	/* format 2 */
 
@@ -763,8 +760,6 @@ int dlm_create_debug_file(struct dlm_ls *ls)
 							dlm_root,
 							ls,
 							&format2_fops);
-	if (!ls->ls_debug_locks_dentry)
-		goto fail;
 
 	/* format 3 */
 
@@ -776,8 +771,6 @@ int dlm_create_debug_file(struct dlm_ls *ls)
 						      dlm_root,
 						      ls,
 						      &format3_fops);
-	if (!ls->ls_debug_all_dentry)
-		goto fail;
 
 	/* format 4 */
 
@@ -789,8 +782,6 @@ int dlm_create_debug_file(struct dlm_ls *ls)
 						       dlm_root,
 						       ls,
 						       &format4_fops);
-	if (!ls->ls_debug_toss_dentry)
-		goto fail;
 
 	memset(name, 0, sizeof(name));
 	snprintf(name, DLM_LOCKSPACE_LEN + 8, "%s_waiters", ls->ls_name);
@@ -800,21 +791,12 @@ int dlm_create_debug_file(struct dlm_ls *ls)
 							  dlm_root,
 							  ls,
 							  &waiters_fops);
-	if (!ls->ls_debug_waiters_dentry)
-		goto fail;
-
-	return 0;
-
- fail:
-	dlm_delete_debug_file(ls);
-	return -ENOMEM;
 }
 
-int __init dlm_register_debugfs(void)
+void __init dlm_register_debugfs(void)
 {
 	mutex_init(&debug_buf_lock);
 	dlm_root = debugfs_create_dir("dlm", NULL);
-	return dlm_root ? 0 : -ENOMEM;
 }
 
 void dlm_unregister_debugfs(void)

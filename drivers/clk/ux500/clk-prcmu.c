@@ -1,10 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * PRCMU clock implementation for ux500 platform.
  *
  * Copyright (C) 2012 ST-Ericsson SA
  * Author: Ulf Hansson <ulf.hansson@linaro.org>
- *
- * License terms: GNU General Public License (GPL) version 2
  */
 
 #include <linux/clk-provider.h>
@@ -258,11 +257,9 @@ static struct clk *clk_reg_prcmu(const char *name,
 		return ERR_PTR(-EINVAL);
 	}
 
-	clk = kzalloc(sizeof(struct clk_prcmu), GFP_KERNEL);
-	if (!clk) {
-		pr_err("clk_prcmu: %s could not allocate clk\n", __func__);
+	clk = kzalloc(sizeof(*clk), GFP_KERNEL);
+	if (!clk)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	clk->cg_sel = cg_sel;
 	clk->is_prepared = 1;

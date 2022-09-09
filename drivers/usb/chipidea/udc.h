@@ -1,13 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * udc.h - ChipIdea UDC structures
  *
  * Copyright (C) 2008 Chipidea - MIPS Technologies, Inc. All rights reserved.
  *
  * Author: David Lopo
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef __DRIVERS_USB_CHIPIDEA_UDC_H
@@ -64,16 +61,14 @@ struct td_node {
 	struct list_head	td;
 	dma_addr_t		dma;
 	struct ci_hw_td		*ptr;
+	int			td_remaining_size;
 };
 
 /**
  * struct ci_hw_req - usb request representation
  * @req: request structure for gadget drivers
  * @queue: link to QH list
- * @ptr: transfer descriptor for this request
- * @dma: dma address for the transfer descriptor
- * @zptr: transfer descriptor for the zero packet
- * @zdma: dma address of the zero packet's transfer descriptor
+ * @tds: link to TD list
  */
 struct ci_hw_req {
 	struct usb_request	req;

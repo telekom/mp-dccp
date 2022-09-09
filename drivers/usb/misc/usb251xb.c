@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Driver for Microchip USB251xB USB 2.0 Hi-Speed Hub Controller
  * Configuration via SMBus.
@@ -7,25 +8,16 @@
  * This work is based on the USB3503 driver by Dongjin Kim and
  * a not-accepted patch by Fabien Lahoudere, see:
  * https://patchwork.kernel.org/patch/9257715/
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/delay.h>
-#include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
+#include <linux/gpio/driver.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/nls.h>
 #include <linux/of_device.h>
-#include <linux/of_gpio.h>
+#include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 
 /* Internal Register Set Addresses & Default Values acc. to DS00001692C */
@@ -35,9 +27,6 @@
 
 #define USB251XB_ADDR_PRODUCT_ID_LSB	0x02
 #define USB251XB_ADDR_PRODUCT_ID_MSB	0x03
-#define USB251XB_DEF_PRODUCT_ID_12	0x2512 /* USB2512B/12Bi */
-#define USB251XB_DEF_PRODUCT_ID_13	0x2513 /* USB2513B/13Bi */
-#define USB251XB_DEF_PRODUCT_ID_14	0x2514 /* USB2514B/14Bi */
 
 #define USB251XB_ADDR_DEVICE_ID_LSB	0x04
 #define USB251XB_ADDR_DEVICE_ID_MSB	0x05
@@ -82,7 +71,6 @@
 
 #define USB251XB_ADDR_PRODUCT_STRING_LEN	0x14
 #define USB251XB_ADDR_PRODUCT_STRING		0x54
-#define USB251XB_DEF_PRODUCT_STRING		"USB251xB/xBi"
 
 #define USB251XB_ADDR_SERIAL_STRING_LEN		0x15
 #define USB251XB_ADDR_SERIAL_STRING		0x92
@@ -93,8 +81,10 @@
 
 #define USB251XB_ADDR_BOOST_UP	0xF6
 #define USB251XB_DEF_BOOST_UP	0x00
-#define USB251XB_ADDR_BOOST_X	0xF8
-#define USB251XB_DEF_BOOST_X	0x00
+#define USB251XB_ADDR_BOOST_57	0xF7
+#define USB251XB_DEF_BOOST_57	0x00
+#define USB251XB_ADDR_BOOST_14	0xF8
+#define USB251XB_DEF_BOOST_14	0x00
 
 #define USB251XB_ADDR_PORT_SWAP	0xFA
 #define USB251XB_DEF_PORT_SWAP	0x00
@@ -102,7 +92,11 @@
 #define USB251XB_ADDR_PORT_MAP_12	0xFB
 #define USB251XB_DEF_PORT_MAP_12	0x00
 #define USB251XB_ADDR_PORT_MAP_34	0xFC
-#define USB251XB_DEF_PORT_MAP_34	0x00 /* USB2513B/i & USB2514B/i only */
+#define USB251XB_DEF_PORT_MAP_34	0x00 /* USB251{3B/i,4B/i,7/i} only */
+#define USB251XB_ADDR_PORT_MAP_56	0xFD
+#define USB251XB_DEF_PORT_MAP_56	0x00 /* USB2517/i only */
+#define USB251XB_ADDR_PORT_MAP_7	0xFE
+#define USB251XB_DEF_PORT_MAP_7		0x00 /* USB2517/i only */
 
 #define USB251XB_ADDR_STATUS_COMMAND		0xFF
 #define USB251XB_STATUS_COMMAND_SMBUS_DOWN	0x04
@@ -118,8 +112,9 @@
 struct usb251xb {
 	struct device *dev;
 	struct i2c_client *i2c;
+	struct regulator *vdd;
 	u8 skip_config;
-	int gpio_reset;
+	struct gpio_desc *gpio_reset;
 	u16 vendor_id;
 	u16 product_id;
 	u16 device_id;
@@ -143,60 +138,149 @@ struct usb251xb {
 	char serial[USB251XB_STRING_BUFSIZE];
 	u8  bat_charge_en;
 	u8  boost_up;
-	u8  boost_x;
+	u8  boost_57;
+	u8  boost_14;
 	u8  port_swap;
 	u8  port_map12;
 	u8  port_map34;
+	u8  port_map56;
+	u8  port_map7;
 	u8  status;
 };
 
 struct usb251xb_data {
 	u16 product_id;
+	u8 port_cnt;
+	bool led_support;
+	bool bat_support;
 	char product_str[USB251XB_STRING_BUFSIZE / 2]; /* ASCII string */
+};
+
+static const struct usb251xb_data usb2422_data = {
+	.product_id = 0x2422,
+	.port_cnt = 2,
+	.led_support = false,
+	.bat_support = true,
+	.product_str = "USB2422",
 };
 
 static const struct usb251xb_data usb2512b_data = {
 	.product_id = 0x2512,
+	.port_cnt = 2,
+	.led_support = false,
+	.bat_support = true,
 	.product_str = "USB2512B",
 };
 
 static const struct usb251xb_data usb2512bi_data = {
 	.product_id = 0x2512,
+	.port_cnt = 2,
+	.led_support = false,
+	.bat_support = true,
 	.product_str = "USB2512Bi",
 };
 
 static const struct usb251xb_data usb2513b_data = {
 	.product_id = 0x2513,
+	.port_cnt = 3,
+	.led_support = false,
+	.bat_support = true,
 	.product_str = "USB2513B",
 };
 
 static const struct usb251xb_data usb2513bi_data = {
 	.product_id = 0x2513,
+	.port_cnt = 3,
+	.led_support = false,
+	.bat_support = true,
 	.product_str = "USB2513Bi",
 };
 
 static const struct usb251xb_data usb2514b_data = {
 	.product_id = 0x2514,
+	.port_cnt = 4,
+	.led_support = false,
+	.bat_support = true,
 	.product_str = "USB2514B",
 };
 
 static const struct usb251xb_data usb2514bi_data = {
 	.product_id = 0x2514,
+	.port_cnt = 4,
+	.led_support = false,
+	.bat_support = true,
 	.product_str = "USB2514Bi",
 };
 
-static void usb251xb_reset(struct usb251xb *hub, int state)
+static const struct usb251xb_data usb2517_data = {
+	.product_id = 0x2517,
+	.port_cnt = 7,
+	.led_support = true,
+	.bat_support = false,
+	.product_str = "USB2517",
+};
+
+static const struct usb251xb_data usb2517i_data = {
+	.product_id = 0x2517,
+	.port_cnt = 7,
+	.led_support = true,
+	.bat_support = false,
+	.product_str = "USB2517i",
+};
+
+#ifdef CONFIG_GPIOLIB
+static int usb251xb_check_dev_children(struct device *dev, void *child)
 {
-	if (!gpio_is_valid(hub->gpio_reset))
+	if (dev->type == &i2c_adapter_type) {
+		return device_for_each_child(dev, child,
+					     usb251xb_check_dev_children);
+	}
+
+	return (dev == child);
+}
+
+static int usb251x_check_gpio_chip(struct usb251xb *hub)
+{
+	struct gpio_chip *gc = gpiod_to_chip(hub->gpio_reset);
+	struct i2c_adapter *adap = hub->i2c->adapter;
+	int ret;
+
+	if (!hub->gpio_reset)
+		return 0;
+
+	if (!gc)
+		return -EINVAL;
+
+	ret = usb251xb_check_dev_children(&adap->dev, gc->parent);
+	if (ret) {
+		dev_err(hub->dev, "Reset GPIO chip is at the same i2c-bus\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+#else
+static int usb251x_check_gpio_chip(struct usb251xb *hub)
+{
+	return 0;
+}
+#endif
+
+static void usb251xb_reset(struct usb251xb *hub)
+{
+	if (!hub->gpio_reset)
 		return;
 
-	gpio_set_value_cansleep(hub->gpio_reset, state);
+	i2c_lock_bus(hub->i2c->adapter, I2C_LOCK_SEGMENT);
+
+	gpiod_set_value_cansleep(hub->gpio_reset, 1);
+	usleep_range(1, 10);	/* >=1us RESET_N asserted */
+	gpiod_set_value_cansleep(hub->gpio_reset, 0);
 
 	/* wait for hub recovery/stabilization */
-	if (state)
-		usleep_range(500, 750);	/* >=500us at power on */
-	else
-		usleep_range(1, 10);	/* >=1us at power down */
+	usleep_range(500, 750);	/* >=500us after RESET_N deasserted */
+
+	i2c_unlock_bus(hub->i2c->adapter, I2C_LOCK_SEGMENT);
 }
 
 static int usb251xb_connect(struct usb251xb *hub)
@@ -212,7 +296,7 @@ static int usb251xb_connect(struct usb251xb *hub)
 		i2c_wb[0] = 0x01;
 		i2c_wb[1] = USB251XB_STATUS_COMMAND_ATTACH;
 
-		usb251xb_reset(hub, 1);
+		usb251xb_reset(hub);
 
 		err = i2c_smbus_write_i2c_block_data(hub->i2c,
 				USB251XB_ADDR_STATUS_COMMAND, 2, i2c_wb);
@@ -253,13 +337,16 @@ static int usb251xb_connect(struct usb251xb *hub)
 	       USB251XB_STRING_BUFSIZE);
 	i2c_wb[USB251XB_ADDR_BATTERY_CHARGING_ENABLE] = hub->bat_charge_en;
 	i2c_wb[USB251XB_ADDR_BOOST_UP]          = hub->boost_up;
-	i2c_wb[USB251XB_ADDR_BOOST_X]           = hub->boost_x;
+	i2c_wb[USB251XB_ADDR_BOOST_57]          = hub->boost_57;
+	i2c_wb[USB251XB_ADDR_BOOST_14]          = hub->boost_14;
 	i2c_wb[USB251XB_ADDR_PORT_SWAP]         = hub->port_swap;
 	i2c_wb[USB251XB_ADDR_PORT_MAP_12]       = hub->port_map12;
 	i2c_wb[USB251XB_ADDR_PORT_MAP_34]       = hub->port_map34;
+	i2c_wb[USB251XB_ADDR_PORT_MAP_56]       = hub->port_map56;
+	i2c_wb[USB251XB_ADDR_PORT_MAP_7]        = hub->port_map7;
 	i2c_wb[USB251XB_ADDR_STATUS_COMMAND] = USB251XB_STATUS_COMMAND_ATTACH;
 
-	usb251xb_reset(hub, 1);
+	usb251xb_reset(hub);
 
 	/* write registers */
 	for (i = 0; i < (USB251XB_I2C_REG_SZ / USB251XB_I2C_WRITE_SZ); i++) {
@@ -291,14 +378,30 @@ out_err:
 }
 
 #ifdef CONFIG_OF
+static void usb251xb_get_ports_field(struct usb251xb *hub,
+				    const char *prop_name, u8 port_cnt,
+				    bool ds_only, u8 *fld)
+{
+	struct device *dev = hub->dev;
+	struct property *prop;
+	const __be32 *p;
+	u32 port;
+
+	of_property_for_each_u32(dev->of_node, prop_name, prop, p, port) {
+		if ((port >= ds_only ? 1 : 0) && (port <= port_cnt))
+			*fld |= BIT(port);
+		else
+			dev_warn(dev, "port %u doesn't exist\n", port);
+	}
+}
+
 static int usb251xb_get_ofdata(struct usb251xb *hub,
 			       struct usb251xb_data *data)
 {
 	struct device *dev = hub->dev;
 	struct device_node *np = dev->of_node;
-	int len, err, i;
-	u32 *property_u32 = NULL;
-	const u32 *cproperty_u32;
+	int len, err;
+	u32 property_u32 = 0;
 	const char *cproperty_char;
 	char str[USB251XB_STRING_BUFSIZE / 2];
 
@@ -312,19 +415,13 @@ static int usb251xb_get_ofdata(struct usb251xb *hub,
 	else
 		hub->skip_config = 0;
 
-	hub->gpio_reset = of_get_named_gpio(np, "reset-gpios", 0);
-	if (hub->gpio_reset == -EPROBE_DEFER)
+	hub->gpio_reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
+	if (PTR_ERR(hub->gpio_reset) == -EPROBE_DEFER) {
 		return -EPROBE_DEFER;
-	if (gpio_is_valid(hub->gpio_reset)) {
-		err = devm_gpio_request_one(dev, hub->gpio_reset,
-					    GPIOF_OUT_INIT_LOW,
-					    "usb251xb reset");
-		if (err) {
-			dev_err(dev,
-				"unable to request GPIO %d as reset pin (%d)\n",
-				hub->gpio_reset, err);
-			return err;
-		}
+	} else if (IS_ERR(hub->gpio_reset)) {
+		err = PTR_ERR(hub->gpio_reset);
+		dev_err(dev, "unable to request GPIO reset pin (%d)\n", err);
+		return err;
 	}
 
 	if (of_property_read_u16_array(np, "vendor-id", &hub->vendor_id, 1))
@@ -374,16 +471,16 @@ static int usb251xb_get_ofdata(struct usb251xb *hub,
 	if (of_get_property(np, "dynamic-power-switching", NULL))
 		hub->conf_data2 |= BIT(7);
 
-	if (!of_property_read_u32(np, "oc-delay-us", property_u32)) {
-		if (*property_u32 == 100) {
+	if (!of_property_read_u32(np, "oc-delay-us", &property_u32)) {
+		if (property_u32 == 100) {
 			/* 100 us*/
 			hub->conf_data2 &= ~BIT(5);
 			hub->conf_data2 &= ~BIT(4);
-		} else if (*property_u32 == 4000) {
+		} else if (property_u32 == 4000) {
 			/* 4 ms */
 			hub->conf_data2 &= ~BIT(5);
 			hub->conf_data2 |= BIT(4);
-		} else if (*property_u32 == 16000) {
+		} else if (property_u32 == 16000) {
 			/* 16 ms */
 			hub->conf_data2 |= BIT(5);
 			hub->conf_data2 |= BIT(4);
@@ -401,45 +498,47 @@ static int usb251xb_get_ofdata(struct usb251xb *hub,
 	if (of_get_property(np, "port-mapping-mode", NULL))
 		hub->conf_data3 |= BIT(3);
 
+	if (data->led_support && of_get_property(np, "led-usb-mode", NULL))
+		hub->conf_data3 &= ~BIT(1);
+
 	if (of_get_property(np, "string-support", NULL))
 		hub->conf_data3 |= BIT(0);
 
 	hub->non_rem_dev = USB251XB_DEF_NON_REMOVABLE_DEVICES;
-	cproperty_u32 = of_get_property(np, "non-removable-ports", &len);
-	if (cproperty_u32 && (len / sizeof(u32)) > 0) {
-		for (i = 0; i < len / sizeof(u32); i++) {
-			u32 port = be32_to_cpu(cproperty_u32[i]);
-
-			if ((port >= 1) && (port <= 4))
-				hub->non_rem_dev |= BIT(port);
-		}
-	}
+	usb251xb_get_ports_field(hub, "non-removable-ports", data->port_cnt,
+				 true, &hub->non_rem_dev);
 
 	hub->port_disable_sp = USB251XB_DEF_PORT_DISABLE_SELF;
-	cproperty_u32 = of_get_property(np, "sp-disabled-ports", &len);
-	if (cproperty_u32 && (len / sizeof(u32)) > 0) {
-		for (i = 0; i < len / sizeof(u32); i++) {
-			u32 port = be32_to_cpu(cproperty_u32[i]);
-
-			if ((port >= 1) && (port <= 4))
-				hub->port_disable_sp |= BIT(port);
-		}
-	}
+	usb251xb_get_ports_field(hub, "sp-disabled-ports", data->port_cnt,
+				 true, &hub->port_disable_sp);
 
 	hub->port_disable_bp = USB251XB_DEF_PORT_DISABLE_BUS;
-	cproperty_u32 = of_get_property(np, "bp-disabled-ports", &len);
-	if (cproperty_u32 && (len / sizeof(u32)) > 0) {
-		for (i = 0; i < len / sizeof(u32); i++) {
-			u32 port = be32_to_cpu(cproperty_u32[i]);
+	usb251xb_get_ports_field(hub, "bp-disabled-ports", data->port_cnt,
+				 true, &hub->port_disable_bp);
 
-			if ((port >= 1) && (port <= 4))
-				hub->port_disable_bp |= BIT(port);
-		}
-	}
+	hub->max_power_sp = USB251XB_DEF_MAX_POWER_SELF;
+	if (!of_property_read_u32(np, "sp-max-total-current-microamp",
+	    &property_u32))
+		hub->max_power_sp = min_t(u8, property_u32 / 2000, 50);
+
+	hub->max_power_bp = USB251XB_DEF_MAX_POWER_BUS;
+	if (!of_property_read_u32(np, "bp-max-total-current-microamp",
+	    &property_u32))
+		hub->max_power_bp = min_t(u8, property_u32 / 2000, 255);
+
+	hub->max_current_sp = USB251XB_DEF_MAX_CURRENT_SELF;
+	if (!of_property_read_u32(np, "sp-max-removable-current-microamp",
+	    &property_u32))
+		hub->max_current_sp = min_t(u8, property_u32 / 2000, 50);
+
+	hub->max_current_bp = USB251XB_DEF_MAX_CURRENT_BUS;
+	if (!of_property_read_u32(np, "bp-max-removable-current-microamp",
+	    &property_u32))
+		hub->max_current_bp = min_t(u8, property_u32 / 2000, 255);
 
 	hub->power_on_time = USB251XB_DEF_POWER_ON_TIME;
-	if (!of_property_read_u32(np, "power-on-time-ms", property_u32))
-		hub->power_on_time = min_t(u8, *property_u32 / 2, 255);
+	if (!of_property_read_u32(np, "power-on-time-ms", &property_u32))
+		hub->power_on_time = min_t(u8, property_u32 / 2, 255);
 
 	if (of_property_read_u16_array(np, "language-id", &hub->lang_id, 1))
 		hub->lang_id = USB251XB_DEF_LANGUAGE_ID;
@@ -473,25 +572,34 @@ static int usb251xb_get_ofdata(struct usb251xb *hub,
 			      (wchar_t *)hub->serial,
 			      USB251XB_STRING_BUFSIZE);
 
+	/*
+	 * The datasheet documents the register as 'Port Swap' but in real the
+	 * register controls the USB DP/DM signal swapping for each port.
+	 */
+	hub->port_swap = USB251XB_DEF_PORT_SWAP;
+	usb251xb_get_ports_field(hub, "swap-dx-lanes", data->port_cnt,
+				 false, &hub->port_swap);
+
 	/* The following parameters are currently not exposed to devicetree, but
 	 * may be as soon as needed.
 	 */
-	hub->max_power_sp = USB251XB_DEF_MAX_POWER_SELF;
-	hub->max_power_bp = USB251XB_DEF_MAX_POWER_BUS;
-	hub->max_current_sp = USB251XB_DEF_MAX_CURRENT_SELF;
-	hub->max_current_bp = USB251XB_DEF_MAX_CURRENT_BUS;
 	hub->bat_charge_en = USB251XB_DEF_BATTERY_CHARGING_ENABLE;
 	hub->boost_up = USB251XB_DEF_BOOST_UP;
-	hub->boost_x = USB251XB_DEF_BOOST_X;
-	hub->port_swap = USB251XB_DEF_PORT_SWAP;
+	hub->boost_57 = USB251XB_DEF_BOOST_57;
+	hub->boost_14 = USB251XB_DEF_BOOST_14;
 	hub->port_map12 = USB251XB_DEF_PORT_MAP_12;
 	hub->port_map34 = USB251XB_DEF_PORT_MAP_34;
+	hub->port_map56 = USB251XB_DEF_PORT_MAP_56;
+	hub->port_map7  = USB251XB_DEF_PORT_MAP_7;
 
 	return 0;
 }
 
 static const struct of_device_id usb251xb_of_match[] = {
 	{
+		.compatible = "microchip,usb2422",
+		.data = &usb2422_data,
+	}, {
 		.compatible = "microchip,usb2512b",
 		.data = &usb2512b_data,
 	}, {
@@ -510,6 +618,12 @@ static const struct of_device_id usb251xb_of_match[] = {
 		.compatible = "microchip,usb2514bi",
 		.data = &usb2514bi_data,
 	}, {
+		.compatible = "microchip,usb2517",
+		.data = &usb2517_data,
+	}, {
+		.compatible = "microchip,usb2517i",
+		.data = &usb2517i_data,
+	}, {
 		/* sentinel */
 	}
 };
@@ -522,6 +636,13 @@ static int usb251xb_get_ofdata(struct usb251xb *hub,
 }
 #endif /* CONFIG_OF */
 
+static void usb251xb_regulator_disable_action(void *data)
+{
+	struct usb251xb *hub = data;
+
+	regulator_disable(hub->vdd);
+}
+
 static int usb251xb_probe(struct usb251xb *hub)
 {
 	struct device *dev = hub->dev;
@@ -530,7 +651,7 @@ static int usb251xb_probe(struct usb251xb *hub)
 							   dev);
 	int err;
 
-	if (np) {
+	if (np && of_id) {
 		err = usb251xb_get_ofdata(hub,
 					  (struct usb251xb_data *)of_id->data);
 		if (err) {
@@ -538,6 +659,38 @@ static int usb251xb_probe(struct usb251xb *hub)
 			return err;
 		}
 	}
+
+	/*
+	 * usb251x SMBus-slave SCL lane is muxed with CFG_SEL0 pin. So if anyone
+	 * tries to work with the bus at the moment the hub reset is released,
+	 * it may cause an invalid config being latched by usb251x. Particularly
+	 * one of the config modes makes the hub loading a default registers
+	 * value without SMBus-slave interface activation. If the hub
+	 * accidentally gets this mode, this will cause the driver SMBus-
+	 * functions failure. Normally we could just lock the SMBus-segment the
+	 * hub i2c-interface resides for the device-specific reset timing. But
+	 * the GPIO controller, which is used to handle the hub reset, might be
+	 * placed at the same i2c-bus segment. In this case an error should be
+	 * returned since we can't safely use the GPIO controller to clear the
+	 * reset state (it may affect the hub configuration) and we can't lock
+	 * the i2c-bus segment (it will cause a deadlock).
+	 */
+	err = usb251x_check_gpio_chip(hub);
+	if (err)
+		return err;
+
+	hub->vdd = devm_regulator_get(dev, "vdd");
+	if (IS_ERR(hub->vdd))
+		return PTR_ERR(hub->vdd);
+
+	err = regulator_enable(hub->vdd);
+	if (err)
+		return err;
+
+	err = devm_add_action_or_reset(dev,
+				       usb251xb_regulator_disable_action, hub);
+	if (err)
+		return err;
 
 	err = usb251xb_connect(hub);
 	if (err) {
@@ -566,13 +719,39 @@ static int usb251xb_i2c_probe(struct i2c_client *i2c,
 	return usb251xb_probe(hub);
 }
 
+static int __maybe_unused usb251xb_suspend(struct device *dev)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct usb251xb *hub = i2c_get_clientdata(client);
+
+	return regulator_disable(hub->vdd);
+}
+
+static int __maybe_unused usb251xb_resume(struct device *dev)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct usb251xb *hub = i2c_get_clientdata(client);
+	int err;
+
+	err = regulator_enable(hub->vdd);
+	if (err)
+		return err;
+
+	return usb251xb_connect(hub);
+}
+
+static SIMPLE_DEV_PM_OPS(usb251xb_pm_ops, usb251xb_suspend, usb251xb_resume);
+
 static const struct i2c_device_id usb251xb_id[] = {
+	{ "usb2422", 0 },
 	{ "usb2512b", 0 },
 	{ "usb2512bi", 0 },
 	{ "usb2513b", 0 },
 	{ "usb2513bi", 0 },
 	{ "usb2514b", 0 },
 	{ "usb2514bi", 0 },
+	{ "usb2517", 0 },
+	{ "usb2517i", 0 },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(i2c, usb251xb_id);
@@ -581,6 +760,7 @@ static struct i2c_driver usb251xb_i2c_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
 		.of_match_table = of_match_ptr(usb251xb_of_match),
+		.pm = &usb251xb_pm_ops,
 	},
 	.probe    = usb251xb_i2c_probe,
 	.id_table = usb251xb_id,
@@ -589,5 +769,5 @@ static struct i2c_driver usb251xb_i2c_driver = {
 module_i2c_driver(usb251xb_i2c_driver);
 
 MODULE_AUTHOR("Richard Leitner <richard.leitner@skidata.com>");
-MODULE_DESCRIPTION("USB251xB/xBi USB 2.0 Hub Controller Driver");
+MODULE_DESCRIPTION("USB251x/xBi USB 2.0 Hub Controller Driver");
 MODULE_LICENSE("GPL");

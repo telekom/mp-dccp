@@ -25,6 +25,7 @@
 #ifndef __I915_SELFTESTS_RANDOM_H__
 #define __I915_SELFTESTS_RANDOM_H__
 
+#include <linux/math64.h>
 #include <linux/random.h>
 
 #include "../i915_selftest.h"
@@ -43,10 +44,22 @@
 
 u64 i915_prandom_u64_state(struct rnd_state *rnd);
 
+static inline u32 i915_prandom_u32_max_state(u32 ep_ro, struct rnd_state *state)
+{
+	return upper_32_bits(mul_u32_u32(prandom_u32_state(state), ep_ro));
+}
+
 unsigned int *i915_random_order(unsigned int count,
 				struct rnd_state *state);
 void i915_random_reorder(unsigned int *order,
 			 unsigned int count,
 			 struct rnd_state *state);
+
+void i915_prandom_shuffle(void *arr, size_t elsz, size_t count,
+			  struct rnd_state *state);
+
+u64 igt_random_offset(struct rnd_state *state,
+		      u64 start, u64 end,
+		      u64 len, u64 align);
 
 #endif /* !__I915_SELFTESTS_RANDOM_H__ */

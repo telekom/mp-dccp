@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * algif_skcipher: User-space interface for skcipher algorithms
  *
  * This file provides the user-space API for symmetric key ciphers.
  *
  * Copyright (c) 2010 Herbert Xu <herbert@gondor.apana.org.au>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your option)
- * any later version.
  *
  * The following concept of the memory management is used:
  *
@@ -38,11 +34,6 @@
 #include <linux/net.h>
 #include <net/sock.h>
 
-struct skcipher_tfm {
-	struct crypto_skcipher *skcipher;
-	bool has_key;
-};
-
 static int skcipher_sendmsg(struct socket *sock, struct msghdr *msg,
 			    size_t size)
 {
@@ -50,8 +41,7 @@ static int skcipher_sendmsg(struct socket *sock, struct msghdr *msg,
 	struct alg_sock *ask = alg_sk(sk);
 	struct sock *psk = ask->parent;
 	struct alg_sock *pask = alg_sk(psk);
-	struct skcipher_tfm *skc = pask->private;
-	struct crypto_skcipher *tfm = skc->skcipher;
+	struct crypto_skcipher *tfm = pask->private;
 	unsigned ivsize = crypto_skcipher_ivsize(tfm);
 
 	return af_alg_sendmsg(sock, msg, size, ivsize);
@@ -65,15 +55,14 @@ static int _skcipher_recvmsg(struct socket *sock, struct msghdr *msg,
 	struct sock *psk = ask->parent;
 	struct alg_sock *pask = alg_sk(psk);
 	struct af_alg_ctx *ctx = ask->private;
-	struct skcipher_tfm *skc = pask->private;
-	struct crypto_skcipher *tfm = skc->skcipher;
-	unsigned int bs = crypto_skcipher_blocksize(tfm);
+	struct crypto_skcipher *tfm = pask->private;
+	unsigned int bs = crypto_skcipher_chunksize(tfm);
 	struct af_alg_async_req *areq;
 	int err = 0;
 	size_t len = 0;
 
-	if (!ctx->used) {
-		err = af_alg_wait_for_data(sk, flags);
+	if (!ctx->init || (ctx->more && ctx->used < bs)) {
+		err = af_alg_wait_for_data(sk, flags, bs);
 		if (err)
 			return err;
 	}
@@ -85,13 +74,9 @@ static int _skcipher_recvmsg(struct socket *sock, struct msghdr *msg,
 		return PTR_ERR(areq);
 
 	/* convert iovecs of output buffers into RX SGL */
-	err = af_alg_get_rsgl(sk, msg, flags, areq, -1, &len);
+	err = af_alg_get_rsgl(sk, msg, flags, areq, ctx->used, &len);
 	if (err)
 		goto free;
-
-	/* Process only as much RX buffers for which we have TX data */
-	if (len > ctx->used)
-		len = ctx->used;
 
 	/*
 	 * If more buffers are to be expected to be processed, process only
@@ -107,7 +92,8 @@ static int _skcipher_recvmsg(struct socket *sock, struct msghdr *msg,
 	areq->tsgl_entries = af_alg_count_tsgl(sk, len, 0);
 	if (!areq->tsgl_entries)
 		areq->tsgl_entries = 1;
-	areq->tsgl = sock_kmalloc(sk, sizeof(*areq->tsgl) * areq->tsgl_entries,
+	areq->tsgl = sock_kmalloc(sk, array_size(sizeof(*areq->tsgl),
+						 areq->tsgl_entries),
 				  GFP_KERNEL);
 	if (!areq->tsgl) {
 		err = -ENOMEM;
@@ -137,7 +123,7 @@ static int _skcipher_recvmsg(struct socket *sock, struct msghdr *msg,
 			crypto_skcipher_decrypt(&areq->cra_u.skcipher_req);
 
 		/* AIO operation in progress */
-		if (err == -EINPROGRESS || err == -EBUSY)
+		if (err == -EINPROGRESS)
 			return -EIOCBQUEUED;
 
 		sock_put(sk);
@@ -146,12 +132,11 @@ static int _skcipher_recvmsg(struct socket *sock, struct msghdr *msg,
 		skcipher_request_set_callback(&areq->cra_u.skcipher_req,
 					      CRYPTO_TFM_REQ_MAY_SLEEP |
 					      CRYPTO_TFM_REQ_MAY_BACKLOG,
-					      af_alg_complete,
-					      &ctx->completion);
-		err = af_alg_wait_for_completion(ctx->enc ?
+					      crypto_req_done, &ctx->wait);
+		err = crypto_wait_req(ctx->enc ?
 			crypto_skcipher_encrypt(&areq->cra_u.skcipher_req) :
 			crypto_skcipher_decrypt(&areq->cra_u.skcipher_req),
-						 &ctx->completion);
+						 &ctx->wait);
 	}
 
 
@@ -194,7 +179,6 @@ out:
 	return ret;
 }
 
-
 static struct proto_ops algif_skcipher_ops = {
 	.family		=	PF_ALG,
 
@@ -204,11 +188,9 @@ static struct proto_ops algif_skcipher_ops = {
 	.ioctl		=	sock_no_ioctl,
 	.listen		=	sock_no_listen,
 	.shutdown	=	sock_no_shutdown,
-	.getsockopt	=	sock_no_getsockopt,
 	.mmap		=	sock_no_mmap,
 	.bind		=	sock_no_bind,
 	.accept		=	sock_no_accept,
-	.setsockopt	=	sock_no_setsockopt,
 
 	.release	=	af_alg_release,
 	.sendmsg	=	skcipher_sendmsg,
@@ -222,12 +204,12 @@ static int skcipher_check_key(struct socket *sock)
 	int err = 0;
 	struct sock *psk;
 	struct alg_sock *pask;
-	struct skcipher_tfm *tfm;
+	struct crypto_skcipher *tfm;
 	struct sock *sk = sock->sk;
 	struct alg_sock *ask = alg_sk(sk);
 
 	lock_sock(sk);
-	if (ask->refcnt)
+	if (!atomic_read(&ask->nokey_refcnt))
 		goto unlock_child;
 
 	psk = ask->parent;
@@ -236,14 +218,11 @@ static int skcipher_check_key(struct socket *sock)
 
 	err = -ENOKEY;
 	lock_sock_nested(psk, SINGLE_DEPTH_NESTING);
-	if (!tfm->has_key)
+	if (crypto_skcipher_get_flags(tfm) & CRYPTO_TFM_NEED_KEY)
 		goto unlock;
 
-	if (!pask->refcnt++)
-		sock_hold(psk);
-
-	ask->refcnt = 1;
-	sock_put(psk);
+	atomic_dec(&pask->nokey_refcnt);
+	atomic_set(&ask->nokey_refcnt, 0);
 
 	err = 0;
 
@@ -300,11 +279,9 @@ static struct proto_ops algif_skcipher_ops_nokey = {
 	.ioctl		=	sock_no_ioctl,
 	.listen		=	sock_no_listen,
 	.shutdown	=	sock_no_shutdown,
-	.getsockopt	=	sock_no_getsockopt,
 	.mmap		=	sock_no_mmap,
 	.bind		=	sock_no_bind,
 	.accept		=	sock_no_accept,
-	.setsockopt	=	sock_no_setsockopt,
 
 	.release	=	af_alg_release,
 	.sendmsg	=	skcipher_sendmsg_nokey,
@@ -315,41 +292,17 @@ static struct proto_ops algif_skcipher_ops_nokey = {
 
 static void *skcipher_bind(const char *name, u32 type, u32 mask)
 {
-	struct skcipher_tfm *tfm;
-	struct crypto_skcipher *skcipher;
-
-	tfm = kzalloc(sizeof(*tfm), GFP_KERNEL);
-	if (!tfm)
-		return ERR_PTR(-ENOMEM);
-
-	skcipher = crypto_alloc_skcipher(name, type, mask);
-	if (IS_ERR(skcipher)) {
-		kfree(tfm);
-		return ERR_CAST(skcipher);
-	}
-
-	tfm->skcipher = skcipher;
-
-	return tfm;
+	return crypto_alloc_skcipher(name, type, mask);
 }
 
 static void skcipher_release(void *private)
 {
-	struct skcipher_tfm *tfm = private;
-
-	crypto_free_skcipher(tfm->skcipher);
-	kfree(tfm);
+	crypto_free_skcipher(private);
 }
 
 static int skcipher_setkey(void *private, const u8 *key, unsigned int keylen)
 {
-	struct skcipher_tfm *tfm = private;
-	int err;
-
-	err = crypto_skcipher_setkey(tfm->skcipher, key, keylen);
-	tfm->has_key = !err;
-
-	return err;
+	return crypto_skcipher_setkey(private, key, keylen);
 }
 
 static void skcipher_sock_destruct(struct sock *sk)
@@ -358,8 +311,7 @@ static void skcipher_sock_destruct(struct sock *sk)
 	struct af_alg_ctx *ctx = ask->private;
 	struct sock *psk = ask->parent;
 	struct alg_sock *pask = alg_sk(psk);
-	struct skcipher_tfm *skc = pask->private;
-	struct crypto_skcipher *tfm = skc->skcipher;
+	struct crypto_skcipher *tfm = pask->private;
 
 	af_alg_pull_tsgl(sk, ctx->used, NULL, 0);
 	sock_kzfree_s(sk, ctx->iv, crypto_skcipher_ivsize(tfm));
@@ -371,31 +323,25 @@ static int skcipher_accept_parent_nokey(void *private, struct sock *sk)
 {
 	struct af_alg_ctx *ctx;
 	struct alg_sock *ask = alg_sk(sk);
-	struct skcipher_tfm *tfm = private;
-	struct crypto_skcipher *skcipher = tfm->skcipher;
+	struct crypto_skcipher *tfm = private;
 	unsigned int len = sizeof(*ctx);
 
 	ctx = sock_kmalloc(sk, len, GFP_KERNEL);
 	if (!ctx)
 		return -ENOMEM;
+	memset(ctx, 0, len);
 
-	ctx->iv = sock_kmalloc(sk, crypto_skcipher_ivsize(skcipher),
+	ctx->iv = sock_kmalloc(sk, crypto_skcipher_ivsize(tfm),
 			       GFP_KERNEL);
 	if (!ctx->iv) {
 		sock_kfree_s(sk, ctx, len);
 		return -ENOMEM;
 	}
-
-	memset(ctx->iv, 0, crypto_skcipher_ivsize(skcipher));
+	memset(ctx->iv, 0, crypto_skcipher_ivsize(tfm));
 
 	INIT_LIST_HEAD(&ctx->tsgl_list);
 	ctx->len = len;
-	ctx->used = 0;
-	atomic_set(&ctx->rcvused, 0);
-	ctx->more = 0;
-	ctx->merge = 0;
-	ctx->enc = 0;
-	af_alg_init_completion(&ctx->completion);
+	crypto_init_wait(&ctx->wait);
 
 	ask->private = ctx;
 
@@ -406,9 +352,9 @@ static int skcipher_accept_parent_nokey(void *private, struct sock *sk)
 
 static int skcipher_accept_parent(void *private, struct sock *sk)
 {
-	struct skcipher_tfm *tfm = private;
+	struct crypto_skcipher *tfm = private;
 
-	if (!tfm->has_key && crypto_skcipher_has_setkey(tfm->skcipher))
+	if (crypto_skcipher_get_flags(tfm) & CRYPTO_TFM_NEED_KEY)
 		return -ENOKEY;
 
 	return skcipher_accept_parent_nokey(private, sk);

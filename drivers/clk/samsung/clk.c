@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013 Samsung Electronics Co., Ltd.
  * Copyright (c) 2013 Linaro Ltd.
  * Author: Thomas Abraham <thomas.ab@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * This file includes utility functions to register clocks to common
  * clock framework for Samsung platforms.
@@ -15,6 +12,7 @@
 #include <linux/clkdev.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
+#include <linux/io.h>
 #include <linux/of_address.h>
 #include <linux/syscore_ops.h>
 
@@ -62,8 +60,7 @@ struct samsung_clk_provider *__init samsung_clk_init(struct device_node *np,
 	struct samsung_clk_provider *ctx;
 	int i;
 
-	ctx = kzalloc(sizeof(struct samsung_clk_provider) +
-		      sizeof(*ctx->clk_data.hws) * nr_clks, GFP_KERNEL);
+	ctx = kzalloc(struct_size(ctx, clk_data.hws, nr_clks), GFP_KERNEL);
 	if (!ctx)
 		panic("could not allocate clock provider context.\n");
 
@@ -134,7 +131,7 @@ void __init samsung_clk_register_fixed_rate(struct samsung_clk_provider *ctx,
 	unsigned int idx, ret;
 
 	for (idx = 0; idx < nr_clk; idx++, list++) {
-		clk_hw = clk_hw_register_fixed_rate(NULL, list->name,
+		clk_hw = clk_hw_register_fixed_rate(ctx->dev, list->name,
 			list->parent_name, list->flags, list->fixed_rate);
 		if (IS_ERR(clk_hw)) {
 			pr_err("%s: failed to register clock %s\n", __func__,
@@ -163,7 +160,7 @@ void __init samsung_clk_register_fixed_factor(struct samsung_clk_provider *ctx,
 	unsigned int idx;
 
 	for (idx = 0; idx < nr_clk; idx++, list++) {
-		clk_hw = clk_hw_register_fixed_factor(NULL, list->name,
+		clk_hw = clk_hw_register_fixed_factor(ctx->dev, list->name,
 			list->parent_name, list->flags, list->mult, list->div);
 		if (IS_ERR(clk_hw)) {
 			pr_err("%s: failed to register clock %s\n", __func__,
@@ -181,10 +178,10 @@ void __init samsung_clk_register_mux(struct samsung_clk_provider *ctx,
 				unsigned int nr_clk)
 {
 	struct clk_hw *clk_hw;
-	unsigned int idx, ret;
+	unsigned int idx;
 
 	for (idx = 0; idx < nr_clk; idx++, list++) {
-		clk_hw = clk_hw_register_mux(NULL, list->name,
+		clk_hw = clk_hw_register_mux(ctx->dev, list->name,
 			list->parent_names, list->num_parents, list->flags,
 			ctx->reg_base + list->offset,
 			list->shift, list->width, list->mux_flags, &ctx->lock);
@@ -195,15 +192,6 @@ void __init samsung_clk_register_mux(struct samsung_clk_provider *ctx,
 		}
 
 		samsung_clk_add_lookup(ctx, clk_hw, list->id);
-
-		/* register a clock lookup only if a clock alias is specified */
-		if (list->alias) {
-			ret = clk_hw_register_clkdev(clk_hw, list->alias,
-						list->dev_name);
-			if (ret)
-				pr_err("%s: failed to register lookup %s\n",
-						__func__, list->alias);
-		}
 	}
 }
 
@@ -213,17 +201,17 @@ void __init samsung_clk_register_div(struct samsung_clk_provider *ctx,
 				unsigned int nr_clk)
 {
 	struct clk_hw *clk_hw;
-	unsigned int idx, ret;
+	unsigned int idx;
 
 	for (idx = 0; idx < nr_clk; idx++, list++) {
 		if (list->table)
-			clk_hw = clk_hw_register_divider_table(NULL,
+			clk_hw = clk_hw_register_divider_table(ctx->dev,
 				list->name, list->parent_name, list->flags,
 				ctx->reg_base + list->offset,
 				list->shift, list->width, list->div_flags,
 				list->table, &ctx->lock);
 		else
-			clk_hw = clk_hw_register_divider(NULL, list->name,
+			clk_hw = clk_hw_register_divider(ctx->dev, list->name,
 				list->parent_name, list->flags,
 				ctx->reg_base + list->offset, list->shift,
 				list->width, list->div_flags, &ctx->lock);
@@ -234,15 +222,6 @@ void __init samsung_clk_register_div(struct samsung_clk_provider *ctx,
 		}
 
 		samsung_clk_add_lookup(ctx, clk_hw, list->id);
-
-		/* register a clock lookup only if a clock alias is specified */
-		if (list->alias) {
-			ret = clk_hw_register_clkdev(clk_hw, list->alias,
-						list->dev_name);
-			if (ret)
-				pr_err("%s: failed to register lookup %s\n",
-						__func__, list->alias);
-		}
 	}
 }
 
@@ -252,25 +231,16 @@ void __init samsung_clk_register_gate(struct samsung_clk_provider *ctx,
 				unsigned int nr_clk)
 {
 	struct clk_hw *clk_hw;
-	unsigned int idx, ret;
+	unsigned int idx;
 
 	for (idx = 0; idx < nr_clk; idx++, list++) {
-		clk_hw = clk_hw_register_gate(NULL, list->name, list->parent_name,
+		clk_hw = clk_hw_register_gate(ctx->dev, list->name, list->parent_name,
 				list->flags, ctx->reg_base + list->offset,
 				list->bit_idx, list->gate_flags, &ctx->lock);
 		if (IS_ERR(clk_hw)) {
 			pr_err("%s: failed to register clock %s\n", __func__,
 				list->name);
 			continue;
-		}
-
-		/* register a clock lookup only if a clock alias is specified */
-		if (list->alias) {
-			ret = clk_hw_register_clkdev(clk_hw, list->alias,
-							list->dev_name);
-			if (ret)
-				pr_err("%s: failed to register lookup %s\n",
-					__func__, list->alias);
 		}
 
 		samsung_clk_add_lookup(ctx, clk_hw, list->id);
@@ -317,9 +287,12 @@ static int samsung_clk_suspend(void)
 {
 	struct samsung_clock_reg_cache *reg_cache;
 
-	list_for_each_entry(reg_cache, &clock_reg_cache_list, node)
+	list_for_each_entry(reg_cache, &clock_reg_cache_list, node) {
 		samsung_clk_save(reg_cache->reg_base, reg_cache->rdump,
 				reg_cache->rd_num);
+		samsung_clk_restore(reg_cache->reg_base, reg_cache->rsuspend,
+				reg_cache->rsuspend_num);
+	}
 	return 0;
 }
 
@@ -337,9 +310,11 @@ static struct syscore_ops samsung_clk_syscore_ops = {
 	.resume = samsung_clk_resume,
 };
 
-void samsung_clk_sleep_init(void __iomem *reg_base,
+void samsung_clk_extended_sleep_init(void __iomem *reg_base,
 			const unsigned long *rdump,
-			unsigned long nr_rdump)
+			unsigned long nr_rdump,
+			const struct samsung_clk_reg_dump *rsuspend,
+			unsigned long nr_rsuspend)
 {
 	struct samsung_clock_reg_cache *reg_cache;
 
@@ -357,13 +332,10 @@ void samsung_clk_sleep_init(void __iomem *reg_base,
 
 	reg_cache->reg_base = reg_base;
 	reg_cache->rd_num = nr_rdump;
+	reg_cache->rsuspend = rsuspend;
+	reg_cache->rsuspend_num = nr_rsuspend;
 	list_add_tail(&reg_cache->node, &clock_reg_cache_list);
 }
-
-#else
-void samsung_clk_sleep_init(void __iomem *reg_base,
-			const unsigned long *rdump,
-			unsigned long nr_rdump) {}
 #endif
 
 /*
@@ -384,10 +356,6 @@ struct samsung_clk_provider * __init samsung_cmu_register_one(
 	}
 
 	ctx = samsung_clk_init(np, reg_base, cmu->nr_clk_ids);
-	if (!ctx) {
-		panic("%s: unable to allocate ctx\n", __func__);
-		return ctx;
-	}
 
 	if (cmu->pll_clks)
 		samsung_clk_register_pll(ctx, cmu->pll_clks, cmu->nr_pll_clks,
@@ -407,8 +375,9 @@ struct samsung_clk_provider * __init samsung_cmu_register_one(
 		samsung_clk_register_fixed_factor(ctx, cmu->fixed_factor_clks,
 			cmu->nr_fixed_factor_clks);
 	if (cmu->clk_regs)
-		samsung_clk_sleep_init(reg_base, cmu->clk_regs,
-			cmu->nr_clk_regs);
+		samsung_clk_extended_sleep_init(reg_base,
+			cmu->clk_regs, cmu->nr_clk_regs,
+			cmu->suspend_regs, cmu->nr_suspend_regs);
 
 	samsung_clk_of_add_provider(np, ctx);
 

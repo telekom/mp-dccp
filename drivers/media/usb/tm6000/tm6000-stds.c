@@ -1,17 +1,7 @@
-/*
- *  tm6000-stds.c - driver for TM5600/TM6000/TM6010 USB video capture devices
- *
- *  Copyright (C) 2007 Mauro Carvalho Chehab
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation version 2
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- */
+// SPDX-License-Identifier: GPL-2.0
+// tm6000-stds.c - driver for TM5600/TM6000/TM6010 USB video capture devices
+//
+// Copyright (c) 2007 Mauro Carvalho Chehab <mchehab@kernel.org>
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -333,7 +323,7 @@ static int tm6000_set_audio_std(struct tm6000_core *dev)
 {
 	uint8_t areg_02 = 0x04; /* GC1 Fixed gain 0dB */
 	uint8_t areg_05 = 0x01; /* Auto 4.5 = M Japan, Auto 6.5 = DK */
-	uint8_t areg_06 = 0x02; /* Auto de-emphasis, mannual channel mode */
+	uint8_t areg_06 = 0x02; /* Auto de-emphasis, manual channel mode */
 
 	if (dev->radio) {
 		tm6000_set_reg(dev, TM6010_REQ08_R01_A_INIT, 0x00);

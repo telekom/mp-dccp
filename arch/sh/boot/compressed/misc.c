@@ -104,11 +104,19 @@ static void error(char *x)
 	while(1);	/* Halt */
 }
 
-#ifdef CONFIG_SUPERH64
-#define stackalign	8
-#else
+const unsigned long __stack_chk_guard = 0x000a0dff;
+
+void __stack_chk_fail(void)
+{
+	error("stack-protector: Kernel stack is corrupted\n");
+}
+
+/* Needed because vmlinux.lds.h references this */
+void ftrace_stub(void)
+{
+}
+
 #define stackalign	4
-#endif
 
 #define STACK_SIZE (4096)
 long __attribute__ ((aligned(stackalign))) user_stack[STACK_SIZE];
@@ -118,13 +126,9 @@ void decompress_kernel(void)
 {
 	unsigned long output_addr;
 
-#ifdef CONFIG_SUPERH64
-	output_addr = (CONFIG_MEMORY_START + 0x2000);
-#else
 	output_addr = __pa((unsigned long)&_text+PAGE_SIZE);
 #if defined(CONFIG_29BIT)
 	output_addr |= P2SEG;
-#endif
 #endif
 
 	output = (unsigned char *)output_addr;

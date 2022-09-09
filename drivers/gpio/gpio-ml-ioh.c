@@ -1,24 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2010 OKI SEMICONDUCTOR Co., LTD.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; version 2 of the License.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307, USA.
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/pci.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 
@@ -30,8 +18,6 @@
 #define IOH_IM_MASK		(BIT(0) | BIT(1) | BIT(2))
 
 #define IOH_IRQ_BASE		0
-
-#define PCI_VENDOR_ID_ROHM             0x10DB
 
 struct ioh_reg_comn {
 	u32	ien;
@@ -58,7 +44,7 @@ struct ioh_regs {
 
 /**
  * struct ioh_gpio_reg_data - The register store data.
- * @ien_reg	To store contents of interrupt enable register.
+ * @ien_reg:	To store contents of interrupt enable register.
  * @imask_reg:	To store contents of interrupt mask regist
  * @po_reg:	To store contents of PO register.
  * @pm_reg:	To store contents of PM register.
@@ -443,9 +429,8 @@ static int ioh_gpio_probe(struct pci_dev *pdev,
 		goto err_iomap;
 	}
 
-	chip_save = kzalloc(sizeof(*chip) * 8, GFP_KERNEL);
+	chip_save = kcalloc(8, sizeof(*chip), GFP_KERNEL);
 	if (chip_save == NULL) {
-		dev_err(&pdev->dev, "%s : kzalloc failed", __func__);
 		ret = -ENOMEM;
 		goto err_kzalloc;
 	}

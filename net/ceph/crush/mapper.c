@@ -298,7 +298,7 @@ static __u64 crush_ln(unsigned int xin)
  *
  * for reference, see:
  *
- * http://en.wikipedia.org/wiki/Exponential_distribution#Distribution_of_the_minimum_of_exponential_random_variables
+ * https://en.wikipedia.org/wiki/Exponential_distribution#Distribution_of_the_minimum_of_exponential_random_variables
  *
  */
 
@@ -514,7 +514,7 @@ static int crush_choose_firstn(const struct crush_map *map,
 						in, work->work[-1-in->id],
 						x, r,
 						(choose_args ?
-						 &choose_args[-1-in->id] : 0),
+						 &choose_args[-1-in->id] : NULL),
 						outpos);
 				if (item >= map->max_devices) {
 					dprintk("   bad item %d\n", item);
@@ -725,7 +725,7 @@ static void crush_choose_indep(const struct crush_map *map,
 					in, work->work[-1-in->id],
 					x, r,
 					(choose_args ?
-					 &choose_args[-1-in->id] : 0),
+					 &choose_args[-1-in->id] : NULL),
 					outpos);
 				if (item >= map->max_devices) {
 					dprintk("   bad item %d\n", item);
@@ -987,7 +987,7 @@ int crush_do_rule(const struct crush_map *map,
 		case CRUSH_RULE_CHOOSELEAF_FIRSTN:
 		case CRUSH_RULE_CHOOSE_FIRSTN:
 			firstn = 1;
-			/* fall through */
+			fallthrough;
 		case CRUSH_RULE_CHOOSELEAF_INDEP:
 		case CRUSH_RULE_CHOOSE_INDEP:
 			if (wsize == 0)

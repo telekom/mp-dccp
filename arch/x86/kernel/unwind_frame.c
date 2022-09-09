@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/sched.h>
 #include <linux/sched/task.h>
 #include <linux/sched/task_stack.h>
@@ -69,26 +70,11 @@ static void unwind_dump(struct unwind_state *state)
 	}
 }
 
-static size_t regs_size(struct pt_regs *regs)
-{
-	/* x86_32 regs from kernel mode are two words shorter: */
-	if (IS_ENABLED(CONFIG_X86_32) && !user_mode(regs))
-		return sizeof(*regs) - 2*sizeof(long);
-
-	return sizeof(*regs);
-}
-
 static bool in_entry_code(unsigned long ip)
 {
 	char *addr = (char *)ip;
 
-	if (addr >= __entry_text_start && addr < __entry_text_end)
-		return true;
-
-	if (addr >= __irqentry_text_start && addr < __irqentry_text_end)
-		return true;
-
-	return false;
+	return addr >= __entry_text_start && addr < __entry_text_end;
 }
 
 static inline unsigned long *last_frame(struct unwind_state *state)
@@ -197,12 +183,6 @@ static struct pt_regs *decode_frame_pointer(unsigned long *bp)
 }
 #endif
 
-#ifdef CONFIG_X86_32
-#define KERNEL_REGS_SIZE (sizeof(struct pt_regs) - 2*sizeof(long))
-#else
-#define KERNEL_REGS_SIZE (sizeof(struct pt_regs))
-#endif
-
 static bool update_stack_state(struct unwind_state *state,
 			       unsigned long *next_bp)
 {
@@ -213,7 +193,7 @@ static bool update_stack_state(struct unwind_state *state,
 	size_t len;
 
 	if (state->regs)
-		prev_frame_end = (void *)state->regs + regs_size(state->regs);
+		prev_frame_end = (void *)state->regs + sizeof(*state->regs);
 	else
 		prev_frame_end = (void *)state->bp + FRAME_HEADER_SIZE;
 
@@ -221,7 +201,7 @@ static bool update_stack_state(struct unwind_state *state,
 	regs = decode_frame_pointer(next_bp);
 	if (regs) {
 		frame = (unsigned long *)regs;
-		len = KERNEL_REGS_SIZE;
+		len = sizeof(*regs);
 		state->got_irq = true;
 	} else {
 		frame = next_bp;
@@ -243,14 +223,6 @@ static bool update_stack_state(struct unwind_state *state,
 	/* Make sure it only unwinds up and doesn't overlap the prev frame: */
 	if (state->orig_sp && state->stack_info.type == prev_type &&
 	    frame < prev_frame_end)
-		return false;
-
-	/*
-	 * On 32-bit with user mode regs, make sure the last two regs are safe
-	 * to access:
-	 */
-	if (IS_ENABLED(CONFIG_X86_32) && regs && user_mode(regs) &&
-	    !on_stack(info, frame, len + 2*sizeof(long)))
 		return false;
 
 	/* Move state to the next frame: */
@@ -297,13 +269,13 @@ bool unwind_next_frame(struct unwind_state *state)
 		/*
 		 * kthreads (other than the boot CPU's idle thread) have some
 		 * partial regs at the end of their stack which were placed
-		 * there by copy_thread_tls().  But the regs don't have any
+		 * there by copy_thread().  But the regs don't have any
 		 * useful information, so we can skip them.
 		 *
 		 * This user_mode() check is slightly broader than a PF_KTHREAD
 		 * check because it also catches the awkward situation where a
 		 * newly forked kthread transitions into a user task by calling
-		 * do_execve(), which eventually clears PF_KTHREAD.
+		 * kernel_execve(), which eventually clears PF_KTHREAD.
 		 */
 		if (!user_mode(regs))
 			goto the_end;
@@ -366,6 +338,9 @@ bad_address:
 	if (IS_ENABLED(CONFIG_X86_32))
 		goto the_end;
 
+	if (state->task != current)
+		goto the_end;
+
 	if (state->regs) {
 		printk_deferred_once(KERN_WARNING
 			"WARNING: kernel stack regs at %p in %s:%d has bad 'bp' value %p\n",
@@ -411,10 +386,9 @@ void __unwind_start(struct unwind_state *state, struct task_struct *task,
 	 * Pretend that the frame is complete and that BP points to it, but save
 	 * the real BP so that we can use it when looking for the next frame.
 	 */
-	if (regs && regs->ip == 0 &&
-	    (unsigned long *)kernel_stack_pointer(regs) >= first_frame) {
+	if (regs && regs->ip == 0 && (unsigned long *)regs->sp >= first_frame) {
 		state->next_bp = bp;
-		bp = ((unsigned long *)kernel_stack_pointer(regs)) - 1;
+		bp = ((unsigned long *)regs->sp) - 1;
 	}
 
 	/* Initialize stack info and make sure the frame data is accessible: */

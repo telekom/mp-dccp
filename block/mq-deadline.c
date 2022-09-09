@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  MQ Deadline i/o scheduler - adaptation of the legacy deadline scheduler,
  *  for the blk-mq scheduling framework
@@ -24,7 +25,7 @@
 #include "blk-mq-sched.h"
 
 /*
- * See Documentation/block/deadline-iosched.txt
+ * See Documentation/block/deadline-iosched.rst
  */
 static const int read_expire = HZ / 2;  /* max time before a read is submitted. */
 static const int write_expire = 5 * HZ; /* ditto for writes, these limits are SOFT! */
@@ -59,6 +60,7 @@ struct deadline_data {
 	int front_merges;
 
 	spinlock_t lock;
+	spinlock_t zone_lock;
 	struct list_head dispatch;
 };
 
@@ -192,13 +194,83 @@ static inline int deadline_check_fifo(struct deadline_data *dd, int ddir)
 }
 
 /*
+ * For the specified data direction, return the next request to
+ * dispatch using arrival ordered lists.
+ */
+static struct request *
+deadline_fifo_request(struct deadline_data *dd, int data_dir)
+{
+	struct request *rq;
+	unsigned long flags;
+
+	if (WARN_ON_ONCE(data_dir != READ && data_dir != WRITE))
+		return NULL;
+
+	if (list_empty(&dd->fifo_list[data_dir]))
+		return NULL;
+
+	rq = rq_entry_fifo(dd->fifo_list[data_dir].next);
+	if (data_dir == READ || !blk_queue_is_zoned(rq->q))
+		return rq;
+
+	/*
+	 * Look for a write request that can be dispatched, that is one with
+	 * an unlocked target zone.
+	 */
+	spin_lock_irqsave(&dd->zone_lock, flags);
+	list_for_each_entry(rq, &dd->fifo_list[WRITE], queuelist) {
+		if (blk_req_can_dispatch_to_zone(rq))
+			goto out;
+	}
+	rq = NULL;
+out:
+	spin_unlock_irqrestore(&dd->zone_lock, flags);
+
+	return rq;
+}
+
+/*
+ * For the specified data direction, return the next request to
+ * dispatch using sector position sorted lists.
+ */
+static struct request *
+deadline_next_request(struct deadline_data *dd, int data_dir)
+{
+	struct request *rq;
+	unsigned long flags;
+
+	if (WARN_ON_ONCE(data_dir != READ && data_dir != WRITE))
+		return NULL;
+
+	rq = dd->next_rq[data_dir];
+	if (!rq)
+		return NULL;
+
+	if (data_dir == READ || !blk_queue_is_zoned(rq->q))
+		return rq;
+
+	/*
+	 * Look for a write request that can be dispatched, that is one with
+	 * an unlocked target zone.
+	 */
+	spin_lock_irqsave(&dd->zone_lock, flags);
+	while (rq) {
+		if (blk_req_can_dispatch_to_zone(rq))
+			break;
+		rq = deadline_latter_request(rq);
+	}
+	spin_unlock_irqrestore(&dd->zone_lock, flags);
+
+	return rq;
+}
+
+/*
  * deadline_dispatch_requests selects the best request according to
  * read/write expire, fifo_batch, etc
  */
-static struct request *__dd_dispatch_request(struct blk_mq_hw_ctx *hctx)
+static struct request *__dd_dispatch_request(struct deadline_data *dd)
 {
-	struct deadline_data *dd = hctx->queue->elevator->elevator_data;
-	struct request *rq;
+	struct request *rq, *next_rq;
 	bool reads, writes;
 	int data_dir;
 
@@ -214,10 +286,9 @@ static struct request *__dd_dispatch_request(struct blk_mq_hw_ctx *hctx)
 	/*
 	 * batches are currently reads XOR writes
 	 */
-	if (dd->next_rq[WRITE])
-		rq = dd->next_rq[WRITE];
-	else
-		rq = dd->next_rq[READ];
+	rq = deadline_next_request(dd, WRITE);
+	if (!rq)
+		rq = deadline_next_request(dd, READ);
 
 	if (rq && dd->batching < dd->fifo_batch)
 		/* we have a next request are still entitled to batch */
@@ -231,7 +302,8 @@ static struct request *__dd_dispatch_request(struct blk_mq_hw_ctx *hctx)
 	if (reads) {
 		BUG_ON(RB_EMPTY_ROOT(&dd->sort_list[READ]));
 
-		if (writes && (dd->starved++ >= dd->writes_starved))
+		if (deadline_fifo_request(dd, WRITE) &&
+		    (dd->starved++ >= dd->writes_starved))
 			goto dispatch_writes;
 
 		data_dir = READ;
@@ -260,20 +332,28 @@ dispatch_find_request:
 	/*
 	 * we are not running a batch, find best request for selected data_dir
 	 */
-	if (deadline_check_fifo(dd, data_dir) || !dd->next_rq[data_dir]) {
+	next_rq = deadline_next_request(dd, data_dir);
+	if (deadline_check_fifo(dd, data_dir) || !next_rq) {
 		/*
 		 * A deadline has expired, the last request was in the other
 		 * direction, or we have run out of higher-sectored requests.
 		 * Start again from the request with the earliest expiry time.
 		 */
-		rq = rq_entry_fifo(dd->fifo_list[data_dir].next);
+		rq = deadline_fifo_request(dd, data_dir);
 	} else {
 		/*
 		 * The last req was the same dir and we have a next request in
 		 * sort order. No expired requests so continue on from here.
 		 */
-		rq = dd->next_rq[data_dir];
+		rq = next_rq;
 	}
+
+	/*
+	 * For a zoned block device, if we only have writes queued and none of
+	 * them can be dispatched, rq will be NULL.
+	 */
+	if (!rq)
+		return NULL;
 
 	dd->batching = 0;
 
@@ -284,18 +364,30 @@ dispatch_request:
 	dd->batching++;
 	deadline_move_request(dd, rq);
 done:
+	/*
+	 * If the request needs its target zone locked, do it.
+	 */
+	blk_req_zone_write_lock(rq);
 	rq->rq_flags |= RQF_STARTED;
 	return rq;
 }
 
+/*
+ * One confusing aspect here is that we get called for a specific
+ * hardware queue, but we may return a request that is for a
+ * different hardware queue. This is because mq-deadline has shared
+ * state for all hardware queues, in terms of sorting, FIFOs, etc.
+ */
 static struct request *dd_dispatch_request(struct blk_mq_hw_ctx *hctx)
 {
 	struct deadline_data *dd = hctx->queue->elevator->elevator_data;
 	struct request *rq;
 
 	spin_lock(&dd->lock);
-	rq = __dd_dispatch_request(hctx);
+	rq = __dd_dispatch_request(dd);
 	spin_unlock(&dd->lock);
+	if (rq)
+		atomic_dec(&rq->mq_hctx->elevator_queued);
 
 	return rq;
 }
@@ -339,6 +431,7 @@ static int dd_init_queue(struct request_queue *q, struct elevator_type *e)
 	dd->front_merges = 1;
 	dd->fifo_batch = fifo_batch;
 	spin_lock_init(&dd->lock);
+	spin_lock_init(&dd->zone_lock);
 	INIT_LIST_HEAD(&dd->dispatch);
 
 	q->elevator = eq;
@@ -361,6 +454,8 @@ static int dd_request_merge(struct request_queue *q, struct request **rq,
 
 		if (elv_bio_merge_ok(__rq, bio)) {
 			*rq = __rq;
+			if (blk_discard_mergable(__rq))
+				return ELEVATOR_DISCARD_MERGE;
 			return ELEVATOR_FRONT_MERGE;
 		}
 	}
@@ -368,15 +463,15 @@ static int dd_request_merge(struct request_queue *q, struct request **rq,
 	return ELEVATOR_NO_MERGE;
 }
 
-static bool dd_bio_merge(struct blk_mq_hw_ctx *hctx, struct bio *bio)
+static bool dd_bio_merge(struct request_queue *q, struct bio *bio,
+		unsigned int nr_segs)
 {
-	struct request_queue *q = hctx->queue;
 	struct deadline_data *dd = q->elevator->elevator_data;
 	struct request *free = NULL;
 	bool ret;
 
 	spin_lock(&dd->lock);
-	ret = blk_mq_sched_try_merge(q, bio, &free);
+	ret = blk_mq_sched_try_merge(q, bio, nr_segs, &free);
 	spin_unlock(&dd->lock);
 
 	if (free)
@@ -394,6 +489,12 @@ static void dd_insert_request(struct blk_mq_hw_ctx *hctx, struct request *rq,
 	struct request_queue *q = hctx->queue;
 	struct deadline_data *dd = q->elevator->elevator_data;
 	const int data_dir = rq_data_dir(rq);
+
+	/*
+	 * This may be a requeue of a write request that has locked its
+	 * target zone. If it is the case, this releases the zone lock.
+	 */
+	blk_req_zone_write_unlock(rq);
 
 	if (blk_mq_sched_try_insert_merge(q, rq))
 		return;
@@ -435,13 +536,55 @@ static void dd_insert_requests(struct blk_mq_hw_ctx *hctx,
 		rq = list_first_entry(list, struct request, queuelist);
 		list_del_init(&rq->queuelist);
 		dd_insert_request(hctx, rq, at_head);
+		atomic_inc(&hctx->elevator_queued);
 	}
 	spin_unlock(&dd->lock);
+}
+
+/*
+ * Nothing to do here. This is defined only to ensure that .finish_request
+ * method is called upon request completion.
+ */
+static void dd_prepare_request(struct request *rq)
+{
+}
+
+/*
+ * For zoned block devices, write unlock the target zone of
+ * completed write requests. Do this while holding the zone lock
+ * spinlock so that the zone is never unlocked while deadline_fifo_request()
+ * or deadline_next_request() are executing. This function is called for
+ * all requests, whether or not these requests complete successfully.
+ *
+ * For a zoned block device, __dd_dispatch_request() may have stopped
+ * dispatching requests if all the queued requests are write requests directed
+ * at zones that are already locked due to on-going write requests. To ensure
+ * write request dispatch progress in this case, mark the queue as needing a
+ * restart to ensure that the queue is run again after completion of the
+ * request and zones being unlocked.
+ */
+static void dd_finish_request(struct request *rq)
+{
+	struct request_queue *q = rq->q;
+
+	if (blk_queue_is_zoned(q)) {
+		struct deadline_data *dd = q->elevator->elevator_data;
+		unsigned long flags;
+
+		spin_lock_irqsave(&dd->zone_lock, flags);
+		blk_req_zone_write_unlock(rq);
+		if (!list_empty(&dd->fifo_list[WRITE]))
+			blk_mq_sched_mark_restart_hctx(rq->mq_hctx);
+		spin_unlock_irqrestore(&dd->zone_lock, flags);
+	}
 }
 
 static bool dd_has_work(struct blk_mq_hw_ctx *hctx)
 {
 	struct deadline_data *dd = hctx->queue->elevator->elevator_data;
+
+	if (!atomic_read(&hctx->elevator_queued))
+		return false;
 
 	return !list_empty_careful(&dd->dispatch) ||
 		!list_empty_careful(&dd->fifo_list[0]) ||
@@ -505,8 +648,7 @@ STORE_FUNCTION(deadline_fifo_batch_store, &dd->fifo_batch, 0, INT_MAX, 0);
 #undef STORE_FUNCTION
 
 #define DD_ATTR(name) \
-	__ATTR(name, S_IRUGO|S_IWUSR, deadline_##name##_show, \
-				      deadline_##name##_store)
+	__ATTR(name, 0644, deadline_##name##_show, deadline_##name##_store)
 
 static struct elv_fs_entry deadline_attrs[] = {
 	DD_ATTR(read_expire),
@@ -637,9 +779,11 @@ static const struct blk_mq_debugfs_attr deadline_queue_debugfs_attrs[] = {
 #endif
 
 static struct elevator_type mq_deadline = {
-	.ops.mq = {
+	.ops = {
 		.insert_requests	= dd_insert_requests,
 		.dispatch_request	= dd_dispatch_request,
+		.prepare_request	= dd_prepare_request,
+		.finish_request		= dd_finish_request,
 		.next_request		= elv_rb_latter_request,
 		.former_request		= elv_rb_former_request,
 		.bio_merge		= dd_bio_merge,
@@ -651,12 +795,13 @@ static struct elevator_type mq_deadline = {
 		.exit_sched		= dd_exit_queue,
 	},
 
-	.uses_mq	= true,
 #ifdef CONFIG_BLK_DEBUG_FS
 	.queue_debugfs_attrs = deadline_queue_debugfs_attrs,
 #endif
 	.elevator_attrs = deadline_attrs,
 	.elevator_name = "mq-deadline",
+	.elevator_alias = "deadline",
+	.elevator_features = ELEVATOR_F_ZBD_SEQ_WRITE,
 	.elevator_owner = THIS_MODULE,
 };
 MODULE_ALIAS("mq-deadline-iosched");

@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * amd5536.h -- header for AMD 5536 UDC high/full speed USB device controller
  *
- * Copyright (C) 2007 AMD (http://www.amd.com)
+ * Copyright (C) 2007 AMD (https://www.amd.com)
  * Author: Thomas Dahlmann
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #ifndef AMD5536UDC_H
@@ -444,7 +440,7 @@ struct udc_ep_regs {
 	/* endpoint data descriptor pointer */
 	u32 desptr;
 
-	/* reserverd */
+	/* reserved */
 	u32 reserved;
 
 	/* write/read confirmation */

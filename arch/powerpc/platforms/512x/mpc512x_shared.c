@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2007,2008 Freescale Semiconductor, Inc. All rights reserved.
  *
@@ -5,11 +6,6 @@
  *
  * Description:
  * MPC512x Shared code
- *
- * This is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/clk.h>
@@ -387,8 +383,8 @@ static unsigned int __init get_fifo_size(struct device_node *np,
 	if (fp)
 		return *fp;
 
-	pr_warning("no %s property in %pOF node, defaulting to %d\n",
-		   prop_name, np, DEFAULT_FIFO_SIZE);
+	pr_warn("no %s property in %pOF node, defaulting to %d\n",
+		prop_name, np, DEFAULT_FIFO_SIZE);
 
 	return DEFAULT_FIFO_SIZE;
 }

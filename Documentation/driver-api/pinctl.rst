@@ -274,15 +274,6 @@ configuration in the pin controller ops like this::
 		.confops = &foo_pconf_ops,
 	};
 
-Since some controllers have special logic for handling entire groups of pins
-they can exploit the special whole-group pin control function. The
-pin_config_group_set() callback is allowed to return the error code -EAGAIN,
-for groups it does not want to handle, or if it just wants to do some
-group-level handling and then fall through to iterate over all pins, in which
-case each individual pin will be treated by separate pin_config_set() calls as
-well.
-
-
 Interaction with the GPIO subsystem
 ===================================
 
@@ -647,8 +638,8 @@ group of pins would work something like this::
 	}
 
 	static int foo_get_group_pins(struct pinctrl_dev *pctldev, unsigned selector,
-				unsigned ** const pins,
-				unsigned * const num_pins)
+				const unsigned ** pins,
+				unsigned * num_pins)
 	{
 		*pins = (unsigned *) foo_groups[selector].pins;
 		*num_pins = foo_groups[selector].num_pins;
@@ -714,7 +705,7 @@ group of pins would work something like this::
 	{
 		u8 regbit = (1 << selector + group);
 
-		writeb((readb(MUX)|regbit), MUX)
+		writeb((readb(MUX)|regbit), MUX);
 		return 0;
 	}
 
@@ -757,8 +748,8 @@ that your datasheet calls "GPIO mode", but actually is just an electrical
 configuration for a certain device. See the section below named
 "GPIO mode pitfalls" for more details on this scenario.
 
-The public pinmux API contains two functions named pinctrl_request_gpio()
-and pinctrl_free_gpio(). These two functions shall *ONLY* be called from
+The public pinmux API contains two functions named pinctrl_gpio_request()
+and pinctrl_gpio_free(). These two functions shall *ONLY* be called from
 gpiolib-based drivers as part of their gpio_request() and
 gpio_free() semantics. Likewise the pinctrl_gpio_direction_[input|output]
 shall only be called from within respective gpio_direction_[input|output]
@@ -790,7 +781,7 @@ gpiolib driver and the affected GPIO range, pin offset and desired direction
 will be passed along to this function.
 
 Alternatively to using these special functions, it is fully allowed to use
-named functions for each GPIO pin, the pinctrl_request_gpio() will attempt to
+named functions for each GPIO pin, the pinctrl_gpio_request() will attempt to
 obtain the function "gpioN" where "N" is the global GPIO pin number if no
 special GPIO-handler is registered.
 

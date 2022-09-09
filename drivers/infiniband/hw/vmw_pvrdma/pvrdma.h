@@ -93,8 +93,8 @@ struct pvrdma_cq {
 	struct pvrdma_page_dir pdir;
 	u32 cq_handle;
 	bool is_kernel;
-	atomic_t refcnt;
-	wait_queue_head_t wait;
+	refcount_t refcnt;
+	struct completion free;
 };
 
 struct pvrdma_id_table {
@@ -162,6 +162,22 @@ struct pvrdma_ah {
 	struct pvrdma_av av;
 };
 
+struct pvrdma_srq {
+	struct ib_srq ibsrq;
+	int offset;
+	spinlock_t lock; /* SRQ lock. */
+	int wqe_cnt;
+	int wqe_size;
+	int max_gs;
+	struct ib_umem *umem;
+	struct pvrdma_ring_state *ring;
+	struct pvrdma_page_dir pdir;
+	u32 srq_handle;
+	int npages;
+	refcount_t refcnt;
+	struct completion free;
+};
+
 struct pvrdma_qp {
 	struct ib_qp ibqp;
 	u32 qp_handle;
@@ -171,6 +187,7 @@ struct pvrdma_qp {
 	struct ib_umem *rumem;
 	struct ib_umem *sumem;
 	struct pvrdma_page_dir pdir;
+	struct pvrdma_srq *srq;
 	int npages;
 	int npages_send;
 	int npages_recv;
@@ -179,8 +196,8 @@ struct pvrdma_qp {
 	u8 state;
 	bool is_kernel;
 	struct mutex mutex; /* QP state mutex. */
-	atomic_t refcnt;
-	wait_queue_head_t wait;
+	refcount_t refcnt;
+	struct completion free;
 };
 
 struct pvrdma_dev {
@@ -210,6 +227,8 @@ struct pvrdma_dev {
 	struct pvrdma_page_dir cq_pdir;
 	struct pvrdma_cq **cq_tbl;
 	spinlock_t cq_tbl_lock;
+	struct pvrdma_srq **srq_tbl;
+	spinlock_t srq_tbl_lock;
 	struct pvrdma_qp **qp_tbl;
 	spinlock_t qp_tbl_lock;
 	struct pvrdma_uar_table uar_table;
@@ -221,6 +240,7 @@ struct pvrdma_dev {
 	bool ib_active;
 	atomic_t num_qps;
 	atomic_t num_cqs;
+	atomic_t num_srqs;
 	atomic_t num_pds;
 	atomic_t num_ahs;
 
@@ -254,6 +274,11 @@ static inline struct pvrdma_pd *to_vpd(struct ib_pd *ibpd)
 static inline struct pvrdma_cq *to_vcq(struct ib_cq *ibcq)
 {
 	return container_of(ibcq, struct pvrdma_cq, ibcq);
+}
+
+static inline struct pvrdma_srq *to_vsrq(struct ib_srq *ibsrq)
+{
+	return container_of(ibsrq, struct pvrdma_srq, ibsrq);
 }
 
 static inline struct pvrdma_user_mr *to_vmr(struct ib_mr *ibmr)
@@ -353,11 +378,6 @@ static inline enum ib_port_speed pvrdma_port_speed_to_ib(
 	return (enum ib_port_speed)speed;
 }
 
-static inline int pvrdma_qp_attr_mask_to_ib(int attr_mask)
-{
-	return attr_mask;
-}
-
 static inline int ib_qp_attr_mask_to_pvrdma(int attr_mask)
 {
 	return attr_mask & PVRDMA_MASK(PVRDMA_QP_ATTR_MASK_MAX);
@@ -407,7 +427,40 @@ static inline enum ib_qp_state pvrdma_qp_state_to_ib(enum pvrdma_qp_state state)
 
 static inline enum pvrdma_wr_opcode ib_wr_opcode_to_pvrdma(enum ib_wr_opcode op)
 {
-	return (enum pvrdma_wr_opcode)op;
+	switch (op) {
+	case IB_WR_RDMA_WRITE:
+		return PVRDMA_WR_RDMA_WRITE;
+	case IB_WR_RDMA_WRITE_WITH_IMM:
+		return PVRDMA_WR_RDMA_WRITE_WITH_IMM;
+	case IB_WR_SEND:
+		return PVRDMA_WR_SEND;
+	case IB_WR_SEND_WITH_IMM:
+		return PVRDMA_WR_SEND_WITH_IMM;
+	case IB_WR_RDMA_READ:
+		return PVRDMA_WR_RDMA_READ;
+	case IB_WR_ATOMIC_CMP_AND_SWP:
+		return PVRDMA_WR_ATOMIC_CMP_AND_SWP;
+	case IB_WR_ATOMIC_FETCH_AND_ADD:
+		return PVRDMA_WR_ATOMIC_FETCH_AND_ADD;
+	case IB_WR_LSO:
+		return PVRDMA_WR_LSO;
+	case IB_WR_SEND_WITH_INV:
+		return PVRDMA_WR_SEND_WITH_INV;
+	case IB_WR_RDMA_READ_WITH_INV:
+		return PVRDMA_WR_RDMA_READ_WITH_INV;
+	case IB_WR_LOCAL_INV:
+		return PVRDMA_WR_LOCAL_INV;
+	case IB_WR_REG_MR:
+		return PVRDMA_WR_FAST_REG_MR;
+	case IB_WR_MASKED_ATOMIC_CMP_AND_SWP:
+		return PVRDMA_WR_MASKED_ATOMIC_CMP_AND_SWP;
+	case IB_WR_MASKED_ATOMIC_FETCH_AND_ADD:
+		return PVRDMA_WR_MASKED_ATOMIC_FETCH_AND_ADD;
+	case IB_WR_REG_MR_INTEGRITY:
+		return PVRDMA_WR_REG_SIG_MR;
+	default:
+		return PVRDMA_WR_ERROR;
+	}
 }
 
 static inline enum ib_wc_status pvrdma_wc_status_to_ib(
@@ -454,6 +507,20 @@ static inline int pvrdma_wc_flags_to_ib(int flags)
 static inline int ib_send_flags_to_pvrdma(int flags)
 {
 	return flags & PVRDMA_MASK(PVRDMA_SEND_FLAGS_MAX);
+}
+
+static inline int pvrdma_network_type_to_ib(enum pvrdma_network_type type)
+{
+	switch (type) {
+	case PVRDMA_NETWORK_ROCE_V1:
+		return RDMA_NETWORK_ROCE_V1;
+	case PVRDMA_NETWORK_IPV4:
+		return RDMA_NETWORK_IPV4;
+	case PVRDMA_NETWORK_IPV6:
+		return RDMA_NETWORK_IPV6;
+	default:
+		return RDMA_NETWORK_IPV6;
+	}
 }
 
 void pvrdma_qp_cap_to_ib(struct ib_qp_cap *dst,

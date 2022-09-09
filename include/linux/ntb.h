@@ -58,9 +58,11 @@
 
 #include <linux/completion.h>
 #include <linux/device.h>
+#include <linux/interrupt.h>
 
 struct ntb_client;
 struct ntb_dev;
+struct ntb_msi;
 struct pci_dev;
 
 /**
@@ -70,6 +72,8 @@ struct pci_dev;
  * @NTB_TOPO_SEC:	On secondary side of remote ntb.
  * @NTB_TOPO_B2B_USD:	On primary side of local ntb upstream of remote ntb.
  * @NTB_TOPO_B2B_DSD:	On primary side of local ntb downstream of remote ntb.
+ * @NTB_TOPO_SWITCH:	Connected via a switch which supports ntb.
+ * @NTB_TOPO_CROSSLINK: Connected via two symmetric switchecs
  */
 enum ntb_topo {
 	NTB_TOPO_NONE = -1,
@@ -77,6 +81,8 @@ enum ntb_topo {
 	NTB_TOPO_SEC,
 	NTB_TOPO_B2B_USD,
 	NTB_TOPO_B2B_DSD,
+	NTB_TOPO_SWITCH,
+	NTB_TOPO_CROSSLINK,
 };
 
 static inline int ntb_topo_is_b2b(enum ntb_topo topo)
@@ -92,11 +98,13 @@ static inline int ntb_topo_is_b2b(enum ntb_topo topo)
 static inline char *ntb_topo_string(enum ntb_topo topo)
 {
 	switch (topo) {
-	case NTB_TOPO_NONE:	return "NTB_TOPO_NONE";
-	case NTB_TOPO_PRI:	return "NTB_TOPO_PRI";
-	case NTB_TOPO_SEC:	return "NTB_TOPO_SEC";
-	case NTB_TOPO_B2B_USD:	return "NTB_TOPO_B2B_USD";
-	case NTB_TOPO_B2B_DSD:	return "NTB_TOPO_B2B_DSD";
+	case NTB_TOPO_NONE:		return "NTB_TOPO_NONE";
+	case NTB_TOPO_PRI:		return "NTB_TOPO_PRI";
+	case NTB_TOPO_SEC:		return "NTB_TOPO_SEC";
+	case NTB_TOPO_B2B_USD:		return "NTB_TOPO_B2B_USD";
+	case NTB_TOPO_B2B_DSD:		return "NTB_TOPO_B2B_DSD";
+	case NTB_TOPO_SWITCH:		return "NTB_TOPO_SWITCH";
+	case NTB_TOPO_CROSSLINK:	return "NTB_TOPO_CROSSLINK";
 	}
 	return "NTB_TOPO_INVALID";
 }
@@ -199,7 +207,7 @@ static inline int ntb_ctx_ops_is_valid(const struct ntb_ctx_ops *ops)
 }
 
 /**
- * struct ntb_ctx_ops - ntb device operations
+ * struct ntb_dev_ops - ntb device operations
  * @port_number:	See ntb_port_number().
  * @peer_port_count:	See ntb_peer_port_count().
  * @peer_port_number:	See ntb_peer_port_number().
@@ -247,7 +255,7 @@ static inline int ntb_ctx_ops_is_valid(const struct ntb_ctx_ops *ops)
  * @msg_set_mask:	See ntb_msg_set_mask().
  * @msg_clear_mask:	See ntb_msg_clear_mask().
  * @msg_read:		See ntb_msg_read().
- * @msg_write:		See ntb_msg_write().
+ * @peer_msg_write:	See ntb_peer_msg_write().
  */
 struct ntb_dev_ops {
 	int (*port_number)(struct ntb_dev *ntb);
@@ -290,7 +298,8 @@ struct ntb_dev_ops {
 	int (*db_clear_mask)(struct ntb_dev *ntb, u64 db_bits);
 
 	int (*peer_db_addr)(struct ntb_dev *ntb,
-			    phys_addr_t *db_addr, resource_size_t *db_size);
+			    phys_addr_t *db_addr, resource_size_t *db_size,
+				u64 *db_data, int db_bit);
 	u64 (*peer_db_read)(struct ntb_dev *ntb);
 	int (*peer_db_set)(struct ntb_dev *ntb, u64 db_bits);
 	int (*peer_db_clear)(struct ntb_dev *ntb, u64 db_bits);
@@ -318,8 +327,8 @@ struct ntb_dev_ops {
 	int (*msg_clear_sts)(struct ntb_dev *ntb, u64 sts_bits);
 	int (*msg_set_mask)(struct ntb_dev *ntb, u64 mask_bits);
 	int (*msg_clear_mask)(struct ntb_dev *ntb, u64 mask_bits);
-	int (*msg_read)(struct ntb_dev *ntb, int midx, int *pidx, u32 *msg);
-	int (*msg_write)(struct ntb_dev *ntb, int midx, int pidx, u32 msg);
+	u32 (*msg_read)(struct ntb_dev *ntb, int *pidx, int midx);
+	int (*peer_msg_write)(struct ntb_dev *ntb, int pidx, int midx, u32 msg);
 };
 
 static inline int ntb_dev_ops_is_valid(const struct ntb_dev_ops *ops)
@@ -381,7 +390,7 @@ static inline int ntb_dev_ops_is_valid(const struct ntb_dev_ops *ops)
 		/* !ops->msg_set_mask == !ops->msg_count	&& */
 		/* !ops->msg_clear_mask == !ops->msg_count	&& */
 		!ops->msg_read == !ops->msg_count		&&
-		!ops->msg_write == !ops->msg_count		&&
+		!ops->peer_msg_write == !ops->msg_count		&&
 		1;
 }
 
@@ -397,7 +406,7 @@ struct ntb_client {
 #define drv_ntb_client(__drv) container_of((__drv), struct ntb_client, drv)
 
 /**
- * struct ntb_device - ntb device
+ * struct ntb_dev - ntb device
  * @dev:		Linux device object.
  * @pdev:		PCI device entry of the ntb.
  * @topo:		Detected topology of the ntb.
@@ -419,6 +428,10 @@ struct ntb_dev {
 	spinlock_t			ctx_lock;
 	/* block unregister until device is fully released */
 	struct completion		released;
+
+#ifdef CONFIG_NTB_MSI
+	struct ntb_msi *msi;
+#endif
 };
 #define dev_ntb(__dev) container_of((__dev), struct ntb_dev, dev)
 
@@ -465,7 +478,7 @@ void ntb_unregister_client(struct ntb_client *client);
 int ntb_register_device(struct ntb_dev *ntb);
 
 /**
- * ntb_register_device() - unregister a ntb device
+ * ntb_unregister_device() - unregister a ntb device
  * @ntb:	NTB device context.
  *
  * The device will be removed from the list of ntb devices.  If the ntb device
@@ -609,7 +622,6 @@ static inline int ntb_port_number(struct ntb_dev *ntb)
 
 	return ntb->ops->port_number(ntb);
 }
-
 /**
  * ntb_peer_port_count() - get the number of peer device ports
  * @ntb:	NTB device context.
@@ -644,6 +656,58 @@ static inline int ntb_peer_port_number(struct ntb_dev *ntb, int pidx)
 		return ntb_default_peer_port_number(ntb, pidx);
 
 	return ntb->ops->peer_port_number(ntb, pidx);
+}
+
+/**
+ * ntb_logical_port_number() - get the logical port number of the local port
+ * @ntb:	NTB device context.
+ *
+ * The Logical Port Number is defined to be a unique number for each
+ * port starting from zero through to the number of ports minus one.
+ * This is in contrast to the Port Number where each port can be assigned
+ * any unique physical number by the hardware.
+ *
+ * The logical port number is useful for calculating the resource indexes
+ * used by peers.
+ *
+ * Return: the logical port number or negative value indicating an error
+ */
+static inline int ntb_logical_port_number(struct ntb_dev *ntb)
+{
+	int lport = ntb_port_number(ntb);
+	int pidx;
+
+	if (lport < 0)
+		return lport;
+
+	for (pidx = 0; pidx < ntb_peer_port_count(ntb); pidx++)
+		if (lport <= ntb_peer_port_number(ntb, pidx))
+			return pidx;
+
+	return pidx;
+}
+
+/**
+ * ntb_peer_logical_port_number() - get the logical peer port by given index
+ * @ntb:	NTB device context.
+ * @pidx:	Peer port index.
+ *
+ * The Logical Port Number is defined to be a unique number for each
+ * port starting from zero through to the number of ports minus one.
+ * This is in contrast to the Port Number where each port can be assigned
+ * any unique physical number by the hardware.
+ *
+ * The logical port number is useful for calculating the resource indexes
+ * used by peers.
+ *
+ * Return: the peer's logical port number or negative value indicating an error
+ */
+static inline int ntb_peer_logical_port_number(struct ntb_dev *ntb, int pidx)
+{
+	if (ntb_peer_port_number(ntb, pidx) < ntb_port_number(ntb))
+		return pidx;
+	else
+		return pidx + 1;
 }
 
 /**
@@ -730,7 +794,8 @@ static inline int ntb_link_disable(struct ntb_dev *ntb)
  * Hardware and topology may support a different number of memory windows.
  * Moreover different peer devices can support different number of memory
  * windows. Simply speaking this method returns the number of possible inbound
- * memory windows to share with specified peer device.
+ * memory windows to share with specified peer device. Note: this may return
+ * zero if the link is not up yet.
  *
  * Return: the number of memory windows.
  */
@@ -751,7 +816,7 @@ static inline int ntb_mw_count(struct ntb_dev *ntb, int pidx)
  * Get the alignments of an inbound memory window with specified index.
  * NULL may be given for any output parameter if the value is not needed.
  * The alignment and size parameters may be used for allocation of proper
- * shared memory.
+ * shared memory. Note: this must only be called when the link is up.
  *
  * Return: Zero on success, otherwise a negative error number.
  */
@@ -760,6 +825,9 @@ static inline int ntb_mw_get_align(struct ntb_dev *ntb, int pidx, int widx,
 				   resource_size_t *size_align,
 				   resource_size_t *size_max)
 {
+	if (!(ntb_link_is_up(ntb, NULL, NULL) & BIT_ULL(pidx)))
+		return -ENOTCONN;
+
 	return ntb->ops->mw_get_align(ntb, pidx, widx, addr_align, size_align,
 				      size_max);
 }
@@ -1068,6 +1136,8 @@ static inline int ntb_db_clear_mask(struct ntb_dev *ntb, u64 db_bits)
  * @ntb:	NTB device context.
  * @db_addr:	OUT - The address of the peer doorbell register.
  * @db_size:	OUT - The number of bytes to write the peer doorbell register.
+ * @db_data:	OUT - The data of peer doorbell register
+ * @db_bit:		door bell bit number
  *
  * Return the address of the peer doorbell register.  This may be used, for
  * example, by drivers that offload memory copy operations to a dma engine.
@@ -1081,12 +1151,13 @@ static inline int ntb_db_clear_mask(struct ntb_dev *ntb, u64 db_bits)
  */
 static inline int ntb_peer_db_addr(struct ntb_dev *ntb,
 				   phys_addr_t *db_addr,
-				   resource_size_t *db_size)
+				   resource_size_t *db_size,
+				   u64 *db_data, int db_bit)
 {
 	if (!ntb->ops->peer_db_addr)
 		return -EINVAL;
 
-	return ntb->ops->peer_db_addr(ntb, db_addr, db_size);
+	return ntb->ops->peer_db_addr(ntb, db_addr, db_size, db_data, db_bit);
 }
 
 /**
@@ -1280,7 +1351,7 @@ static inline int ntb_spad_write(struct ntb_dev *ntb, int sidx, u32 val)
  * @sidx:	Scratchpad index.
  * @spad_addr:	OUT - The address of the peer scratchpad register.
  *
- * Return the address of the peer doorbell register.  This may be used, for
+ * Return the address of the peer scratchpad register.  This may be used, for
  * example, by drivers that offload memory copy operations to a dma engine.
  *
  * Return: Zero on success, otherwise an error number.
@@ -1302,7 +1373,7 @@ static inline int ntb_peer_spad_addr(struct ntb_dev *ntb, int pidx, int sidx,
  *
  * Read the peer scratchpad register, and return the value.
  *
- * Return: The value of the local scratchpad register.
+ * Return: The value of the peer scratchpad register.
  */
 static inline u32 ntb_peer_spad_read(struct ntb_dev *ntb, int pidx, int sidx)
 {
@@ -1452,31 +1523,29 @@ static inline int ntb_msg_clear_mask(struct ntb_dev *ntb, u64 mask_bits)
 }
 
 /**
- * ntb_msg_read() - read message register with specified index
+ * ntb_msg_read() - read inbound message register with specified index
  * @ntb:	NTB device context.
- * @midx:	Message register index
  * @pidx:	OUT - Port index of peer device a message retrieved from
- * @msg:	OUT - Data
+ * @midx:	Message register index
  *
  * Read data from the specified message register. Source port index of a
  * message is retrieved as well.
  *
- * Return: Zero on success, otherwise a negative error number.
+ * Return: The value of the inbound message register.
  */
-static inline int ntb_msg_read(struct ntb_dev *ntb, int midx, int *pidx,
-			       u32 *msg)
+static inline u32 ntb_msg_read(struct ntb_dev *ntb, int *pidx, int midx)
 {
 	if (!ntb->ops->msg_read)
-		return -EINVAL;
+		return ~(u32)0;
 
-	return ntb->ops->msg_read(ntb, midx, pidx, msg);
+	return ntb->ops->msg_read(ntb, pidx, midx);
 }
 
 /**
- * ntb_msg_write() - write data to the specified message register
+ * ntb_peer_msg_write() - write data to the specified peer message register
  * @ntb:	NTB device context.
- * @midx:	Message register index
  * @pidx:	Port index of peer device a message being sent to
+ * @midx:	Message register index
  * @msg:	Data to send
  *
  * Send data to a specified peer device using the defined message register.
@@ -1485,13 +1554,150 @@ static inline int ntb_msg_read(struct ntb_dev *ntb, int midx, int *pidx,
  *
  * Return: Zero on success, otherwise a negative error number.
  */
-static inline int ntb_msg_write(struct ntb_dev *ntb, int midx, int pidx,
-				u32 msg)
+static inline int ntb_peer_msg_write(struct ntb_dev *ntb, int pidx, int midx,
+				     u32 msg)
 {
-	if (!ntb->ops->msg_write)
+	if (!ntb->ops->peer_msg_write)
 		return -EINVAL;
 
-	return ntb->ops->msg_write(ntb, midx, pidx, msg);
+	return ntb->ops->peer_msg_write(ntb, pidx, midx, msg);
+}
+
+/**
+ * ntb_peer_resource_idx() - get a resource index for a given peer idx
+ * @ntb:	NTB device context.
+ * @pidx:	Peer port index.
+ *
+ * When constructing a graph of peers, each remote peer must use a different
+ * resource index (mw, doorbell, etc) to communicate with each other
+ * peer.
+ *
+ * In a two peer system, this function should always return 0 such that
+ * resource 0 points to the remote peer on both ports.
+ *
+ * In a 5 peer system, this function will return the following matrix
+ *
+ * pidx \ port    0    1    2    3    4
+ * 0              0    0    1    2    3
+ * 1              0    1    1    2    3
+ * 2              0    1    2    2    3
+ * 3              0    1    2    3    3
+ *
+ * For example, if this function is used to program peer's memory
+ * windows, port 0 will program MW 0 on all it's peers to point to itself.
+ * port 1 will program MW 0 in port 0 to point to itself and MW 1 on all
+ * other ports. etc.
+ *
+ * For the legacy two host case, ntb_port_number() and ntb_peer_port_number()
+ * both return zero and therefore this function will always return zero.
+ * So MW 0 on each host would be programmed to point to the other host.
+ *
+ * Return: the resource index to use for that peer.
+ */
+static inline int ntb_peer_resource_idx(struct ntb_dev *ntb, int pidx)
+{
+	int local_port, peer_port;
+
+	if (pidx >= ntb_peer_port_count(ntb))
+		return -EINVAL;
+
+	local_port = ntb_logical_port_number(ntb);
+	peer_port = ntb_peer_logical_port_number(ntb, pidx);
+
+	if (peer_port < local_port)
+		return local_port - 1;
+	else
+		return local_port;
+}
+
+/**
+ * ntb_peer_highest_mw_idx() - get a memory window index for a given peer idx
+ *	using the highest index memory windows first
+ *
+ * @ntb:	NTB device context.
+ * @pidx:	Peer port index.
+ *
+ * Like ntb_peer_resource_idx(), except it returns indexes starting with
+ * last memory window index.
+ *
+ * Return: the resource index to use for that peer.
+ */
+static inline int ntb_peer_highest_mw_idx(struct ntb_dev *ntb, int pidx)
+{
+	int ret;
+
+	ret = ntb_peer_resource_idx(ntb, pidx);
+	if (ret < 0)
+		return ret;
+
+	return ntb_mw_count(ntb, pidx) - ret - 1;
+}
+
+struct ntb_msi_desc {
+	u32 addr_offset;
+	u32 data;
+};
+
+#ifdef CONFIG_NTB_MSI
+
+int ntb_msi_init(struct ntb_dev *ntb, void (*desc_changed)(void *ctx));
+int ntb_msi_setup_mws(struct ntb_dev *ntb);
+void ntb_msi_clear_mws(struct ntb_dev *ntb);
+int ntbm_msi_request_threaded_irq(struct ntb_dev *ntb, irq_handler_t handler,
+				  irq_handler_t thread_fn,
+				  const char *name, void *dev_id,
+				  struct ntb_msi_desc *msi_desc);
+void ntbm_msi_free_irq(struct ntb_dev *ntb, unsigned int irq, void *dev_id);
+int ntb_msi_peer_trigger(struct ntb_dev *ntb, int peer,
+			 struct ntb_msi_desc *desc);
+int ntb_msi_peer_addr(struct ntb_dev *ntb, int peer,
+		      struct ntb_msi_desc *desc,
+		      phys_addr_t *msi_addr);
+
+#else /* not CONFIG_NTB_MSI */
+
+static inline int ntb_msi_init(struct ntb_dev *ntb,
+			       void (*desc_changed)(void *ctx))
+{
+	return -EOPNOTSUPP;
+}
+static inline int ntb_msi_setup_mws(struct ntb_dev *ntb)
+{
+	return -EOPNOTSUPP;
+}
+static inline void ntb_msi_clear_mws(struct ntb_dev *ntb) {}
+static inline int ntbm_msi_request_threaded_irq(struct ntb_dev *ntb,
+						irq_handler_t handler,
+						irq_handler_t thread_fn,
+						const char *name, void *dev_id,
+						struct ntb_msi_desc *msi_desc)
+{
+	return -EOPNOTSUPP;
+}
+static inline void ntbm_msi_free_irq(struct ntb_dev *ntb, unsigned int irq,
+				     void *dev_id) {}
+static inline int ntb_msi_peer_trigger(struct ntb_dev *ntb, int peer,
+				       struct ntb_msi_desc *desc)
+{
+	return -EOPNOTSUPP;
+}
+static inline int ntb_msi_peer_addr(struct ntb_dev *ntb, int peer,
+				    struct ntb_msi_desc *desc,
+				    phys_addr_t *msi_addr)
+{
+	return -EOPNOTSUPP;
+
+}
+
+#endif /* CONFIG_NTB_MSI */
+
+static inline int ntbm_msi_request_irq(struct ntb_dev *ntb,
+				       irq_handler_t handler,
+				       const char *name, void *dev_id,
+				       struct ntb_msi_desc *msi_desc)
+{
+	return ntbm_msi_request_threaded_irq(ntb, handler, NULL, name,
+					     dev_id, msi_desc);
 }
 
 #endif

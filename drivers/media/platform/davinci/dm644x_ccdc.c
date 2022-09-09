@@ -1,15 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2006-2009 Texas Instruments Inc
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * CCDC hardware module for DM6446
  * ------------------------------
@@ -22,9 +13,9 @@
  * may be supported using the same module.
  *
  * TODO: Test Raw bayer parameter settings and bayer capture
- * 	 Split module parameter structure to module specific ioctl structs
- * 	 investigate if enum used for user space type definition
- * 	 to be replaced by #defines or integer
+ *	 Split module parameter structure to module specific ioctl structs
+ *	 investigate if enum used for user space type definition
+ *	 to be replaced by #defines or integer
  */
 #include <linux/platform_device.h>
 #include <linux/uaccess.h>
@@ -776,7 +767,7 @@ static void ccdc_restore_context(void)
 	regw(ccdc_ctx[CCDC_VP_OUT >> 2], CCDC_VP_OUT);
 	regw(ccdc_ctx[CCDC_PCR >> 2], CCDC_PCR);
 }
-static struct ccdc_hw_device ccdc_hw_dev = {
+static const struct ccdc_hw_device ccdc_hw_dev = {
 	.name = "DM6446 CCDC",
 	.owner = THIS_MODULE,
 	.hw_ops = {
@@ -826,7 +817,7 @@ static int dm644x_ccdc_probe(struct platform_device *pdev)
 		goto fail_nores;
 	}
 
-	ccdc_cfg.base_addr = ioremap_nocache(res->start, resource_size(res));
+	ccdc_cfg.base_addr = ioremap(res->start, resource_size(res));
 	if (!ccdc_cfg.base_addr) {
 		status = -ENOMEM;
 		goto fail_nomem;

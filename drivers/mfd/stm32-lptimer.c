@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * STM32 Low-Power Timer parent driver.
- *
  * Copyright (C) STMicroelectronics 2017
- *
  * Author: Fabrice Gasnier <fabrice.gasnier@st.com>
- *
  * Inspired by Benjamin Gaignard's stm32-timers driver
- *
- * License terms:  GNU General Public License (GPL), version 2
  */
 
 #include <linux/mfd/stm32-lptimer.h>
@@ -21,6 +17,7 @@ static const struct regmap_config stm32_lptimer_regmap_cfg = {
 	.val_bits = 32,
 	.reg_stride = sizeof(u32),
 	.max_register = STM32_LPTIM_MAX_REGISTER,
+	.fast_io = true,
 };
 
 static int stm32_lptimer_detect_encoder(struct stm32_lptimer *ddata)

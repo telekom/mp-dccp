@@ -29,19 +29,22 @@ const char *stack_type_name(enum stack_type type)
 	if (type == STACK_TYPE_ENTRY)
 		return "ENTRY_TRAMPOLINE";
 
+	if (type == STACK_TYPE_EXCEPTION)
+		return "#DF";
+
 	return NULL;
 }
 
 static bool in_hardirq_stack(unsigned long *stack, struct stack_info *info)
 {
-	unsigned long *begin = (unsigned long *)this_cpu_read(hardirq_stack);
+	unsigned long *begin = (unsigned long *)this_cpu_read(hardirq_stack_ptr);
 	unsigned long *end   = begin + (THREAD_SIZE / sizeof(long));
 
 	/*
 	 * This is a software stack, so 'end' can be a valid stack pointer.
 	 * It just means the stack is empty.
 	 */
-	if (stack <= begin || stack > end)
+	if (stack < begin || stack > end)
 		return false;
 
 	info->type	= STACK_TYPE_IRQ;
@@ -59,14 +62,14 @@ static bool in_hardirq_stack(unsigned long *stack, struct stack_info *info)
 
 static bool in_softirq_stack(unsigned long *stack, struct stack_info *info)
 {
-	unsigned long *begin = (unsigned long *)this_cpu_read(softirq_stack);
+	unsigned long *begin = (unsigned long *)this_cpu_read(softirq_stack_ptr);
 	unsigned long *end   = begin + (THREAD_SIZE / sizeof(long));
 
 	/*
 	 * This is a software stack, so 'end' can be a valid stack pointer.
 	 * It just means the stack is empty.
 	 */
-	if (stack <= begin || stack > end)
+	if (stack < begin || stack > end)
 		return false;
 
 	info->type	= STACK_TYPE_SOFTIRQ;
@@ -81,6 +84,26 @@ static bool in_softirq_stack(unsigned long *stack, struct stack_info *info)
 
 	return true;
 }
+
+static bool in_doublefault_stack(unsigned long *stack, struct stack_info *info)
+{
+	struct cpu_entry_area *cea = get_cpu_entry_area(raw_smp_processor_id());
+	struct doublefault_stack *ss = &cea->doublefault_stack;
+
+	void *begin = ss->stack;
+	void *end = begin + sizeof(ss->stack);
+
+	if ((void *)stack < begin || (void *)stack >= end)
+		return false;
+
+	info->type	= STACK_TYPE_EXCEPTION;
+	info->begin	= begin;
+	info->end	= end;
+	info->next_sp	= (unsigned long *)this_cpu_read(cpu_tss_rw.x86_tss.sp);
+
+	return true;
+}
+
 
 int get_stack_info(unsigned long *stack, struct task_struct *task,
 		   struct stack_info *info, unsigned long *visit_mask)
@@ -105,6 +128,9 @@ int get_stack_info(unsigned long *stack, struct task_struct *task,
 	if (in_softirq_stack(stack, info))
 		goto recursion_check;
 
+	if (in_doublefault_stack(stack, info))
+		goto recursion_check;
+
 	goto unknown;
 
 recursion_check:
@@ -126,46 +152,4 @@ recursion_check:
 unknown:
 	info->type = STACK_TYPE_UNKNOWN;
 	return -EINVAL;
-}
-
-void show_regs(struct pt_regs *regs)
-{
-	int i;
-
-	show_regs_print_info(KERN_EMERG);
-	__show_regs(regs, !user_mode(regs));
-
-	/*
-	 * When in-kernel, we also print out the stack and code at the
-	 * time of the fault..
-	 */
-	if (!user_mode(regs)) {
-		unsigned int code_prologue = code_bytes * 43 / 64;
-		unsigned int code_len = code_bytes;
-		unsigned char c;
-		u8 *ip;
-
-		show_trace_log_lvl(current, regs, NULL, KERN_EMERG);
-
-		pr_emerg("Code:");
-
-		ip = (u8 *)regs->ip - code_prologue;
-		if (ip < (u8 *)PAGE_OFFSET || probe_kernel_address(ip, c)) {
-			/* try starting at IP */
-			ip = (u8 *)regs->ip;
-			code_len = code_len - code_prologue + 1;
-		}
-		for (i = 0; i < code_len; i++, ip++) {
-			if (ip < (u8 *)PAGE_OFFSET ||
-					probe_kernel_address(ip, c)) {
-				pr_cont("  Bad EIP value.");
-				break;
-			}
-			if (ip == (u8 *)regs->ip)
-				pr_cont(" <%02x>", c);
-			else
-				pr_cont(" %02x", c);
-		}
-	}
-	pr_cont("\n");
 }

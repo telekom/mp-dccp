@@ -1,45 +1,11 @@
+// SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0
 /******************************************************************************
  *
  * Module Name: tbxface - ACPI table-oriented external interfaces
  *
+ * Copyright (C) 2000 - 2020, Intel Corp.
+ *
  *****************************************************************************/
-
-/*
- * Copyright (C) 2000 - 2017, Intel Corp.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions, and the following disclaimer,
- *    without modification.
- * 2. Redistributions in binary form must reproduce at minimum a disclaimer
- *    substantially similar to the "NO WARRANTY" disclaimer below
- *    ("Disclaimer") and any redistribution must be conditioned upon
- *    including a substantially similar Disclaimer requirement for further
- *    binary redistribution.
- * 3. Neither the names of the above-listed copyright holders nor the names
- *    of any contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * Alternatively, this software may be distributed under the terms of the
- * GNU General Public License ("GPL") version 2 as published by the Free
- * Software Foundation.
- *
- * NO WARRANTY
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGES.
- */
 
 #define EXPORT_ACPI_INTERFACES
 
@@ -142,7 +108,7 @@ acpi_initialize_tables(struct acpi_table_desc *initial_table_array,
 	/*
 	 * Get the root table (RSDT or XSDT) and extract all entries to the local
 	 * Root Table Array. This array contains the information of the RSDT/XSDT
-	 * in a common, more useable format.
+	 * in a common, more usable format.
 	 */
 	status = acpi_tb_parse_root_table(rsdp_address);
 	return_ACPI_STATUS(status);
@@ -173,10 +139,13 @@ acpi_status ACPI_INIT_FUNCTION acpi_reallocate_root_table(void)
 	ACPI_FUNCTION_TRACE(acpi_reallocate_root_table);
 
 	/*
-	 * Only reallocate the root table if the host provided a static buffer
-	 * for the table array in the call to acpi_initialize_tables.
+	 * If there are tables unverified, it is required to reallocate the
+	 * root table list to clean up invalid table entries. Otherwise only
+	 * reallocate the root table list if the host provided a static buffer
+	 * for the table array in the call to acpi_initialize_tables().
 	 */
-	if (acpi_gbl_root_table_list.flags & ACPI_ROOT_ORIGIN_ALLOCATED) {
+	if ((acpi_gbl_root_table_list.flags & ACPI_ROOT_ORIGIN_ALLOCATED) &&
+	    acpi_gbl_enable_table_validation) {
 		return_ACPI_STATUS(AE_SUPPORT);
 	}
 
@@ -200,7 +169,7 @@ acpi_status ACPI_INIT_FUNCTION acpi_reallocate_root_table(void)
 	if (!acpi_gbl_enable_table_validation) {
 		/*
 		 * Now it's safe to do full table validation. We can do deferred
-		 * table initilization here once the flag is set.
+		 * table initialization here once the flag is set.
 		 */
 		acpi_gbl_enable_table_validation = TRUE;
 		for (i = 0; i < acpi_gbl_root_table_list.current_table_count;
@@ -233,14 +202,14 @@ ACPI_EXPORT_SYMBOL_INIT(acpi_reallocate_root_table)
  *
  * PARAMETERS:  signature           - ACPI signature of needed table
  *              instance            - Which instance (for SSDTs)
- *              out_table_header    - The pointer to the table header to fill
+ *              out_table_header    - The pointer to the where the table header
+ *                                    is returned
  *
- * RETURN:      Status and pointer to mapped table header
+ * RETURN:      Status and a copy of the table header
  *
- * DESCRIPTION: Finds an ACPI table header.
- *
- * NOTE:        Caller is responsible in unmapping the header with
- *              acpi_os_unmap_memory
+ * DESCRIPTION: Finds and returns an ACPI table header. Caller provides the
+ *              memory where a copy of the header is to be returned
+ *              (fixed length).
  *
  ******************************************************************************/
 acpi_status
@@ -261,7 +230,7 @@ acpi_get_table_header(char *signature,
 
 	for (i = 0, j = 0; i < acpi_gbl_root_table_list.current_table_count;
 	     i++) {
-		if (!ACPI_COMPARE_NAME
+		if (!ACPI_COMPARE_NAMESEG
 		    (&(acpi_gbl_root_table_list.tables[i].signature),
 		     signature)) {
 			continue;
@@ -354,7 +323,7 @@ acpi_get_table(char *signature,
 	     i++) {
 		table_desc = &acpi_gbl_root_table_list.tables[i];
 
-		if (!ACPI_COMPARE_NAME(&table_desc->signature, signature)) {
+		if (!ACPI_COMPARE_NAMESEG(&table_desc->signature, signature)) {
 			continue;
 		}
 

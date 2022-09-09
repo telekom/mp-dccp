@@ -271,7 +271,7 @@ static void smc91c92_release(struct pcmcia_device *link);
 static int smc_open(struct net_device *dev);
 static int smc_close(struct net_device *dev);
 static int smc_ioctl(struct net_device *dev, struct ifreq *rq, int cmd);
-static void smc_tx_timeout(struct net_device *dev);
+static void smc_tx_timeout(struct net_device *dev, unsigned int txqueue);
 static netdev_tx_t smc_start_xmit(struct sk_buff *skb,
 					struct net_device *dev);
 static irqreturn_t smc_interrupt(int irq, void *dev_id);
@@ -280,7 +280,7 @@ static void set_rx_mode(struct net_device *dev);
 static int s9k_config(struct net_device *dev, struct ifmap *map);
 static void smc_set_xcvr(struct net_device *dev, int if_port);
 static void smc_reset(struct net_device *dev);
-static void media_check(u_long arg);
+static void media_check(struct timer_list *t);
 static void mdio_sync(unsigned int addr);
 static int mdio_read(struct net_device *dev, int phy_id, int loc);
 static void mdio_write(struct net_device *dev, int phy_id, int loc, int value);
@@ -1070,7 +1070,7 @@ static int smc_open(struct net_device *dev)
     smc->packets_waiting = 0;
 
     smc_reset(dev);
-    setup_timer(&smc->media, media_check, (u_long)dev);
+    timer_setup(&smc->media, media_check, 0);
     mod_timer(&smc->media, jiffies + HZ);
 
     return 0;
@@ -1178,7 +1178,7 @@ static void smc_hardware_send_packet(struct net_device * dev)
 
 /*====================================================================*/
 
-static void smc_tx_timeout(struct net_device *dev)
+static void smc_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
     struct smc_private *smc = netdev_priv(dev);
     unsigned int ioaddr = dev->base_addr;
@@ -1708,10 +1708,10 @@ static void smc_reset(struct net_device *dev)
 
 ======================================================================*/
 
-static void media_check(u_long arg)
+static void media_check(struct timer_list *t)
 {
-    struct net_device *dev = (struct net_device *) arg;
-    struct smc_private *smc = netdev_priv(dev);
+    struct smc_private *smc = from_timer(smc, t, media);
+    struct net_device *dev = smc->mii_if.dev;
     unsigned int ioaddr = dev->base_addr;
     u_short i, media, saved_bank;
     u_short link;

@@ -687,6 +687,9 @@ mpdccp_link_add (
 		link->is_devlink = 1;
 		strcpy (link->ndev_name, MPDCCP_LINK_TO_DEV(link)->name);
 	}
+	if (!ndev && !name) {
+		link->is_released = 1;
+	}
 	link->id = link_get_next_counter (net);
 	ret = mpdccp_link_sysfs_add (link);
 	if (ret < 0) {
@@ -1066,3 +1069,20 @@ MODULE_AUTHOR("Frank Reker <frank@reker.net>");
 MODULE_VERSION("3");
 MODULE_DESCRIPTION("Link Information for Scheduling");
 
+
+
+
+
+/*
+ * Overrides for XEmacs and vim so that we get a uniform tabbing style.
+ * XEmacs/vim will notice this stuff at the end of the file and automatically
+ * adjust the settings for this buffer only.  This must remain at the end
+ * of the file.
+ * ---------------------------------------------------------------------------
+ * Local variables:
+ * c-indent-level: 3
+ * c-basic-offset: 3
+ * tab-width: 3
+ * End:
+ * vim:tw=0:ts=3:wm=0:
+ */

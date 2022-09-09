@@ -5,21 +5,21 @@ menu "MPDCCP scheduler selection"
 config MPDCCP_SCHED_SRTT
 	tristate "MPDCCP Smoothed RTT"
 	depends on IP_MPDCCP
-	---help---
+	help
 	  A SRTT (Smoothed Round-Trip Time) based scheduler. It will send on the flow 
 	  that has the lowest SRTT and is available (i.e., free Congestion Window).
 
 config MPDCCP_SCHED_ROUNDROBIN
 	tristate "MPDCCP Round-Robin"
 	depends on IP_MPDCCP
-	---help---
+	help
 	  This is a very simple round-robin scheduler. Probably has bad performance
 	  but might be interesting for researchers.
 
 config MPDCCP_SCHED_REDUNDANT
 	tristate "MPDCCP Redundant"
 	depends on IP_MPDCCP
-	---help---
+	help
 	  This is a redundant scheduler for latency reduction and higher reliability.
 	  Each packet is sent on all available flows.
 
@@ -27,7 +27,7 @@ config MPDCCP_SCHED_REDUNDANT
 config MPDCCP_SCHED_OTIAS
 	tristate "MPDCCP OTIAS"
 	depends on IP_MPDCCP
-	---help---
+	help
 	  An OTIAS Scheduler. It tries to estimate link latencies and schedules 
 	  packets accordingly so that packets arrive in order.
 

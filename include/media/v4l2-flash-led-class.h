@@ -1,12 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * V4L2 flash LED sub-device registration helpers.
  *
  *	Copyright (C) 2015 Samsung Electronics Co., Ltd
  *	Author: Jacek Anaszewski <j.anaszewski@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef _V4L2_FLASH_H
@@ -91,12 +88,24 @@ struct v4l2_flash {
 	struct v4l2_ctrl **ctrls;
 };
 
+/**
+ * v4l2_subdev_to_v4l2_flash - Returns a &struct v4l2_flash from the
+ * &struct v4l2_subdev embedded on it.
+ *
+ * @sd: pointer to &struct v4l2_subdev
+ */
 static inline struct v4l2_flash *v4l2_subdev_to_v4l2_flash(
 							struct v4l2_subdev *sd)
 {
 	return container_of(sd, struct v4l2_flash, sd);
 }
 
+/**
+ * v4l2_ctrl_to_v4l2_flash - Returns a &struct v4l2_flash from the
+ * &struct v4l2_ctrl embedded on it.
+ *
+ * @c: pointer to &struct v4l2_ctrl
+ */
 static inline struct v4l2_flash *v4l2_ctrl_to_v4l2_flash(struct v4l2_ctrl *c)
 {
 	return container_of(c->handler, struct v4l2_flash, hdl);

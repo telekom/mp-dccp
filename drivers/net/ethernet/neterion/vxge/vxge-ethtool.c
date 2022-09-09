@@ -119,7 +119,7 @@ static void vxge_ethtool_gdrvinfo(struct net_device *dev,
  * @dev: device pointer.
  * @regs: pointer to the structure with parameters given by ethtool for
  * dumping the registers.
- * @reg_space: The input argument into which all the registers are dumped.
+ * @space: The input argument into which all the registers are dumped.
  *
  * Dumps the vpath register space of Titan NIC into the user given
  * buffer area.
@@ -276,7 +276,7 @@ static void vxge_get_ethtool_stats(struct net_device *dev,
 	*ptr++ = 0;
 	status = vxge_hw_device_xmac_stats_get(hldev, xmac_stats);
 	if (status != VXGE_HW_OK) {
-		if (status != VXGE_HW_ERR_PRIVILAGED_OPEARATION) {
+		if (status != VXGE_HW_ERR_PRIVILEGED_OPERATION) {
 			vxge_debug_init(VXGE_ERR,
 				"%s : %d Failure in getting xmac stats",
 				__func__, __LINE__);

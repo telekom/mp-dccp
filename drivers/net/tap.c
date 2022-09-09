@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/etherdevice.h>
 #include <linux/if_tap.h>
 #include <linux/if_vlan.h>
@@ -257,7 +258,7 @@ static struct tap_queue *tap_get_queue(struct tap_dev *tap,
 	 * and validate that the result isn't NULL - in case we are
 	 * racing against queue removal.
 	 */
-	int numvtaps = ACCESS_ONCE(tap->numvtaps);
+	int numvtaps = READ_ONCE(tap->numvtaps);
 	__u32 rxq;
 
 	if (!numvtaps)
@@ -330,9 +331,6 @@ rx_handler_result_t tap_handle_frame(struct sk_buff **pskb)
 	if (!q)
 		return RX_HANDLER_PASS;
 
-	if (__skb_array_full(&q->skb_array))
-		goto drop;
-
 	skb_push(skb, ETH_HLEN);
 
 	/* Apply the forward feature mask so that we perform segmentation
@@ -343,27 +341,25 @@ rx_handler_result_t tap_handle_frame(struct sk_buff **pskb)
 		features |= tap->tap_features;
 	if (netif_needs_gso(skb, features)) {
 		struct sk_buff *segs = __skb_gso_segment(skb, features, false);
+		struct sk_buff *next;
 
 		if (IS_ERR(segs))
 			goto drop;
 
 		if (!segs) {
-			if (skb_array_produce(&q->skb_array, skb))
+			if (ptr_ring_produce(&q->ring, skb))
 				goto drop;
 			goto wake_up;
 		}
 
 		consume_skb(skb);
-		while (segs) {
-			struct sk_buff *nskb = segs->next;
-
-			segs->next = NULL;
-			if (skb_array_produce(&q->skb_array, segs)) {
-				kfree_skb(segs);
-				kfree_skb_list(nskb);
+		skb_list_walk_safe(segs, skb, next) {
+			skb_mark_not_on_list(skb);
+			if (ptr_ring_produce(&q->ring, skb)) {
+				kfree_skb(skb);
+				kfree_skb_list(next);
 				break;
 			}
-			segs = nskb;
 		}
 	} else {
 		/* If we receive a partial checksum and the tap side
@@ -375,12 +371,12 @@ rx_handler_result_t tap_handle_frame(struct sk_buff **pskb)
 		    !(features & NETIF_F_CSUM_MASK) &&
 		    skb_checksum_help(skb))
 			goto drop;
-		if (skb_array_produce(&q->skb_array, skb))
+		if (ptr_ring_produce(&q->ring, skb))
 			goto drop;
 	}
 
 wake_up:
-	wake_up_interruptible_poll(sk_sleep(&q->sk), POLLIN | POLLRDNORM | POLLRDBAND);
+	wake_up_interruptible_poll(sk_sleep(&q->sk), EPOLLIN | EPOLLRDNORM | EPOLLRDBAND);
 	return RX_HANDLER_CONSUMED;
 
 drop:
@@ -490,14 +486,14 @@ static void tap_sock_write_space(struct sock *sk)
 
 	wqueue = sk_sleep(sk);
 	if (wqueue && waitqueue_active(wqueue))
-		wake_up_interruptible_poll(wqueue, POLLOUT | POLLWRNORM | POLLWRBAND);
+		wake_up_interruptible_poll(wqueue, EPOLLOUT | EPOLLWRNORM | EPOLLWRBAND);
 }
 
 static void tap_sock_destruct(struct sock *sk)
 {
 	struct tap_queue *q = container_of(sk, struct tap_queue, sk);
 
-	skb_array_cleanup(&q->skb_array);
+	ptr_ring_cleanup(&q->ring, __skb_array_destroy_skb);
 }
 
 static int tap_open(struct inode *inode, struct file *file)
@@ -517,13 +513,12 @@ static int tap_open(struct inode *inode, struct file *file)
 					     &tap_proto, 0);
 	if (!q)
 		goto err;
-	if (skb_array_init(&q->skb_array, tap->dev->tx_queue_len, GFP_KERNEL)) {
+	if (ptr_ring_init(&q->ring, tap->dev->tx_queue_len, GFP_KERNEL)) {
 		sk_free(&q->sk);
 		goto err;
 	}
 
-	RCU_INIT_POINTER(q->sock.wq, &q->wq);
-	init_waitqueue_head(&q->wq.wait);
+	init_waitqueue_head(&q->sock.wq.wait);
 	q->sock.type = SOCK_RAW;
 	q->sock.state = SS_CONNECTED;
 	q->sock.file = file;
@@ -546,7 +541,7 @@ static int tap_open(struct inode *inode, struct file *file)
 
 	err = tap_set_queue(tap, file, q);
 	if (err) {
-		/* tap_sock_destruct() will take care of freeing skb_array */
+		/* tap_sock_destruct() will take care of freeing ptr_ring */
 		goto err_put;
 	}
 
@@ -572,24 +567,24 @@ static int tap_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static unsigned int tap_poll(struct file *file, poll_table *wait)
+static __poll_t tap_poll(struct file *file, poll_table *wait)
 {
 	struct tap_queue *q = file->private_data;
-	unsigned int mask = POLLERR;
+	__poll_t mask = EPOLLERR;
 
 	if (!q)
 		goto out;
 
 	mask = 0;
-	poll_wait(file, &q->wq.wait, wait);
+	poll_wait(file, &q->sock.wq.wait, wait);
 
-	if (!skb_array_empty(&q->skb_array))
-		mask |= POLLIN | POLLRDNORM;
+	if (!ptr_ring_empty(&q->ring))
+		mask |= EPOLLIN | EPOLLRDNORM;
 
 	if (sock_writeable(&q->sk) ||
 	    (!test_and_set_bit(SOCKWQ_ASYNC_NOSPACE, &q->sock.flags) &&
 	     sock_writeable(&q->sk)))
-		mask |= POLLOUT | POLLWRNORM;
+		mask |= EPOLLOUT | EPOLLWRNORM;
 
 out:
 	return mask;
@@ -622,7 +617,7 @@ static inline struct sk_buff *tap_alloc_skb(struct sock *sk, size_t prepad,
 #define TAP_RESERVE HH_DATA_OFF(ETH_HLEN)
 
 /* Get packet from user space buffer */
-static ssize_t tap_get_user(struct tap_queue *q, struct msghdr *m,
+static ssize_t tap_get_user(struct tap_queue *q, void *msg_control,
 			    struct iov_iter *from, int noblock)
 {
 	int good_linear = SKB_MAX_HEAD(TAP_RESERVE);
@@ -666,7 +661,7 @@ static ssize_t tap_get_user(struct tap_queue *q, struct msghdr *m,
 	if (unlikely(len < ETH_HLEN))
 		goto err;
 
-	if (m && m->msg_control && sock_flag(&q->sk, SOCK_ZEROCOPY)) {
+	if (msg_control && sock_flag(&q->sk, SOCK_ZEROCOPY)) {
 		struct iov_iter i;
 
 		copylen = vnet_hdr.hdr_len ?
@@ -715,7 +710,7 @@ static ssize_t tap_get_user(struct tap_queue *q, struct msghdr *m,
 			goto err_kfree;
 	}
 
-	skb_probe_transport_header(skb, ETH_HLEN);
+	skb_probe_transport_header(skb);
 
 	/* Move network header to the right position for VLAN tagged packets */
 	if ((skb->protocol == htons(ETH_P_8021Q) ||
@@ -727,11 +722,11 @@ static ssize_t tap_get_user(struct tap_queue *q, struct msghdr *m,
 	tap = rcu_dereference(q->tap);
 	/* copy skb_ubuf_info for callback when skb has no error */
 	if (zerocopy) {
-		skb_shinfo(skb)->destructor_arg = m->msg_control;
+		skb_shinfo(skb)->destructor_arg = msg_control;
 		skb_shinfo(skb)->tx_flags |= SKBTX_DEV_ZEROCOPY;
 		skb_shinfo(skb)->tx_flags |= SKBTX_SHARED_FRAG;
-	} else if (m && m->msg_control) {
-		struct ubuf_info *uarg = m->msg_control;
+	} else if (msg_control) {
+		struct ubuf_info *uarg = msg_control;
 		uarg->callback(uarg, false);
 	}
 
@@ -833,8 +828,7 @@ static ssize_t tap_do_read(struct tap_queue *q,
 	ssize_t ret = 0;
 
 	if (!iov_iter_count(to)) {
-		if (skb)
-			kfree_skb(skb);
+		kfree_skb(skb);
 		return 0;
 	}
 
@@ -847,7 +841,7 @@ static ssize_t tap_do_read(struct tap_queue *q,
 					TASK_INTERRUPTIBLE);
 
 		/* Read frames from the queue */
-		skb = skb_array_consume(&q->skb_array);
+		skb = ptr_ring_consume(&q->ring);
 		if (skb)
 			break;
 		if (noblock) {
@@ -1099,10 +1093,9 @@ static long tap_ioctl(struct file *file, unsigned int cmd,
 			return -ENOLINK;
 		}
 		ret = 0;
-		u = tap->dev->type;
+		dev_get_mac_address(&sa, dev_net(tap->dev), tap->dev->name);
 		if (copy_to_user(&ifr->ifr_name, tap->dev->name, IFNAMSIZ) ||
-		    copy_to_user(&ifr->ifr_hwaddr.sa_data, tap->dev->dev_addr, ETH_ALEN) ||
-		    put_user(u, &ifr->ifr_hwaddr.sa_family))
+		    copy_to_user(&ifr->ifr_hwaddr, &sa, sizeof(sa)))
 			ret = -EFAULT;
 		tap_put_tap_dev(tap);
 		rtnl_unlock();
@@ -1117,7 +1110,7 @@ static long tap_ioctl(struct file *file, unsigned int cmd,
 			rtnl_unlock();
 			return -ENOLINK;
 		}
-		ret = dev_set_mac_address(tap->dev, &sa);
+		ret = dev_set_mac_address_user(tap->dev, &sa, NULL);
 		tap_put_tap_dev(tap);
 		rtnl_unlock();
 		return ret;
@@ -1126,14 +1119,6 @@ static long tap_ioctl(struct file *file, unsigned int cmd,
 		return -EINVAL;
 	}
 }
-
-#ifdef CONFIG_COMPAT
-static long tap_compat_ioctl(struct file *file, unsigned int cmd,
-			     unsigned long arg)
-{
-	return tap_ioctl(file, cmd, (unsigned long)compat_ptr(arg));
-}
-#endif
 
 static const struct file_operations tap_fops = {
 	.owner		= THIS_MODULE,
@@ -1144,16 +1129,90 @@ static const struct file_operations tap_fops = {
 	.poll		= tap_poll,
 	.llseek		= no_llseek,
 	.unlocked_ioctl	= tap_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl	= tap_compat_ioctl,
-#endif
+	.compat_ioctl	= compat_ptr_ioctl,
 };
+
+static int tap_get_user_xdp(struct tap_queue *q, struct xdp_buff *xdp)
+{
+	struct tun_xdp_hdr *hdr = xdp->data_hard_start;
+	struct virtio_net_hdr *gso = &hdr->gso;
+	int buflen = hdr->buflen;
+	int vnet_hdr_len = 0;
+	struct tap_dev *tap;
+	struct sk_buff *skb;
+	int err, depth;
+
+	if (q->flags & IFF_VNET_HDR)
+		vnet_hdr_len = READ_ONCE(q->vnet_hdr_sz);
+
+	skb = build_skb(xdp->data_hard_start, buflen);
+	if (!skb) {
+		err = -ENOMEM;
+		goto err;
+	}
+
+	skb_reserve(skb, xdp->data - xdp->data_hard_start);
+	skb_put(skb, xdp->data_end - xdp->data);
+
+	skb_set_network_header(skb, ETH_HLEN);
+	skb_reset_mac_header(skb);
+	skb->protocol = eth_hdr(skb)->h_proto;
+
+	if (vnet_hdr_len) {
+		err = virtio_net_hdr_to_skb(skb, gso, tap_is_little_endian(q));
+		if (err)
+			goto err_kfree;
+	}
+
+	/* Move network header to the right position for VLAN tagged packets */
+	if ((skb->protocol == htons(ETH_P_8021Q) ||
+	     skb->protocol == htons(ETH_P_8021AD)) &&
+	    __vlan_get_protocol(skb, skb->protocol, &depth) != 0)
+		skb_set_network_header(skb, depth);
+
+	rcu_read_lock();
+	tap = rcu_dereference(q->tap);
+	if (tap) {
+		skb->dev = tap->dev;
+		skb_probe_transport_header(skb);
+		dev_queue_xmit(skb);
+	} else {
+		kfree_skb(skb);
+	}
+	rcu_read_unlock();
+
+	return 0;
+
+err_kfree:
+	kfree_skb(skb);
+err:
+	rcu_read_lock();
+	tap = rcu_dereference(q->tap);
+	if (tap && tap->count_tx_dropped)
+		tap->count_tx_dropped(tap);
+	rcu_read_unlock();
+	return err;
+}
 
 static int tap_sendmsg(struct socket *sock, struct msghdr *m,
 		       size_t total_len)
 {
 	struct tap_queue *q = container_of(sock, struct tap_queue, sock);
-	return tap_get_user(q, m, &m->msg_iter, m->msg_flags & MSG_DONTWAIT);
+	struct tun_msg_ctl *ctl = m->msg_control;
+	struct xdp_buff *xdp;
+	int i;
+
+	if (m->msg_controllen == sizeof(struct tun_msg_ctl) &&
+	    ctl && ctl->type == TUN_MSG_PTR) {
+		for (i = 0; i < ctl->num; i++) {
+			xdp = &((struct xdp_buff *)ctl->ptr)[i];
+			tap_get_user_xdp(q, xdp);
+		}
+		return 0;
+	}
+
+	return tap_get_user(q, ctl ? ctl->ptr : NULL, &m->msg_iter,
+			    m->msg_flags & MSG_DONTWAIT);
 }
 
 static int tap_recvmsg(struct socket *sock, struct msghdr *m,
@@ -1163,8 +1222,7 @@ static int tap_recvmsg(struct socket *sock, struct msghdr *m,
 	struct sk_buff *skb = m->msg_control;
 	int ret;
 	if (flags & ~(MSG_DONTWAIT|MSG_TRUNC)) {
-		if (skb)
-			kfree_skb(skb);
+		kfree_skb(skb);
 		return -EINVAL;
 	}
 	ret = tap_do_read(q, &m->msg_iter, flags & MSG_DONTWAIT, skb);
@@ -1179,7 +1237,7 @@ static int tap_peek_len(struct socket *sock)
 {
 	struct tap_queue *q = container_of(sock, struct tap_queue,
 					       sock);
-	return skb_array_peek_len(&q->skb_array);
+	return PTR_RING_PEEK_CALL(&q->ring, __skb_array_len_with_tag);
 }
 
 /* Ops structure to mimic raw sockets with tun */
@@ -1205,7 +1263,7 @@ struct socket *tap_get_socket(struct file *file)
 }
 EXPORT_SYMBOL_GPL(tap_get_socket);
 
-struct skb_array *tap_get_skb_array(struct file *file)
+struct ptr_ring *tap_get_ptr_ring(struct file *file)
 {
 	struct tap_queue *q;
 
@@ -1214,29 +1272,30 @@ struct skb_array *tap_get_skb_array(struct file *file)
 	q = file->private_data;
 	if (!q)
 		return ERR_PTR(-EBADFD);
-	return &q->skb_array;
+	return &q->ring;
 }
-EXPORT_SYMBOL_GPL(tap_get_skb_array);
+EXPORT_SYMBOL_GPL(tap_get_ptr_ring);
 
 int tap_queue_resize(struct tap_dev *tap)
 {
 	struct net_device *dev = tap->dev;
 	struct tap_queue *q;
-	struct skb_array **arrays;
+	struct ptr_ring **rings;
 	int n = tap->numqueues;
 	int ret, i = 0;
 
-	arrays = kmalloc_array(n, sizeof(*arrays), GFP_KERNEL);
-	if (!arrays)
+	rings = kmalloc_array(n, sizeof(*rings), GFP_KERNEL);
+	if (!rings)
 		return -ENOMEM;
 
 	list_for_each_entry(q, &tap->queue_list, next)
-		arrays[i++] = &q->skb_array;
+		rings[i++] = &q->ring;
 
-	ret = skb_array_resize_multiple(arrays, n,
-					dev->tx_queue_len, GFP_KERNEL);
+	ret = ptr_ring_resize_multiple(rings, n,
+				       dev->tx_queue_len, GFP_KERNEL,
+				       __skb_array_destroy_skb);
 
-	kfree(arrays);
+	kfree(rings);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(tap_queue_resize);

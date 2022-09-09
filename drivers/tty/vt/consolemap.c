@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * consolemap.c
  *
@@ -11,7 +12,7 @@
  * Fix bug in inverse translation. Stanislav Voronyi <stas@cnti.uanet.kharkov.ua>, Dec 1998
  *
  * In order to prevent the following circular lock dependency:
- *   &mm->mmap_sem --> cpu_hotplug.lock --> console_lock --> &mm->mmap_sem
+ *   &mm->mmap_lock --> cpu_hotplug.lock --> console_lock --> &mm->mmap_lock
  *
  * We cannot allow page fault to happen while holding the console_lock.
  * Therefore, all the userspace copy operations have to be done outside
@@ -230,7 +231,7 @@ static void set_inverse_trans_unicode(struct vc_data *conp,
 	q = p->inverse_trans_unicode;
 	if (!q) {
 		q = p->inverse_trans_unicode =
-			kmalloc(MAX_GLYPH * sizeof(u16), GFP_KERNEL);
+			kmalloc_array(MAX_GLYPH, sizeof(u16), GFP_KERNEL);
 		if (!q)
 			return;
 	}
@@ -267,7 +268,7 @@ unsigned short *set_translate(int m, struct vc_data *vc)
  *    was active.
  * Still, it is now possible to a certain extent to cut and paste non-ASCII.
  */
-u16 inverse_translate(struct vc_data *conp, int glyph, int use_unicode)
+u16 inverse_translate(const struct vc_data *conp, int glyph, int use_unicode)
 {
 	struct uni_pagedir *p;
 	int m;
@@ -478,7 +479,8 @@ con_insert_unipair(struct uni_pagedir *p, u_short unicode, u_short fontpos)
 
 	p1 = p->uni_pgdir[n = unicode >> 11];
 	if (!p1) {
-		p1 = p->uni_pgdir[n] = kmalloc(32*sizeof(u16 *), GFP_KERNEL);
+		p1 = p->uni_pgdir[n] = kmalloc_array(32, sizeof(u16 *),
+						     GFP_KERNEL);
 		if (!p1) return -ENOMEM;
 		for (i = 0; i < 32; i++)
 			p1[i] = NULL;
@@ -486,14 +488,14 @@ con_insert_unipair(struct uni_pagedir *p, u_short unicode, u_short fontpos)
 
 	p2 = p1[n = (unicode >> 6) & 0x1f];
 	if (!p2) {
-		p2 = p1[n] = kmalloc(64*sizeof(u16), GFP_KERNEL);
+		p2 = p1[n] = kmalloc_array(64, sizeof(u16), GFP_KERNEL);
 		if (!p2) return -ENOMEM;
 		memset(p2, 0xff, 64*sizeof(u16)); /* No glyphs for the characters (yet) */
 	}
 
 	p2[unicode & 0x3f] = fontpos;
 	
-	p->sum += (fontpos << 20) + unicode;
+	p->sum += (fontpos << 20U) + unicode;
 
 	return 0;
 }
@@ -540,7 +542,7 @@ int con_set_unimap(struct vc_data *vc, ushort ct, struct unipair __user *list)
 	if (!ct)
 		return 0;
 
-	unilist = memdup_user(list, ct * sizeof(struct unipair));
+	unilist = vmemdup_user(list, array_size(sizeof(struct unipair), ct));
 	if (IS_ERR(unilist))
 		return PTR_ERR(unilist);
 
@@ -639,7 +641,7 @@ int con_set_unimap(struct vc_data *vc, ushort ct, struct unipair __user *list)
 
 out_unlock:
 	console_unlock();
-	kfree(unilist);
+	kvfree(unilist);
 	return err;
 }
 
@@ -706,7 +708,7 @@ EXPORT_SYMBOL(con_set_default_unimap);
 /**
  *	con_copy_unimap		-	copy unimap between two vts
  *	@dst_vc: target
- *	@src_vt: source
+ *	@src_vc: source
  *
  *	The caller must hold the console lock when invoking this method
  */
@@ -741,7 +743,7 @@ int con_get_unimap(struct vc_data *vc, ushort ct, ushort __user *uct, struct uni
 	struct uni_pagedir *p;
 	struct unipair *unilist;
 
-	unilist = kmalloc_array(ct, sizeof(struct unipair), GFP_KERNEL);
+	unilist = kvmalloc_array(ct, sizeof(struct unipair), GFP_KERNEL);
 	if (!unilist)
 		return -ENOMEM;
 
@@ -773,7 +775,7 @@ int con_get_unimap(struct vc_data *vc, ushort ct, ushort __user *uct, struct uni
 	if (copy_to_user(list, unilist, min(ect, ct) * sizeof(struct unipair)))
 		ret = -EFAULT;
 	put_user(ect, uct);
-	kfree(unilist);
+	kvfree(unilist);
 	return ret ? ret : (ect <= ct) ? 0 : -ENOMEM;
 }
 

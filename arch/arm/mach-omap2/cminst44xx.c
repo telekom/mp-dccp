@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * OMAP4 CM instance functions
  *
@@ -5,10 +6,6 @@
  * Copyright (C) 2008-2011 Texas Instruments, Inc.
  * Paul Walmsley
  * Rajendra Nayak <rnayak@ti.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * This is needed since CM instances can be in the PRM, PRCM_MPU, CM1,
  * or CM2 hardware modules.  For example, the EMU_CM CM instance is in
@@ -476,12 +473,50 @@ static int omap4_clkdm_clk_disable(struct clockdomain *clkdm)
 	return 0;
 }
 
-static u32 omap4_clkdm_xlate_address(struct clockdomain *clkdm)
+static u32 omap4_cminst_xlate_clkctrl(u8 part, u16 inst, u16 offset)
 {
-	u32 addr = _cm_bases[clkdm->prcm_partition].pa + clkdm->cm_inst +
-		clkdm->clkdm_offs;
+	return _cm_bases[part].pa + inst + offset;
+}
 
-	return addr;
+/**
+ * omap4_clkdm_save_context - Save the clockdomain modulemode context
+ * @clkdm: The clockdomain pointer whose context needs to be saved
+ *
+ * Save the clockdomain modulemode context.
+ */
+static int omap4_clkdm_save_context(struct clockdomain *clkdm)
+{
+	clkdm->context = omap4_cminst_read_inst_reg(clkdm->prcm_partition,
+						    clkdm->cm_inst,
+						    clkdm->clkdm_offs +
+						    OMAP4_CM_CLKSTCTRL);
+	clkdm->context &= OMAP4430_MODULEMODE_MASK;
+	return 0;
+}
+
+/**
+ * omap4_clkdm_restore_context - Restore the clockdomain modulemode context
+ * @clkdm: The clockdomain pointer whose context needs to be restored
+ *
+ * Restore the clockdomain modulemode context.
+ */
+static int omap4_clkdm_restore_context(struct clockdomain *clkdm)
+{
+	switch (clkdm->context) {
+	case OMAP34XX_CLKSTCTRL_DISABLE_AUTO:
+		omap4_clkdm_deny_idle(clkdm);
+		break;
+	case OMAP34XX_CLKSTCTRL_FORCE_SLEEP:
+		omap4_clkdm_sleep(clkdm);
+		break;
+	case OMAP34XX_CLKSTCTRL_FORCE_WAKEUP:
+		omap4_clkdm_wakeup(clkdm);
+		break;
+	case OMAP34XX_CLKSTCTRL_ENABLE_AUTO:
+		omap4_clkdm_allow_idle(clkdm);
+		break;
+	}
+	return 0;
 }
 
 struct clkdm_ops omap4_clkdm_operations = {
@@ -499,7 +534,8 @@ struct clkdm_ops omap4_clkdm_operations = {
 	.clkdm_deny_idle	= omap4_clkdm_deny_idle,
 	.clkdm_clk_enable	= omap4_clkdm_clk_enable,
 	.clkdm_clk_disable	= omap4_clkdm_clk_disable,
-	.clkdm_xlate_address	= omap4_clkdm_xlate_address,
+	.clkdm_save_context	= omap4_clkdm_save_context,
+	.clkdm_restore_context	= omap4_clkdm_restore_context,
 };
 
 struct clkdm_ops am43xx_clkdm_operations = {
@@ -509,14 +545,14 @@ struct clkdm_ops am43xx_clkdm_operations = {
 	.clkdm_deny_idle	= omap4_clkdm_deny_idle,
 	.clkdm_clk_enable	= omap4_clkdm_clk_enable,
 	.clkdm_clk_disable	= omap4_clkdm_clk_disable,
-	.clkdm_xlate_address	= omap4_clkdm_xlate_address,
 };
 
-static struct cm_ll_data omap4xxx_cm_ll_data = {
+static const struct cm_ll_data omap4xxx_cm_ll_data = {
 	.wait_module_ready	= &omap4_cminst_wait_module_ready,
 	.wait_module_idle	= &omap4_cminst_wait_module_idle,
 	.module_enable		= &omap4_cminst_module_enable,
 	.module_disable		= &omap4_cminst_module_disable,
+	.xlate_clkctrl		= &omap4_cminst_xlate_clkctrl,
 };
 
 int __init omap4_cm_init(const struct omap_prcm_init_data *data)

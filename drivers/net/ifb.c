@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* drivers/net/ifb.c:
 
 	The purpose of this driver is to provide a device that allows
@@ -17,10 +18,6 @@
 	You need the tc action  mirror or redirect to feed this device
        	packets.
 
-	This program is free software; you can redistribute it and/or
-	modify it under the terms of the GNU General Public License
-	as published by the Free Software Foundation; either version
-	2 of the License, or (at your option) any later version.
 
   	Authors:	Jamal Hadi Salim (2005)
 
@@ -78,8 +75,10 @@ static void ifb_ri_tasklet(unsigned long _txp)
 	}
 
 	while ((skb = __skb_dequeue(&txp->tq)) != NULL) {
-		skb->tc_redirected = 0;
+		skb->redirected = 0;
+#ifdef CONFIG_NET_CLS_ACT
 		skb->tc_skip_classify = 1;
+#endif
 
 		u64_stats_update_begin(&txp->tsync);
 		txp->tx_packets++;
@@ -99,10 +98,10 @@ static void ifb_ri_tasklet(unsigned long _txp)
 		rcu_read_unlock();
 		skb->skb_iif = txp->dev->ifindex;
 
-		if (!skb->tc_from_ingress) {
+		if (!skb->from_ingress) {
 			dev_queue_xmit(skb);
 		} else {
-			skb_pull(skb, skb->mac_len);
+			skb_pull_rcsum(skb, skb->mac_len);
 			netif_receive_skb(skb);
 		}
 	}
@@ -231,6 +230,9 @@ static void ifb_setup(struct net_device *dev)
 	eth_hw_addr_random(dev);
 	dev->needs_free_netdev = true;
 	dev->priv_destructor = ifb_dev_free;
+
+	dev->min_mtu = 0;
+	dev->max_mtu = 0;
 }
 
 static netdev_tx_t ifb_xmit(struct sk_buff *skb, struct net_device *dev)
@@ -243,7 +245,7 @@ static netdev_tx_t ifb_xmit(struct sk_buff *skb, struct net_device *dev)
 	txp->rx_bytes += skb->len;
 	u64_stats_update_end(&txp->rsync);
 
-	if (!skb->tc_redirected || !skb->skb_iif) {
+	if (!skb->redirected || !skb->skb_iif) {
 		dev_kfree_skb(skb);
 		dev->stats.rx_dropped++;
 		return NETDEV_TX_OK;
@@ -327,6 +329,7 @@ static int __init ifb_init_module(void)
 {
 	int i, err;
 
+	down_write(&pernet_ops_rwsem);
 	rtnl_lock();
 	err = __rtnl_link_register(&ifb_link_ops);
 	if (err < 0)
@@ -341,6 +344,7 @@ static int __init ifb_init_module(void)
 
 out:
 	rtnl_unlock();
+	up_write(&pernet_ops_rwsem);
 
 	return err;
 }

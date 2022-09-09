@@ -623,9 +623,10 @@ static void prepend(u32 *arr, int size, u32 val)
  */
 ktime_t mpdccp_get_now(void)
 {
-    struct timeval now;
-    do_gettimeofday(&now);
-    return timeval_to_ktime(now);
+   //struct timeval now;
+   // do_gettimeofday(&now);
+   //return timeval_to_ktime(now);
+	ktime_t now = ktime_get_real();
+	return now;
 }
 EXPORT_SYMBOL(mpdccp_get_now);
-

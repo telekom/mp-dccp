@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * comedi/drivers/dt2801.c
  * Device Driver for DataTranslation DT2801
@@ -639,6 +640,6 @@ static struct comedi_driver dt2801_driver = {
 };
 module_comedi_driver(dt2801_driver);
 
-MODULE_AUTHOR("Comedi http://www.comedi.org");
+MODULE_AUTHOR("Comedi https://www.comedi.org");
 MODULE_DESCRIPTION("Comedi low-level driver");
 MODULE_LICENSE("GPL");

@@ -1,15 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /******************************************************************************
  *
  * Copyright(c) 2007 - 2011 Realtek Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
  *
  ******************************************************************************/
 #ifndef _RTW_MP_H_
@@ -18,8 +10,7 @@
 #define MAX_MP_XMITBUF_SZ	2048
 #define NR_MP_XMITFRAME		8
 
-struct mp_xmit_frame
-{
+struct mp_xmit_frame {
 	struct list_head	list;
 
 	struct pkt_attrib attrib;
@@ -33,8 +24,7 @@ struct mp_xmit_frame
 	uint mem[(MAX_MP_XMITBUF_SZ >> 2)];
 };
 
-struct mp_wiparam
-{
+struct mp_wiparam {
 	u32 bcompleted;
 	u32 act_type;
 	u32 io_offset;
@@ -43,8 +33,7 @@ struct mp_wiparam
 
 typedef void(*wi_act_func)(void* padapter);
 
-struct mp_tx
-{
+struct mp_tx {
 	u8 stop;
 	u32 count, sended;
 	u8 payload;
@@ -62,15 +51,13 @@ struct mp_tx
 #define MP_MAX_LINES_BYTES	256
 
 typedef void (*MPT_WORK_ITEM_HANDLER)(void *Adapter);
-typedef struct _MPT_CONTEXT
-{
+typedef struct _MPT_CONTEXT {
 	/*  Indicate if we have started Mass Production Test. */
 	bool			bMassProdTest;
 
 	/*  Indicate if the driver is unloading or unloaded. */
 	bool			bMptDrvUnload;
 
-	_sema			MPh2c_Sema;
 	_timer			MPh2c_timeout_timer;
 /*  Event used to sync H2c for BT control */
 
@@ -163,7 +150,7 @@ typedef struct _MPT_CONTEXT
 	u32 		mptOutLen;
     u8          mptOutBuf[100];
 
-}MPT_CONTEXT, *PMPT_CONTEXT;
+} MPT_CONTEXT, *PMPT_CONTEXT;
 /* endif */
 
 /* E-Fuse */
@@ -214,8 +201,7 @@ enum {
 	MP_GET_TXPOWER_INX,
 };
 
-struct mp_priv
-{
+struct mp_priv {
 	struct adapter *papdater;
 
 	/* Testing Flag */
@@ -285,7 +271,7 @@ typedef struct _IOCMD_STRUCT_ {
 	u8 cmdclass;
 	u16 value;
 	u8 index;
-}IOCMD_STRUCT;
+} IOCMD_STRUCT;
 
 struct rf_reg_param {
 	u32 path;
@@ -324,7 +310,7 @@ extern u8 mpdatarate[NumRates];
 /* MP set force data rate base on the definition. */
 enum MPT_RATE_INDEX {
 	/* CCK rate. */
-	MPT_RATE_1M = 0 ,	/* 0 */
+	MPT_RATE_1M = 0,	/* 0 */
 	MPT_RATE_2M,
 	MPT_RATE_55M,
 	MPT_RATE_11M,	/* 3 */
@@ -482,9 +468,9 @@ void Hal_SetBandwidth(struct adapter *padapter);
 
 void Hal_SetTxPower(struct adapter *padapter);
 void Hal_SetCarrierSuppressionTx(struct adapter *padapter, u8 bStart);
-void Hal_SetSingleToneTx (struct adapter *padapter , u8 bStart);
-void Hal_SetSingleCarrierTx (struct adapter *padapter, u8 bStart);
-void Hal_SetContinuousTx (struct adapter *padapter, u8 bStart);
+void Hal_SetSingleToneTx(struct adapter *padapter, u8 bStart);
+void Hal_SetSingleCarrierTx(struct adapter *padapter, u8 bStart);
+void Hal_SetContinuousTx(struct adapter *padapter, u8 bStart);
 void Hal_SetBandwidth(struct adapter *padapter);
 
 void Hal_SetDataRate(struct adapter *padapter);
@@ -503,8 +489,8 @@ void Hal_TriggerRFThermalMeter(struct adapter *padapter);
 u8 Hal_ReadRFThermalMeter(struct adapter *padapter);
 void Hal_SetCCKContinuousTx(struct adapter *padapter, u8 bStart);
 void Hal_SetOFDMContinuousTx(struct adapter *padapter, u8 bStart);
-void Hal_ProSetCrystalCap (struct adapter *padapter , u32 CrystalCapVal);
-void MP_PHY_SetRFPathSwitch(struct adapter *padapter , bool bMain);
+void Hal_ProSetCrystalCap(struct adapter *padapter, u32 CrystalCapVal);
+void MP_PHY_SetRFPathSwitch(struct adapter *padapter, bool bMain);
 u32 mpt_ProQueryCalTxPower(struct adapter *padapter, u8 RfPath);
 void MPT_PwrCtlDM(struct adapter *padapter, u32 bstart);
 u8 MptToMgntRate(u32 MptRateIdx);

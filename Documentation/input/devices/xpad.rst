@@ -218,7 +218,7 @@ References
 .. [1] http://euc.jp/periphs/xbox-controller.ja.html (ITO Takayuki)
 .. [2] http://xpad.xbox-scene.com/
 .. [3] http://www.markosweb.com/www/xboxhackz.com/
-.. [4] http://lxr.free-electrons.com/ident?i=xpad_device
+.. [4] https://elixir.bootlin.com/linux/latest/ident/xpad_device
 
 
 Historic Edits
@@ -230,4 +230,5 @@ Historic Edits
 2005-03-19 - Dominic Cerquetti <binary1230@yahoo.com>
  - added stuff for dance pads, new d-pad->axes mappings
 
-Later changes may be viewed with 'git log Documentation/input/xpad.txt'
+Later changes may be viewed with
+'git log --follow Documentation/input/devices/xpad.rst'

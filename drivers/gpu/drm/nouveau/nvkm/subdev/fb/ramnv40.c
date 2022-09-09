@@ -131,11 +131,13 @@ nv40_ram_prog(struct nvkm_ram *base)
 		nvkm_mask(device, 0x00402c, 0xc0771100, ram->ctrl);
 		nvkm_wr32(device, 0x004048, ram->coef);
 		nvkm_wr32(device, 0x004030, ram->coef);
+		fallthrough;
 	case 0x43:
 	case 0x49:
 	case 0x4b:
 		nvkm_mask(device, 0x004038, 0xc0771100, ram->ctrl);
 		nvkm_wr32(device, 0x00403c, ram->coef);
+		fallthrough;
 	default:
 		nvkm_mask(device, 0x004020, 0xc0771100, ram->ctrl);
 		nvkm_wr32(device, 0x004024, ram->coef);
@@ -187,13 +189,13 @@ nv40_ram_func = {
 
 int
 nv40_ram_new_(struct nvkm_fb *fb, enum nvkm_ram_type type, u64 size,
-	      u32 tags, struct nvkm_ram **pram)
+	      struct nvkm_ram **pram)
 {
 	struct nv40_ram *ram;
 	if (!(ram = kzalloc(sizeof(*ram), GFP_KERNEL)))
 		return -ENOMEM;
 	*pram = &ram->base;
-	return nvkm_ram_ctor(&nv40_ram_func, fb, type, size, tags, &ram->base);
+	return nvkm_ram_ctor(&nv40_ram_func, fb, type, size, &ram->base);
 }
 
 int
@@ -202,7 +204,6 @@ nv40_ram_new(struct nvkm_fb *fb, struct nvkm_ram **pram)
 	struct nvkm_device *device = fb->subdev.device;
 	u32 pbus1218 = nvkm_rd32(device, 0x001218);
 	u32     size = nvkm_rd32(device, 0x10020c) & 0xff000000;
-	u32     tags = nvkm_rd32(device, 0x100320);
 	enum nvkm_ram_type type = NVKM_RAM_TYPE_UNKNOWN;
 	int ret;
 
@@ -213,7 +214,7 @@ nv40_ram_new(struct nvkm_fb *fb, struct nvkm_ram **pram)
 	case 0x00000300: type = NVKM_RAM_TYPE_DDR2 ; break;
 	}
 
-	ret = nv40_ram_new_(fb, type, size, tags, pram);
+	ret = nv40_ram_new_(fb, type, size, pram);
 	if (ret)
 		return ret;
 

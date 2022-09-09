@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AppArmor security module
  *
@@ -5,11 +6,6 @@
  *
  * Copyright (C) 1998-2008 Novell/SUSE
  * Copyright 2009-2017 Canonical Ltd.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation, version 2 of the
- * License.
  *
  * AppArmor policy namespaces, allow for different sets of policies
  * to be loaded for tasks within the namespace.
@@ -21,7 +17,7 @@
 #include <linux/string.h>
 
 #include "include/apparmor.h"
-#include "include/context.h"
+#include "include/cred.h"
 #include "include/policy_ns.h"
 #include "include/label.h"
 #include "include/policy.h"
@@ -125,9 +121,9 @@ static struct aa_ns *alloc_ns(const char *prefix, const char *name)
 	return ns;
 
 fail_unconfined:
-	kzfree(ns->base.hname);
+	kfree_sensitive(ns->base.hname);
 fail_ns:
-	kzfree(ns);
+	kfree_sensitive(ns);
 	return NULL;
 }
 
@@ -149,7 +145,7 @@ void aa_free_ns(struct aa_ns *ns)
 
 	ns->unconfined->ns = NULL;
 	aa_free_profile(ns->unconfined);
-	kzfree(ns);
+	kfree_sensitive(ns);
 }
 
 /**
@@ -255,8 +251,9 @@ static struct aa_ns *__aa_create_ns(struct aa_ns *parent, const char *name,
 
 	ns = alloc_ns(parent->base.hname, name);
 	if (!ns)
-		return NULL;
-	mutex_lock(&ns->lock);
+		return ERR_PTR(-ENOMEM);
+	ns->level = parent->level + 1;
+	mutex_lock_nested(&ns->lock, ns->level);
 	error = __aafs_ns_mkdir(ns, ns_subns_dir(parent), name, dir);
 	if (error) {
 		AA_ERROR("Failed to create interface for ns %s\n",
@@ -266,7 +263,6 @@ static struct aa_ns *__aa_create_ns(struct aa_ns *parent, const char *name,
 		return ERR_PTR(error);
 	}
 	ns->parent = aa_get_ns(parent);
-	ns->level = parent->level + 1;
 	list_add_rcu(&ns->base.list, &parent->sub_ns);
 	/* add list ref */
 	aa_get_ns(ns);
@@ -313,7 +309,7 @@ struct aa_ns *aa_prepare_ns(struct aa_ns *parent, const char *name)
 {
 	struct aa_ns *ns;
 
-	mutex_lock(&parent->lock);
+	mutex_lock_nested(&parent->lock, parent->level);
 	/* try and find the specified ns and if it doesn't exist create it */
 	/* released by caller */
 	ns = aa_get_ns(__aa_find_ns(&parent->sub_ns, name));
@@ -336,7 +332,7 @@ static void destroy_ns(struct aa_ns *ns)
 	if (!ns)
 		return;
 
-	mutex_lock(&ns->lock);
+	mutex_lock_nested(&ns->lock, ns->level);
 	/* release all profiles in this namespace */
 	__aa_profile_list_release(&ns->base.profiles);
 

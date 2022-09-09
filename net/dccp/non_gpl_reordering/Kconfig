@@ -5,7 +5,7 @@ menu  "MPDCCP non-gpl advanced reordering control"
 config MPDCCP_REORDER_FIXED
 	tristate "MPDCCP Fixed Reordering"
 	depends on IP_MPDCCP
-	---help---
+	help
 	  This is an advanced reordering engine. It features means of
 	  reordering by introducing a reordering buffer. End-to-end delay
 	  increases due to the process of reordering.

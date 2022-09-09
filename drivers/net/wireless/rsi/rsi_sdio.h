@@ -50,6 +50,8 @@ enum sdio_interrupt_type {
 
 #define RSI_DEVICE_BUFFER_STATUS_REGISTER       0xf3
 #define RSI_FN1_INT_REGISTER                    0xf9
+#define RSI_INT_ENABLE_REGISTER			0x04
+#define RSI_INT_ENABLE_MASK			0xfc
 #define RSI_SD_REQUEST_MASTER                   0x10000
 
 /* FOR SD CARD ONLY */
@@ -86,7 +88,7 @@ enum sdio_interrupt_type {
 #define TA_SOFT_RST_SET              BIT(0)
 #define TA_PC_ZERO                   0
 #define TA_HOLD_THREAD_VALUE         0xF
-#define TA_RELEASE_THREAD_VALUE      cpu_to_le32(0xF)
+#define TA_RELEASE_THREAD_VALUE      0xF
 #define TA_BASE_ADDR                 0x2200
 #define MISC_CFG_BASE_ADDR           0x4105
 
@@ -117,9 +119,10 @@ struct rsi_91x_sdiodev {
 	u16 tx_blk_size;
 	u8 write_fail;
 	bool buff_status_updated;
+	struct rsi_thread rx_thread;
+	u8 pktbuffer[8192] __aligned(4);
 };
 
-void rsi_interrupt_handler(struct rsi_hw *adapter);
 int rsi_init_sdio_slave_regs(struct rsi_hw *adapter);
 int rsi_sdio_read_register(struct rsi_hw *adapter, u32 addr, u8 *data);
 int rsi_sdio_host_intf_read_pkt(struct rsi_hw *adapter, u8 *pkt, u32 length);
@@ -131,4 +134,5 @@ int rsi_sdio_master_access_msword(struct rsi_hw *adapter, u16 ms_word);
 void rsi_sdio_ack_intr(struct rsi_hw *adapter, u8 int_bit);
 int rsi_sdio_determine_event_timeout(struct rsi_hw *adapter);
 int rsi_sdio_check_buffer_status(struct rsi_hw *adapter, u8 q_num);
+void rsi_sdio_rx_thread(struct rsi_common *common);
 #endif

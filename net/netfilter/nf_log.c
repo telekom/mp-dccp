@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/module.h>
@@ -373,7 +374,7 @@ static int seq_show(struct seq_file *s, void *v)
 			continue;
 
 		logger = nft_log_dereference(loggers[*pos][i]);
-		seq_printf(s, "%s", logger->name);
+		seq_puts(s, logger->name);
 		if (i == 0 && loggers[*pos][i + 1] != NULL)
 			seq_puts(s, ",");
 
@@ -394,22 +395,6 @@ static const struct seq_operations nflog_seq_ops = {
 	.stop	= seq_stop,
 	.show	= seq_show,
 };
-
-static int nflog_open(struct inode *inode, struct file *file)
-{
-	return seq_open_net(inode, file, &nflog_seq_ops,
-			    sizeof(struct seq_net_private));
-}
-
-static const struct file_operations nflog_file_ops = {
-	.owner	 = THIS_MODULE,
-	.open	 = nflog_open,
-	.read	 = seq_read,
-	.llseek	 = seq_lseek,
-	.release = seq_release_net,
-};
-
-
 #endif /* PROC_FS */
 
 #ifdef CONFIG_SYSCTL
@@ -429,7 +414,7 @@ static struct ctl_table nf_log_sysctl_ftable[] = {
 };
 
 static int nf_log_proc_dostring(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp, loff_t *ppos)
+			 void *buffer, size_t *lenp, loff_t *ppos)
 {
 	const struct nf_logger *logger;
 	char buf[NFLOGGER_NAME_LEN];
@@ -557,8 +542,8 @@ static int __net_init nf_log_net_init(struct net *net)
 	int ret = -ENOMEM;
 
 #ifdef CONFIG_PROC_FS
-	if (!proc_create("nf_log", S_IRUGO,
-			 net->nf.proc_netfilter, &nflog_file_ops))
+	if (!proc_create_net("nf_log", 0444, net->nf.proc_netfilter,
+			&nflog_seq_ops, sizeof(struct seq_net_private)))
 		return ret;
 #endif
 	ret = netfilter_log_sysctl_init(net);

@@ -23,13 +23,18 @@
 #ifndef __DRM_FRAMEBUFFER_H__
 #define __DRM_FRAMEBUFFER_H__
 
-#include <linux/list.h>
 #include <linux/ctype.h>
+#include <linux/list.h>
+#include <linux/sched.h>
+
 #include <drm/drm_mode_object.h>
 
-struct drm_framebuffer;
-struct drm_file;
+struct drm_clip_rect;
 struct drm_device;
+struct drm_file;
+struct drm_format_info;
+struct drm_framebuffer;
+struct drm_gem_object;
 
 /**
  * struct drm_framebuffer_funcs - framebuffer hooks
@@ -82,6 +87,9 @@ struct drm_framebuffer_funcs {
 	 * for more information as all the semantics and arguments have a one to
 	 * one mapping on this function.
 	 *
+	 * Atomic drivers should use drm_atomic_helper_dirtyfb() to implement
+	 * this hook.
+	 *
 	 * RETURNS:
 	 *
 	 * 0 on success or a negative error code on failure.
@@ -121,6 +129,12 @@ struct drm_framebuffer {
 	 * @base: base modeset object structure, contains the reference count.
 	 */
 	struct drm_mode_object base;
+
+	/**
+	 * @comm: Name of the process allocating the fb, used for fb dumping.
+	 */
+	char comm[TASK_COMM_LEN];
+
 	/**
 	 * @format: framebuffer format information
 	 */
@@ -205,6 +219,7 @@ int drm_framebuffer_init(struct drm_device *dev,
 			 struct drm_framebuffer *fb,
 			 const struct drm_framebuffer_funcs *funcs);
 struct drm_framebuffer *drm_framebuffer_lookup(struct drm_device *dev,
+					       struct drm_file *file_priv,
 					       uint32_t id);
 void drm_framebuffer_remove(struct drm_framebuffer *fb);
 void drm_framebuffer_cleanup(struct drm_framebuffer *fb);
@@ -234,36 +249,12 @@ static inline void drm_framebuffer_put(struct drm_framebuffer *fb)
 }
 
 /**
- * drm_framebuffer_reference - acquire a framebuffer reference
- * @fb: DRM framebuffer
- *
- * This is a compatibility alias for drm_framebuffer_get() and should not be
- * used by new code.
- */
-static inline void drm_framebuffer_reference(struct drm_framebuffer *fb)
-{
-	drm_framebuffer_get(fb);
-}
-
-/**
- * drm_framebuffer_unreference - release a framebuffer reference
- * @fb: DRM framebuffer
- *
- * This is a compatibility alias for drm_framebuffer_put() and should not be
- * used by new code.
- */
-static inline void drm_framebuffer_unreference(struct drm_framebuffer *fb)
-{
-	drm_framebuffer_put(fb);
-}
-
-/**
  * drm_framebuffer_read_refcount - read the framebuffer reference count.
  * @fb: framebuffer
  *
  * This functions returns the framebuffer's reference count.
  */
-static inline uint32_t drm_framebuffer_read_refcount(struct drm_framebuffer *fb)
+static inline uint32_t drm_framebuffer_read_refcount(const struct drm_framebuffer *fb)
 {
 	return kref_read(&fb->base.refcount);
 }
@@ -305,5 +296,43 @@ int drm_framebuffer_plane_width(int width,
 				const struct drm_framebuffer *fb, int plane);
 int drm_framebuffer_plane_height(int height,
 				 const struct drm_framebuffer *fb, int plane);
+
+/**
+ * struct drm_afbc_framebuffer - a special afbc frame buffer object
+ *
+ * A derived class of struct drm_framebuffer, dedicated for afbc use cases.
+ */
+struct drm_afbc_framebuffer {
+	/**
+	 * @base: base framebuffer structure.
+	 */
+	struct drm_framebuffer base;
+	/**
+	 * @block_width: width of a single afbc block
+	 */
+	u32 block_width;
+	/**
+	 * @block_height: height of a single afbc block
+	 */
+	u32 block_height;
+	/**
+	 * @aligned_width: aligned frame buffer width
+	 */
+	u32 aligned_width;
+	/**
+	 * @aligned_height: aligned frame buffer height
+	 */
+	u32 aligned_height;
+	/**
+	 * @offset: offset of the first afbc header
+	 */
+	u32 offset;
+	/**
+	 * @afbc_size: minimum size of afbc buffer
+	 */
+	u32 afbc_size;
+};
+
+#define fb_to_afbc_fb(x) container_of(x, struct drm_afbc_framebuffer, base)
 
 #endif

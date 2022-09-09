@@ -46,4 +46,3 @@ static inline void mpdccp_link_sysfs_exit (void) {};
 
 
 #endif	/* _LINUX_MPDCCP_LINK_SYSFS_H */
-

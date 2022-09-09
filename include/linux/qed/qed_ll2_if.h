@@ -1,33 +1,7 @@
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause) */
 /* QLogic qed NIC Driver
  * Copyright (c) 2015-2017  QLogic Corporation
- *
- * This software is available to you under a choice of one of two
- * licenses.  You may choose to be licensed under the terms of the GNU
- * General Public License (GPL) Version 2, available from the file
- * COPYING in the main directory of this source tree, or the
- * OpenIB.org BSD license below:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      - Redistributions of source code must retain the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer.
- *
- *      - Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and /or other materials
- *        provided with the distribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright (c) 2019-2020 Marvell International Ltd.
  */
 
 #ifndef _QED_LL2_IF_H
@@ -52,6 +26,12 @@ enum qed_ll2_conn_type {
 	QED_LL2_TYPE_ROCE,
 	QED_LL2_TYPE_IWARP,
 	QED_LL2_TYPE_RESERVED3,
+	MAX_QED_LL2_CONN_TYPE
+};
+
+enum qed_ll2_rx_conn_type {
+	QED_LL2_RX_TYPE_LEGACY,
+	QED_LL2_RX_TYPE_CTX,
 	MAX_QED_LL2_RX_CONN_TYPE
 };
 
@@ -64,6 +44,7 @@ enum qed_ll2_roce_flavor_type {
 enum qed_ll2_tx_dest {
 	QED_LL2_TX_DEST_NW, /* Light L2 TX Destination to the Network */
 	QED_LL2_TX_DEST_LB, /* Light L2 TX Destination to the Loopback */
+	QED_LL2_TX_DEST_DROP, /* Light L2 Drop the TX packet */
 	QED_LL2_TX_DEST_MAX
 };
 
@@ -101,6 +82,7 @@ struct qed_ll2_comp_rx_data {
 	void *cookie;
 	dma_addr_t rx_buf_addr;
 	u16 parse_flags;
+	u16 err_flags;
 	u16 vlan;
 	bool b_last_packet;
 	u8 connection_handle;
@@ -114,7 +96,7 @@ struct qed_ll2_comp_rx_data {
 	u32 opaque_data_1;
 
 	/* GSI only */
-	u32 gid_dst[4];
+	u32 src_qp;
 	u16 qp_id;
 
 	union {
@@ -149,15 +131,21 @@ void (*qed_ll2_release_tx_packet_cb)(void *cxt,
 				     dma_addr_t first_frag_addr,
 				     bool b_last_fragment, bool b_last_packet);
 
+typedef
+void (*qed_ll2_slowpath_cb)(void *cxt, u8 connection_handle,
+			    u32 opaque_data_0, u32 opaque_data_1);
+
 struct qed_ll2_cbs {
 	qed_ll2_complete_rx_packet_cb rx_comp_cb;
 	qed_ll2_release_rx_packet_cb rx_release_cb;
 	qed_ll2_complete_tx_packet_cb tx_comp_cb;
 	qed_ll2_release_tx_packet_cb tx_release_cb;
+	qed_ll2_slowpath_cb slowpath_cb;
 	void *cookie;
 };
 
 struct qed_ll2_acquire_data_inputs {
+	enum qed_ll2_rx_conn_type rx_conn_type;
 	enum qed_ll2_conn_type conn_type;
 	u16 mtu;
 	u16 rx_num_desc;
@@ -170,6 +158,7 @@ struct qed_ll2_acquire_data_inputs {
 	enum qed_ll2_tx_dest tx_dest;
 	enum qed_ll2_error_handle ai_err_packet_too_big;
 	enum qed_ll2_error_handle ai_err_no_buf;
+	bool secondary_queue;
 	u8 gsi_enable;
 };
 
@@ -194,6 +183,7 @@ struct qed_ll2_tx_pkt_info {
 	bool enable_ip_cksum;
 	bool enable_l4_cksum;
 	bool calc_ip_len;
+	bool remove_stag;
 };
 
 #define QED_LL2_UNUSED_HANDLE   (0xff)
@@ -210,6 +200,11 @@ struct qed_ll2_params {
 	u8 tx_tc;
 	bool frags_mapped;
 	u8 ll2_mac_address[ETH_ALEN];
+};
+
+enum qed_ll2_xmit_flags {
+	/* FIP discovery packet */
+	QED_LL2_XMIT_FLAGS_FIP_DISCOVERY
 };
 
 struct qed_ll2_ops {
@@ -237,10 +232,12 @@ struct qed_ll2_ops {
  *
  * @param cdev
  * @param skb
+ * @param xmit_flags - Transmit options defined by the enum qed_ll2_xmit_flags.
  *
  * @return 0 on success, otherwise error value.
  */
-	int (*start_xmit)(struct qed_dev *cdev, struct sk_buff *skb);
+	int (*start_xmit)(struct qed_dev *cdev, struct sk_buff *skb,
+			  unsigned long xmit_flags);
 
 /**
  * @brief register_cb_ops - protocol driver register the callback for Rx/Tx

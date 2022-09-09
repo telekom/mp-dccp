@@ -1,14 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * PCIe Native PME support
  *
  * Copyright (C) 2007 - 2009 Intel Corp
  * Copyright (C) 2007 - 2009 Shaohua Li <shaohua.li@intel.com>
  * Copyright (C) 2009 Rafael J. Wysocki <rjw@sisk.pl>, Novell Inc.
- *
- * This file is subject to the terms and conditions of the GNU General Public
- * License V2.  See the file "COPYING" in the main directory of this archive
- * for more details.
  */
+
+#define dev_fmt(fmt) "PME: " fmt
 
 #include <linux/pci.h>
 #include <linux/kernel.h>
@@ -17,7 +16,6 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/device.h>
-#include <linux/pcieport_if.h>
 #include <linux/pm_runtime.h>
 
 #include "../pci.h"
@@ -198,14 +196,14 @@ static void pcie_pme_handle_request(struct pci_dev *port, u16 req_id)
 		 * assuming that the PME was reported by a PCIe-PCI bridge that
 		 * used devfn different from zero.
 		 */
-		dev_dbg(&port->dev, "PME interrupt generated for non-existent device %02x:%02x.%d\n",
-			busnr, PCI_SLOT(devfn), PCI_FUNC(devfn));
+		pci_info(port, "interrupt generated for non-existent device %02x:%02x.%d\n",
+			 busnr, PCI_SLOT(devfn), PCI_FUNC(devfn));
 		found = pcie_pme_from_pci_bridge(bus, 0);
 	}
 
  out:
 	if (!found)
-		dev_dbg(&port->dev, "Spurious native PME interrupt!\n");
+		pci_info(port, "Spurious native interrupt!\n");
 }
 
 /**
@@ -345,7 +343,7 @@ static int pcie_pme_probe(struct pcie_device *srv)
 		return ret;
 	}
 
-	dev_info(&port->dev, "Signaling PME with IRQ %d\n", srv->irq);
+	pci_info(port, "Signaling with IRQ %d\n", srv->irq);
 
 	pcie_pme_mark_devices(port);
 	pcie_pme_interrupt_enable(port, true);
@@ -410,7 +408,7 @@ static int pcie_pme_suspend(struct pcie_device *srv)
 
 /**
  * pcie_pme_resume - Resume PCIe PME service device.
- * @srv - PCIe service device to resume.
+ * @srv: PCIe service device to resume.
  */
 static int pcie_pme_resume(struct pcie_device *srv)
 {
@@ -433,7 +431,7 @@ static int pcie_pme_resume(struct pcie_device *srv)
 
 /**
  * pcie_pme_remove - Prepare PCIe PME service device for removal.
- * @srv - PCIe service device to remove.
+ * @srv: PCIe service device to remove.
  */
 static void pcie_pme_remove(struct pcie_device *srv)
 {
@@ -441,6 +439,7 @@ static void pcie_pme_remove(struct pcie_device *srv)
 
 	pcie_pme_disable_interrupt(srv->port, data);
 	free_irq(srv->irq, srv);
+	cancel_work_sync(&data->work);
 	kfree(data);
 }
 
@@ -458,8 +457,7 @@ static struct pcie_port_service_driver pcie_pme_driver = {
 /**
  * pcie_pme_service_init - Register the PCIe PME service driver.
  */
-static int __init pcie_pme_service_init(void)
+int __init pcie_pme_init(void)
 {
 	return pcie_port_service_register(&pcie_pme_driver);
 }
-device_initcall(pcie_pme_service_init);

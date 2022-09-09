@@ -1,20 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Driver for Xceive XC5000 "QAM/8VSB single chip tuner"
  *
  *  Copyright (c) 2007 Xceive Corporation
  *  Copyright (c) 2007 Steven Toth <stoth@linuxtv.org>
  *  Copyright (c) 2009 Devin Heitmueller <dheitmueller@kernellabs.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *
- *  GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -25,7 +15,7 @@
 #include <linux/dvb/frontend.h>
 #include <linux/i2c.h>
 
-#include "dvb_frontend.h"
+#include <media/dvb_frontend.h>
 
 #include "xc5000.h"
 #include "tuner-i2c.h"
@@ -460,8 +450,8 @@ static int xc_set_rf_frequency(struct xc5000_priv *priv, u32 freq_hz)
 
 	dprintk(1, "%s(%u)\n", __func__, freq_hz);
 
-	if ((freq_hz > xc5000_tuner_ops.info.frequency_max) ||
-		(freq_hz < xc5000_tuner_ops.info.frequency_min))
+	if ((freq_hz > xc5000_tuner_ops.info.frequency_max_hz) ||
+		(freq_hz < xc5000_tuner_ops.info.frequency_min_hz))
 		return -EINVAL;
 
 	freq_code = (u16)(freq_hz / 15625);
@@ -685,8 +675,8 @@ static void xc_debug_dump(struct xc5000_priv *priv)
 		(totalgain % 256) * 100 / 256);
 
 	if (priv->pll_register_no) {
-		xc5000_readreg(priv, priv->pll_register_no, &regval);
-		dprintk(1, "*** PLL lock status = 0x%04x\n", regval);
+		if (!xc5000_readreg(priv, priv->pll_register_no, &regval))
+			dprintk(1, "*** PLL lock status = 0x%04x\n", regval);
 	}
 }
 
@@ -766,7 +756,7 @@ static int xc5000_set_digital_params(struct dvb_frontend *fe)
 		if (!bw)
 			bw = 6000000;
 		/* fall to OFDM handling */
-		/* fall through */
+		fallthrough;
 	case SYS_DMBTH:
 	case SYS_DVBT:
 	case SYS_DVBT2:
@@ -831,15 +821,16 @@ static int xc5000_is_firmware_loaded(struct dvb_frontend *fe)
 	u16 id;
 
 	ret = xc5000_readreg(priv, XREG_PRODUCT_ID, &id);
-	if (ret == 0) {
+	if (!ret) {
 		if (id == XC_PRODUCT_ID_FW_NOT_LOADED)
 			ret = -ENOENT;
 		else
 			ret = 0;
+		dprintk(1, "%s() returns id = 0x%x\n", __func__, id);
+	} else {
+		dprintk(1, "%s() returns error %d\n", __func__, ret);
 	}
 
-	dprintk(1, "%s() returns %s id = 0x%x\n", __func__,
-		ret == 0 ? "True" : "False", id);
 	return ret;
 }
 
@@ -935,7 +926,10 @@ tune_channel:
 
 	if (priv->pll_register_no != 0) {
 		msleep(20);
-		xc5000_readreg(priv, priv->pll_register_no, &pll_lock_status);
+		ret = xc5000_readreg(priv, priv->pll_register_no,
+				     &pll_lock_status);
+		if (ret)
+			return ret;
 		if (pll_lock_status > 63) {
 			/* PLL is unlocked, force reload of the firmware */
 			dprintk(1, "xc5000: PLL not locked (0x%x).  Reloading...\n",
@@ -1190,8 +1184,10 @@ static int xc_load_fw_and_init_tuner(struct dvb_frontend *fe, int force)
 		}
 
 		if (priv->pll_register_no) {
-			xc5000_readreg(priv, priv->pll_register_no,
-				       &pll_lock_status);
+			ret = xc5000_readreg(priv, priv->pll_register_no,
+					     &pll_lock_status);
+			if (ret)
+				continue;
 			if (pll_lock_status > 63) {
 				/* PLL is unlocked, force reload of the firmware */
 				printk(KERN_ERR
@@ -1344,10 +1340,10 @@ static int xc5000_set_config(struct dvb_frontend *fe, void *priv_cfg)
 
 static const struct dvb_tuner_ops xc5000_tuner_ops = {
 	.info = {
-		.name           = "Xceive XC5000",
-		.frequency_min  =    1000000,
-		.frequency_max  = 1023000000,
-		.frequency_step =      50000,
+		.name              = "Xceive XC5000",
+		.frequency_min_hz  =    1 * MHz,
+		.frequency_max_hz  = 1023 * MHz,
+		.frequency_step_hz =   50 * kHz,
 	},
 
 	.release	   = xc5000_release,

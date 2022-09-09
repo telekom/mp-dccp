@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*******************************************************************************
  * This file contains iSCSI Target Portal Group related functions.
  *
@@ -5,15 +6,6 @@
  *
  * Author: Nicholas A. Bellinger <nab@linux-iscsi.org>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  ******************************************************************************/
 
 #include <linux/slab.h>
@@ -90,10 +82,10 @@ int iscsit_load_discovery_tpg(void)
 	 */
 	param = iscsi_find_param_from_key(AUTHMETHOD, tpg->param_list);
 	if (!param)
-		goto out;
+		goto free_pl_out;
 
 	if (iscsi_update_param_value(param, "CHAP,None") < 0)
-		goto out;
+		goto free_pl_out;
 
 	tpg->tpg_attrib.authentication = 0;
 
@@ -105,6 +97,8 @@ int iscsit_load_discovery_tpg(void)
 	pr_debug("CORE[0] - Allocated Discovery TPG\n");
 
 	return 0;
+free_pl_out:
+	iscsi_release_param_list(tpg->param_list);
 out:
 	if (tpg->sid == 1)
 		core_tpg_deregister(&tpg->tpg_se_tpg);
@@ -119,6 +113,7 @@ void iscsit_release_discovery_tpg(void)
 	if (!tpg)
 		return;
 
+	iscsi_release_param_list(tpg->param_list);
 	core_tpg_deregister(&tpg->tpg_se_tpg);
 
 	kfree(tpg);
@@ -448,6 +443,9 @@ static bool iscsit_tpg_check_network_portal(
 				break;
 		}
 		spin_unlock(&tpg->tpg_np_lock);
+
+		if (match)
+			break;
 	}
 	spin_unlock(&tiqn->tiqn_tpg_lock);
 

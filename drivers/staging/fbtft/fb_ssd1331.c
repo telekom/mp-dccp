@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/spi/spi.h>
 #include <linux/delay.h>
 
@@ -26,7 +27,13 @@ static int init_display(struct fbtft_par *par)
 	par->fbtftops.reset(par);
 
 	write_reg(par, 0xae); /* Display Off */
-	write_reg(par, 0xa0, 0x70 | (par->bgr << 2)); /* Set Colour Depth */
+
+	/* Set Column Address Mapping, COM Scan Direction and Colour Depth */
+	if (par->info->var.rotate == 180)
+		write_reg(par, 0xa0, 0x60 | (par->bgr << 2));
+	else
+		write_reg(par, 0xa0, 0x72 | (par->bgr << 2));
+
 	write_reg(par, 0x72); /* RGB colour */
 	write_reg(par, 0xa1, 0x00); /* Set Display Start Line */
 	write_reg(par, 0xa2, 0x00); /* Set Display Offset */
@@ -67,14 +74,14 @@ static void write_reg8_bus8(struct fbtft_par *par, int len, ...)
 		for (i = 0; i < len; i++)
 			buf[i] = (u8)va_arg(args, unsigned int);
 		va_end(args);
-		fbtft_par_dbg_hex(DEBUG_WRITE_REGISTER, par, par->info->device, u8, buf, len, "%s: ", __func__);
+		fbtft_par_dbg_hex(DEBUG_WRITE_REGISTER, par, par->info->device,
+				  u8, buf, len, "%s: ", __func__);
 	}
 
 	va_start(args, len);
 
 	*buf = (u8)va_arg(args, unsigned int);
-	if (par->gpio.dc != -1)
-		gpio_set_value(par->gpio.dc, 0);
+	gpiod_set_value(par->gpio.dc, 0);
 	ret = par->fbtftops.write(par, par->buf, sizeof(u8));
 	if (ret < 0) {
 		va_end(args);
@@ -96,8 +103,7 @@ static void write_reg8_bus8(struct fbtft_par *par, int len, ...)
 			return;
 		}
 	}
-	if (par->gpio.dc != -1)
-		gpio_set_value(par->gpio.dc, 1);
+	gpiod_set_value(par->gpio.dc, 1);
 	va_end(args);
 }
 
@@ -161,7 +167,7 @@ static int set_gamma(struct fbtft_par *par, u32 *curves)
 
 static int blank(struct fbtft_par *par, bool on)
 {
-	fbtft_par_dbg(DEBUG_BLANK, par, "%s(blank=%s)\n",
+	fbtft_par_dbg(DEBUG_BLANK, par, "(%s=%s)\n",
 		      __func__, on ? "true" : "false");
 	if (on)
 		write_reg(par, 0xAE);

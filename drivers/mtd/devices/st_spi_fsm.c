@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * st_spi_fsm.c	- ST Fast Sequence Mode (FSM) Serial Flash Controller
  *
@@ -6,11 +7,6 @@
  * Copyright (C) 2010-2014 STMicroelectronics Limited
  *
  * JEDEC probe based on drivers/mtd/devices/m25p80.c
- *
- * This code is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -259,7 +255,6 @@ struct stfsm_seq {
 struct stfsm {
 	struct device		*dev;
 	void __iomem		*base;
-	struct resource		*region;
 	struct mtd_info		mtd;
 	struct mutex		lock;
 	struct flash_info       *info;
@@ -1825,13 +1820,9 @@ static int stfsm_mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 
 	mutex_unlock(&fsm->lock);
 
-	instr->state = MTD_ERASE_DONE;
-	mtd_erase_callback(instr);
-
 	return 0;
 
 out1:
-	instr->state = MTD_ERASE_FAILED;
 	mutex_unlock(&fsm->lock);
 
 	return ret;
@@ -1868,8 +1859,7 @@ static struct flash_info *stfsm_jedec_probe(struct stfsm *fsm)
 	 */
 	ext_jedec = id[3] << 8  | id[4];
 
-	dev_dbg(fsm->dev, "JEDEC =  0x%08x [%02x %02x %02x %02x %02x]\n",
-		jedec, id[0], id[1], id[2], id[3], id[4]);
+	dev_dbg(fsm->dev, "JEDEC =  0x%08x [%5ph]\n", jedec, id);
 
 	for (info = flash_types; info->name; info++) {
 		if (info->jedec_id == jedec) {

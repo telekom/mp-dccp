@@ -1,16 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2017 Pengutronix, Juergen Borleis <jbe@pengutronix.de>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
+#include <linux/dsa/lan9303.h>
 #include <linux/etherdevice.h>
 #include <linux/list.h>
 #include <linux/slab.h>
@@ -39,20 +31,32 @@
  */
 
 #define LAN9303_TAG_LEN 4
+# define LAN9303_TAG_TX_USE_ALR BIT(3)
+# define LAN9303_TAG_TX_STP_OVERRIDE BIT(4)
+# define LAN9303_TAG_RX_IGMP BIT(3)
+# define LAN9303_TAG_RX_STP BIT(4)
+# define LAN9303_TAG_RX_TRAPPED_TO_CPU (LAN9303_TAG_RX_IGMP | \
+					LAN9303_TAG_RX_STP)
+
+/* Decide whether to transmit using ALR lookup, or transmit directly to
+ * port using tag. ALR learning is performed only when using ALR lookup.
+ * If the two external ports are bridged and the frame is unicast,
+ * then use ALR lookup to allow ALR learning on CPU port.
+ * Otherwise transmit directly to port with STP state override.
+ * See also: lan9303_separate_ports() and lan9303.pdf 6.4.10.1
+ */
+static int lan9303_xmit_use_arl(struct dsa_port *dp, u8 *dest_addr)
+{
+	struct lan9303 *chip = dp->ds->priv;
+
+	return chip->is_bridged && !is_multicast_ether_addr(dest_addr);
+}
 
 static struct sk_buff *lan9303_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-	struct dsa_slave_priv *p = netdev_priv(dev);
-	u16 *lan9303_tag;
-
-	/* insert a special VLAN tag between the MAC addresses
-	 * and the current ethertype field.
-	 */
-	if (skb_cow_head(skb, LAN9303_TAG_LEN) < 0) {
-		dev_dbg(&dev->dev,
-			"Cannot make room for the special tag. Dropping packet\n");
-		return NULL;
-	}
+	struct dsa_port *dp = dsa_slave_to_port(dev);
+	__be16 *lan9303_tag;
+	u16 tag;
 
 	/* provide 'LAN9303_TAG_LEN' bytes additional space */
 	skb_push(skb, LAN9303_TAG_LEN);
@@ -60,27 +64,22 @@ static struct sk_buff *lan9303_xmit(struct sk_buff *skb, struct net_device *dev)
 	/* make room between MACs and Ether-Type */
 	memmove(skb->data, skb->data + LAN9303_TAG_LEN, 2 * ETH_ALEN);
 
-	lan9303_tag = (u16 *)(skb->data + 2 * ETH_ALEN);
+	lan9303_tag = (__be16 *)(skb->data + 2 * ETH_ALEN);
+	tag = lan9303_xmit_use_arl(dp, skb->data) ?
+		LAN9303_TAG_TX_USE_ALR :
+		dp->index | LAN9303_TAG_TX_STP_OVERRIDE;
 	lan9303_tag[0] = htons(ETH_P_8021Q);
-	lan9303_tag[1] = htons(p->dp->index | BIT(4));
+	lan9303_tag[1] = htons(tag);
 
 	return skb;
 }
 
 static struct sk_buff *lan9303_rcv(struct sk_buff *skb, struct net_device *dev,
-			struct packet_type *pt)
+				   struct packet_type *pt)
 {
-	u16 *lan9303_tag;
-	struct dsa_switch_tree *dst = dev->dsa_ptr;
-	struct dsa_switch *ds;
+	__be16 *lan9303_tag;
+	u16 lan9303_tag1;
 	unsigned int source_port;
-
-	ds = dst->ds[0];
-
-	if (unlikely(!ds)) {
-		dev_warn_ratelimited(&dev->dev, "Dropping packet, due to missing DSA switch device\n");
-		return NULL;
-	}
 
 	if (unlikely(!pskb_may_pull(skb, LAN9303_TAG_LEN))) {
 		dev_warn_ratelimited(&dev->dev,
@@ -94,25 +93,19 @@ static struct sk_buff *lan9303_rcv(struct sk_buff *skb, struct net_device *dev,
 	 *                           ^
 	 *                        ->data
 	 */
-	lan9303_tag = (u16 *)(skb->data - 2);
+	lan9303_tag = (__be16 *)(skb->data - 2);
 
 	if (lan9303_tag[0] != htons(ETH_P_8021Q)) {
 		dev_warn_ratelimited(&dev->dev, "Dropping packet due to invalid VLAN marker\n");
 		return NULL;
 	}
 
-	source_port = ntohs(lan9303_tag[1]) & 0x3;
+	lan9303_tag1 = ntohs(lan9303_tag[1]);
+	source_port = lan9303_tag1 & 0x3;
 
-	if (source_port >= ds->num_ports) {
+	skb->dev = dsa_master_find_slave(dev, 0, source_port);
+	if (!skb->dev) {
 		dev_warn_ratelimited(&dev->dev, "Dropping packet due to invalid source port\n");
-		return NULL;
-	}
-
-	if (unlikely(ds->cpu_port_mask & BIT(source_port)))
-		return NULL;
-
-	if (!ds->ports[source_port].netdev) {
-		dev_warn_ratelimited(&dev->dev, "Dropping packet due to invalid netdev or device\n");
 		return NULL;
 	}
 
@@ -122,14 +115,20 @@ static struct sk_buff *lan9303_rcv(struct sk_buff *skb, struct net_device *dev,
 	skb_pull_rcsum(skb, 2 + 2);
 	memmove(skb->data - ETH_HLEN, skb->data - (ETH_HLEN + LAN9303_TAG_LEN),
 		2 * ETH_ALEN);
-
-	/* forward the packet to the dedicated interface */
-	skb->dev = ds->ports[source_port].netdev;
+	skb->offload_fwd_mark = !(lan9303_tag1 & LAN9303_TAG_RX_TRAPPED_TO_CPU);
 
 	return skb;
 }
 
-const struct dsa_device_ops lan9303_netdev_ops = {
+static const struct dsa_device_ops lan9303_netdev_ops = {
+	.name = "lan9303",
+	.proto	= DSA_TAG_PROTO_LAN9303,
 	.xmit = lan9303_xmit,
 	.rcv = lan9303_rcv,
+	.overhead = LAN9303_TAG_LEN,
 };
+
+MODULE_LICENSE("GPL");
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_LAN9303);
+
+module_dsa_tag_driver(lan9303_netdev_ops);

@@ -1,19 +1,10 @@
-/*
- * Copyright (C) 2007, 2011 Wolfgang Grandegger <wg@grandegger.com>
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (C) 2007, 2011 Wolfgang Grandegger <wg@grandegger.com>
  * Copyright (C) 2012 Stephane Grosjean <s.grosjean@peak-system.com>
  *
  * Derived from the PCAN project file driver/src/pcan_pci.c:
  *
  * Copyright (C) 2001-2006  PEAK System-Technik GmbH
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the version 2 of the GNU General Public License
- * as published by the Free Software Foundation
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
@@ -125,8 +116,6 @@ MODULE_LICENSE("GPL v2");
 #define CANFD_CTL_IRQ_CL_DEF	16	/* Rx msg max nb per IRQ in Rx DMA */
 #define CANFD_CTL_IRQ_TL_DEF	10	/* Time before IRQ if < CL (x100 µs) */
 
-#define CANFD_OPTIONS_SET	(CANFD_OPTION_ERROR | CANFD_OPTION_BUSLOAD)
-
 /* Tx anticipation window (link logical address should be aligned on 2K
  * boundary)
  */
@@ -155,7 +144,7 @@ struct pciefd_rx_dma {
 	__le32 irq_status;
 	__le32 sys_time_low;
 	__le32 sys_time_high;
-	struct pucan_rx_msg msg[0];
+	struct pucan_rx_msg msg[];
 } __packed __aligned(4);
 
 /* Tx Link record */
@@ -173,9 +162,6 @@ struct pciefd_page {
 	u32 offset;
 	u32 size;
 };
-
-#define CANFD_IRQ_SET		0x00000001
-#define CANFD_TX_PATH_SET	0x00000002
 
 /* CAN-FD channel object */
 struct pciefd_board;
@@ -206,7 +192,7 @@ struct pciefd_board {
 	struct pci_dev *pci_dev;
 	int can_count;
 	spinlock_t cmd_lock;		/* 64-bits cmds must be atomic */
-	struct pciefd_can *can[0];	/* array of network devices */
+	struct pciefd_can *can[];	/* array of network devices */
 };
 
 /* supported device ids. */
@@ -418,7 +404,7 @@ static int pciefd_pre_cmd(struct peak_canfd_priv *ucan)
 			break;
 
 		/* going into operational mode: setup IRQ handler */
-		err = request_irq(priv->board->pci_dev->irq,
+		err = request_irq(priv->ucan.ndev->irq,
 				  pciefd_irq_handler,
 				  IRQF_SHARED,
 				  PCIEFD_DRV_NAME,
@@ -491,15 +477,18 @@ static int pciefd_post_cmd(struct peak_canfd_priv *ucan)
 
 		/* controller now in reset mode: */
 
-		/* stop and reset DMA addresses in Tx/Rx engines */
-		pciefd_can_clear_tx_dma(priv);
-		pciefd_can_clear_rx_dma(priv);
-
 		/* disable IRQ for this CAN */
 		pciefd_can_writereg(priv, CANFD_CTL_IEN_BIT,
 				    PCIEFD_REG_CAN_RX_CTL_CLR);
 
-		free_irq(priv->board->pci_dev->irq, priv);
+		/* stop and reset DMA addresses in Tx/Rx engines */
+		pciefd_can_clear_tx_dma(priv);
+		pciefd_can_clear_rx_dma(priv);
+
+		/* wait for above commands to complete (read cycle) */
+		(void)pciefd_sys_readreg(priv->board, PCIEFD_REG_SYS_VER1);
+
+		free_irq(priv->ucan.ndev->irq, priv);
 
 		ucan->can.state = CAN_STATE_STOPPED;
 
@@ -638,7 +627,7 @@ static int pciefd_can_probe(struct pciefd_board *pciefd)
 						 GFP_KERNEL);
 	if (!priv->tx_dma_vaddr) {
 		dev_err(&pciefd->pci_dev->dev,
-			"Tx dmaim_alloc_coherent(%u) failure\n",
+			"Tx dmam_alloc_coherent(%u) failure\n",
 			PCIEFD_TX_DMA_SIZE);
 		goto err_free_candev;
 	}
@@ -668,7 +657,7 @@ static int pciefd_can_probe(struct pciefd_board *pciefd)
 		pciefd_can_writereg(priv, CANFD_CLK_SEL_80MHZ,
 				    PCIEFD_REG_CAN_CLK_SEL);
 
-		/* fallthough */
+		fallthrough;
 	case CANFD_CLK_SEL_80MHZ:
 		priv->ucan.can.clock.freq = 80 * 1000 * 1000;
 		break;
@@ -691,7 +680,7 @@ static int pciefd_can_probe(struct pciefd_board *pciefd)
 	pciefd->can[pciefd->can_count] = priv;
 
 	dev_info(&pciefd->pci_dev->dev, "%s at reg_base=0x%p irq=%d\n",
-		 ndev->name, priv->reg_base, pciefd->pci_dev->irq);
+		 ndev->name, priv->reg_base, ndev->irq);
 
 	return 0;
 
@@ -756,8 +745,7 @@ static int peak_pciefd_probe(struct pci_dev *pdev,
 		can_count = 1;
 
 	/* allocate board structure object */
-	pciefd = devm_kzalloc(&pdev->dev, sizeof(*pciefd) +
-			      can_count * sizeof(*pciefd->can),
+	pciefd = devm_kzalloc(&pdev->dev, struct_size(pciefd, can, can_count),
 			      GFP_KERNEL);
 	if (!pciefd) {
 		err = -ENOMEM;
@@ -850,7 +838,8 @@ err_disable_pci:
 
 	/* pci_xxx_config_word() return positive PCIBIOS_xxx error codes while
 	 * the probe() function must return a negative errno in case of failure
-	 * (err is unchanged if negative) */
+	 * (err is unchanged if negative)
+	 */
 	return pcibios_err_to_errno(err);
 }
 

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * OMAP2+ Clock Management prototypes
  *
@@ -5,10 +6,6 @@
  * Copyright (C) 2007-2009 Nokia Corporation
  *
  * Written by Paul Walmsley
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #ifndef __ARCH_ASM_MACH_OMAP2_CM_H
 #define __ARCH_ASM_MACH_OMAP2_CM_H
@@ -52,6 +49,7 @@ extern void omap2_set_globals_cm(void __iomem *cm, void __iomem *cm2);
  * @wait_module_idle: ptr to the SoC CM-specific wait_module_idle impl
  * @module_enable: ptr to the SoC CM-specific module_enable impl
  * @module_disable: ptr to the SoC CM-specific module_disable impl
+ * @xlate_clkctrl: ptr to the SoC CM-specific clkctrl xlate addr impl
  */
 struct cm_ll_data {
 	int (*split_idlest_reg)(struct clk_omap_reg *idlest_reg, s16 *prcm_inst,
@@ -62,6 +60,7 @@ struct cm_ll_data {
 				u8 idlest_shift);
 	void (*module_enable)(u8 mode, u8 part, u16 inst, u16 clkctrl_offs);
 	void (*module_disable)(u8 part, u16 inst, u16 clkctrl_offs);
+	u32 (*xlate_clkctrl)(u8 part, u16 inst, u16 clkctrl_offs);
 };
 
 extern int cm_split_idlest_reg(struct clk_omap_reg *idlest_reg, s16 *prcm_inst,
@@ -72,8 +71,9 @@ int omap_cm_wait_module_idle(u8 part, s16 prcm_mod, u16 idlest_reg,
 			     u8 idlest_shift);
 int omap_cm_module_enable(u8 mode, u8 part, u16 inst, u16 clkctrl_offs);
 int omap_cm_module_disable(u8 part, u16 inst, u16 clkctrl_offs);
-extern int cm_register(struct cm_ll_data *cld);
-extern int cm_unregister(struct cm_ll_data *cld);
+u32 omap_cm_xlate_clkctrl(u8 part, u16 inst, u16 clkctrl_offs);
+extern int cm_register(const struct cm_ll_data *cld);
+extern int cm_unregister(const struct cm_ll_data *cld);
 int omap_cm_init(void);
 int omap2_cm_base_init(void);
 

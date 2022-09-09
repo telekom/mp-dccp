@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * CXL Flash Device Driver
  *
@@ -5,11 +6,6 @@
  *             Matthew R. Ochs <mrochs@linux.vnet.ibm.com>, IBM Corporation
  *
  * Copyright (C) 2015 IBM Corporation
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #ifndef _CXLFLASH_COMMON_H
@@ -24,6 +20,8 @@
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
+
+#include "backend.h"
 
 extern const struct file_operations cxlflash_cxl_fops;
 
@@ -114,6 +112,7 @@ enum cxlflash_hwq_mode {
 struct cxlflash_cfg {
 	struct afu *afu;
 
+	const struct cxlflash_backend_ops *ops;
 	struct pci_dev *dev;
 	struct pci_device_id *dev_id;
 	struct Scsi_Host *host;
@@ -129,7 +128,7 @@ struct cxlflash_cfg {
 	int lr_port;
 	atomic_t scan_host_needed;
 
-	struct cxl_afu *cxl_afu;
+	void *afu_cookie;
 
 	atomic_t recovery_threads;
 	struct mutex ctx_recovery_mutex;
@@ -203,12 +202,12 @@ struct hwq {
 	 * fields after this point
 	 */
 	struct afu *afu;
-	struct cxl_context *ctx;
-	struct cxl_ioctl_start_work work;
+	void *ctx_cookie;
 	struct sisl_host_map __iomem *host_map;		/* MC host map */
 	struct sisl_ctrl_map __iomem *ctrl_map;		/* MC control map */
 	ctx_hndl_t ctx_hndl;	/* master's context handle */
 	u32 index;		/* Index of this hwq */
+	int num_irqs;		/* Number of interrupts requested for context */
 	struct list_head pending_cmds;	/* Commands pending completion */
 
 	atomic_t hsq_credits;
@@ -221,6 +220,7 @@ struct hwq {
 	u64 *hrrq_end;
 	u64 *hrrq_curr;
 	bool toggle;
+	bool hrrq_online;
 
 	s64 room;
 
@@ -229,13 +229,14 @@ struct hwq {
 
 struct afu {
 	struct hwq hwqs[CXLFLASH_MAX_HWQS];
-	int (*send_cmd)(struct afu *, struct afu_cmd *);
-	int (*context_reset)(struct hwq *);
+	int (*send_cmd)(struct afu *afu, struct afu_cmd *cmd);
+	int (*context_reset)(struct hwq *hwq);
 
 	/* AFU HW */
 	struct cxlflash_afu_map __iomem *afu_map;	/* entire MMIO map */
 
 	atomic_t cmds_active;	/* Number of currently active AFU commands */
+	struct mutex sync_active;	/* Mutex to serialize AFU commands */
 	u64 hb;
 	u32 internal_lun;	/* User-desired LUN mode for this AFU */
 
@@ -268,6 +269,11 @@ static inline bool afu_has_cap(struct afu *afu, u64 cap)
 	u64 afu_cap = afu->interface_version >> SISL_INTVER_CAP_SHIFT;
 
 	return afu_cap & cap;
+}
+
+static inline bool afu_is_ocxl_lisn(struct afu *afu)
+{
+	return afu_has_cap(afu, SISL_INTVER_CAP_OCXL_LISN);
 }
 
 static inline bool afu_is_afu_debug(struct afu *afu)
@@ -324,7 +330,8 @@ int cxlflash_afu_sync(struct afu *afu, ctx_hndl_t c, res_hndl_t r, u8 mode);
 void cxlflash_list_init(void);
 void cxlflash_term_global_luns(void);
 void cxlflash_free_errpage(void);
-int cxlflash_ioctl(struct scsi_device *sdev, int cmd, void __user *arg);
+int cxlflash_ioctl(struct scsi_device *sdev, unsigned int cmd,
+		   void __user *arg);
 void cxlflash_stop_term_user_contexts(struct cxlflash_cfg *cfg);
 int cxlflash_mark_contexts_error(struct cxlflash_cfg *cfg);
 void cxlflash_term_local_luns(struct cxlflash_cfg *cfg);

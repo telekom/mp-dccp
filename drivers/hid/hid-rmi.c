@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Copyright (c) 2013 Andrew Duggan <aduggan@synaptics.com>
  *  Copyright (c) 2013 Synaptics Incorporated
  *  Copyright (c) 2014 Benjamin Tissoires <benjamin.tissoires@gmail.com>
  *  Copyright (c) 2014 Red Hat, Inc
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your option)
- * any later version.
  */
 
 #include <linux/kernel.h>
@@ -39,6 +35,7 @@
 /* device flags */
 #define RMI_DEVICE			BIT(0)
 #define RMI_DEVICE_HAS_PHYS_BUTTONS	BIT(1)
+#define RMI_DEVICE_OUTPUT_SET_REPORT	BIT(2)
 
 /*
  * retrieve the ctrl registers
@@ -167,9 +164,19 @@ static int rmi_set_mode(struct hid_device *hdev, u8 mode)
 
 static int rmi_write_report(struct hid_device *hdev, u8 *report, int len)
 {
+	struct rmi_data *data = hid_get_drvdata(hdev);
 	int ret;
 
-	ret = hid_hw_output_report(hdev, (void *)report, len);
+	if (data->device_flags & RMI_DEVICE_OUTPUT_SET_REPORT) {
+		/*
+		 * Talk to device by using SET_REPORT requests instead.
+		 */
+		ret = hid_hw_raw_request(hdev, report[0], report,
+				len, HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
+	} else {
+		ret = hid_hw_output_report(hdev, (void *)report, len);
+	}
+
 	if (ret < 0) {
 		dev_err(&hdev->dev, "failed to write hid report (%d)\n", ret);
 		return ret;
@@ -210,7 +217,6 @@ static int rmi_hid_read_block(struct rmi_transport_dev *xport, u16 addr,
 		ret = rmi_write_report(hdev, data->writeReport,
 						data->output_report_size);
 		if (ret != data->output_report_size) {
-			clear_bit(RMI_READ_REQUEST_PENDING, &data->flags);
 			dev_err(&hdev->dev,
 				"failed to write request output report (%d)\n",
 				ret);
@@ -368,6 +374,11 @@ static int rmi_check_sanity(struct hid_device *hdev, u8 *data, int size)
 static int rmi_raw_event(struct hid_device *hdev,
 		struct hid_report *report, u8 *data, int size)
 {
+	struct rmi_data *hdata = hid_get_drvdata(hdev);
+
+	if (!(hdata->device_flags & RMI_DEVICE))
+		return 0;
+
 	size = rmi_check_sanity(hdev, data, size);
 	if (size < 2)
 		return 0;
@@ -406,6 +417,23 @@ static int rmi_event(struct hid_device *hdev, struct hid_field *field,
 	}
 
 	return 0;
+}
+
+static void rmi_report(struct hid_device *hid, struct hid_report *report)
+{
+	struct hid_field *field = report->field[0];
+
+	if (!(hid->claimed & HID_CLAIMED_INPUT))
+		return;
+
+	switch (report->id) {
+	case RMI_READ_DATA_REPORT_ID:
+	case RMI_ATTN_REPORT_ID:
+		return;
+	}
+
+	if (field && field->hidinput && field->hidinput->input)
+		input_sync(field->hidinput->input);
 }
 
 #ifdef CONFIG_PM
@@ -632,6 +660,7 @@ static int rmi_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	hid_set_drvdata(hdev, data);
 
 	hdev->quirks |= HID_QUIRK_NO_INIT_REPORTS;
+	hdev->quirks |= HID_QUIRK_NO_INPUT_SYNC;
 
 	ret = hid_parse(hdev);
 	if (ret) {
@@ -691,7 +720,7 @@ static int rmi_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	}
 
 	if (data->device_flags & RMI_DEVICE_HAS_PHYS_BUTTONS)
-		rmi_hid_pdata.f30_data.disable = true;
+		rmi_hid_pdata.gpio_data.disable = true;
 
 	data->xport.dev = hdev->dev.parent;
 	data->xport.pdata = rmi_hid_pdata;
@@ -713,9 +742,12 @@ static void rmi_remove(struct hid_device *hdev)
 {
 	struct rmi_data *hdata = hid_get_drvdata(hdev);
 
-	clear_bit(RMI_STARTED, &hdata->flags);
-	cancel_work_sync(&hdata->reset_work);
-	rmi_unregister_transport_device(&hdata->xport);
+	if ((hdata->device_flags & RMI_DEVICE)
+	    && test_bit(RMI_STARTED, &hdata->flags)) {
+		clear_bit(RMI_STARTED, &hdata->flags);
+		cancel_work_sync(&hdata->reset_work);
+		rmi_unregister_transport_device(&hdata->xport);
+	}
 
 	hid_hw_stop(hdev);
 }
@@ -724,6 +756,9 @@ static const struct hid_device_id rmi_id[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_RAZER, USB_DEVICE_ID_RAZER_BLADE_14),
 		.driver_data = RMI_DEVICE_HAS_PHYS_BUTTONS },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_LENOVO, USB_DEVICE_ID_LENOVO_X1_COVER) },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_PRIMAX, USB_DEVICE_ID_PRIMAX_REZEL) },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_SYNAPTICS, USB_DEVICE_ID_SYNAPTICS_ACER_SWITCH5),
+		.driver_data = RMI_DEVICE_OUTPUT_SET_REPORT },
 	{ HID_DEVICE(HID_BUS_ANY, HID_GROUP_RMI, HID_ANY_ID, HID_ANY_ID) },
 	{ }
 };
@@ -736,6 +771,7 @@ static struct hid_driver rmi_driver = {
 	.remove			= rmi_remove,
 	.event			= rmi_event,
 	.raw_event		= rmi_raw_event,
+	.report			= rmi_report,
 	.input_mapping		= rmi_input_mapping,
 	.input_configured	= rmi_input_configured,
 #ifdef CONFIG_PM

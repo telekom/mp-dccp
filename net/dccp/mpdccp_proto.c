@@ -23,7 +23,6 @@
 */
 
 
-
 #include <linux/kernel.h>
 #include <linux/workqueue.h>
 #include <linux/dccp.h>
@@ -201,7 +200,7 @@ do_mpdccp_write_xmit (
 }
 
 static int do_mpdccp_setsockopt(struct sock *sk, int level, int optname,
-		char __user *optval, unsigned int optlen)
+		sockptr_t optval, unsigned int optlen)
 {
 	int				err = 0;
 	struct sock			*subsk;
@@ -216,7 +215,7 @@ static int do_mpdccp_setsockopt(struct sock *sk, int level, int optname,
 		/* handle multipath socket options */
 		switch (optname) {
 		case DCCP_SOCKOPT_MP_REORDER:
-			val = memdup_user(optval, optlen);
+			val = memdup_sockptr(optval, optlen);
 			if (IS_ERR(val)) {
 				err = PTR_ERR(val);
 				goto out_release;
@@ -234,7 +233,7 @@ static int do_mpdccp_setsockopt(struct sock *sk, int level, int optname,
 			mpcb->reorder_ops->init(mpcb);
 			goto out_release;
 		case DCCP_SOCKOPT_MP_SCHEDULER:
-			val = memdup_user(optval, optlen);
+			val = memdup_sockptr(optval, optlen);
 			if (IS_ERR(val)) {
 				err = PTR_ERR(val);
 				goto out_release;
@@ -266,7 +265,7 @@ out_release:
 
 
 int mpdccp_setsockopt(struct sock *sk, int level, int optname,
-		    char __user *optval, unsigned int optlen)
+		   sockptr_t optval, unsigned int optlen)
 {
 	int	ret;
 

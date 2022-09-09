@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2017, NVIDIA CORPORATION. All rights reserved
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 
 #include <linux/of.h>
@@ -42,6 +34,7 @@ static int tegra_bpmp_powergate_set_state(struct tegra_bpmp *bpmp,
 {
 	struct mrq_pg_request request;
 	struct tegra_bpmp_message msg;
+	int err;
 
 	memset(&request, 0, sizeof(request));
 	request.cmd = CMD_PG_SET_STATE;
@@ -53,7 +46,13 @@ static int tegra_bpmp_powergate_set_state(struct tegra_bpmp *bpmp,
 	msg.tx.data = &request;
 	msg.tx.size = sizeof(request);
 
-	return tegra_bpmp_transfer(bpmp, &msg);
+	err = tegra_bpmp_transfer(bpmp, &msg);
+	if (err < 0)
+		return err;
+	else if (msg.rx.ret < 0)
+		return -EINVAL;
+
+	return 0;
 }
 
 static int tegra_bpmp_powergate_get_state(struct tegra_bpmp *bpmp,
@@ -80,6 +79,8 @@ static int tegra_bpmp_powergate_get_state(struct tegra_bpmp *bpmp,
 	err = tegra_bpmp_transfer(bpmp, &msg);
 	if (err < 0)
 		return PG_STATE_OFF;
+	else if (msg.rx.ret < 0)
+		return -EINVAL;
 
 	return response.get_state.state;
 }
@@ -106,6 +107,8 @@ static int tegra_bpmp_powergate_get_max_id(struct tegra_bpmp *bpmp)
 	err = tegra_bpmp_transfer(bpmp, &msg);
 	if (err < 0)
 		return err;
+	else if (msg.rx.ret < 0)
+		return -EINVAL;
 
 	return response.get_max_id.max_id;
 }
@@ -132,7 +135,7 @@ static char *tegra_bpmp_powergate_get_name(struct tegra_bpmp *bpmp,
 	msg.rx.size = sizeof(response);
 
 	err = tegra_bpmp_transfer(bpmp, &msg);
-	if (err < 0)
+	if (err < 0 || msg.rx.ret < 0)
 		return NULL;
 
 	return kstrdup(response.get_name.name, GFP_KERNEL);

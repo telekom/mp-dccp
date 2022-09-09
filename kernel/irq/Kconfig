@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 menu "IRQ subsystem"
 # Options selectable by the architecture code
 
@@ -42,12 +43,12 @@ config GENERIC_IRQ_MIGRATION
 config AUTO_IRQ_AFFINITY
        bool
 
+# Interrupt injection mechanism
+config GENERIC_IRQ_INJECTION
+	bool
+
 # Tasklet based software resend for pending interrupts on enable_irq()
 config HARDIRQS_SW_RESEND
-       bool
-
-# Preflow handler support for fasteoi (sparc64)
-config IRQ_PREFLOW_FASTEOI
        bool
 
 # Edge style eoi based handler (cell)
@@ -67,6 +68,7 @@ config IRQ_DOMAIN
 config IRQ_SIM
 	bool
 	select IRQ_WORK
+	select IRQ_DOMAIN
 
 # Support for hierarchical irq domains
 config IRQ_DOMAIN_HIERARCHY
@@ -80,6 +82,7 @@ config IRQ_FASTEOI_HIERARCHY_HANDLERS
 # Generic IRQ IPI support
 config GENERIC_IRQ_IPI
 	bool
+	select IRQ_DOMAIN_HIERARCHY
 
 # Generic MSI interrupt support
 config GENERIC_MSI_IRQ
@@ -91,21 +94,20 @@ config GENERIC_MSI_IRQ_DOMAIN
 	select IRQ_DOMAIN_HIERARCHY
 	select GENERIC_MSI_IRQ
 
+config IRQ_MSI_IOMMU
+	bool
+
 config HANDLE_DOMAIN_IRQ
 	bool
 
 config IRQ_TIMINGS
 	bool
 
-config IRQ_DOMAIN_DEBUG
-	bool "Expose hardware/virtual IRQ mapping via debugfs"
-	depends on IRQ_DOMAIN && DEBUG_FS
-	help
-	  This option will show the mapping relationship between hardware irq
-	  numbers and Linux irq numbers. The mapping is exposed via debugfs
-	  in the file "irq_domain_mapping".
+config GENERIC_IRQ_MATRIX_ALLOCATOR
+	bool
 
-	  If you don't know what this means you don't need it.
+config GENERIC_IRQ_RESERVATION_MODE
+	bool
 
 # Support forced irq threading
 config IRQ_FORCED_THREADING
@@ -113,7 +115,7 @@ config IRQ_FORCED_THREADING
 
 config SPARSE_IRQ
 	bool "Support sparse irq numbering" if MAY_HAVE_SPARSE_IRQ
-	---help---
+	help
 
 	  Sparse irq numbering is useful for distro kernels that want
 	  to define a high CONFIG_NR_CPUS value but still want to have
@@ -127,8 +129,9 @@ config SPARSE_IRQ
 config GENERIC_IRQ_DEBUGFS
 	bool "Expose irq internals in debugfs"
 	depends on DEBUG_FS
+	select GENERIC_IRQ_INJECTION
 	default n
-	---help---
+	help
 
 	  Exposes internal state information through debugfs. Mostly for
 	  developers and debugging of hard to diagnose interrupt problems.
@@ -136,3 +139,8 @@ config GENERIC_IRQ_DEBUGFS
 	  If you don't know what to do here, say N.
 
 endmenu
+
+config GENERIC_IRQ_MULTI_HANDLER
+	bool
+	help
+	  Allow to specify the low level IRQ handler at run time.

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -7,11 +8,6 @@
  *
  * Authors:	Many, reorganised here by
  * 		Arnaldo Carvalho de Melo <acme@mandriva.com>
- *
- *		This program is free software; you can redistribute it and/or
- *		modify it under the terms of the GNU General Public License
- *		as published by the Free Software Foundation; either version
- *		2 of the License, or (at your option) any later version.
  */
 #ifndef _INET_SOCK_H
 #define _INET_SOCK_H
@@ -56,7 +52,7 @@ struct ip_options {
 	unsigned char	router_alert;
 	unsigned char	cipso;
 	unsigned char	__pad2;
-	unsigned char	__data[0];
+	unsigned char	__data[];
 };
 
 struct ip_options_rcu {
@@ -90,7 +86,8 @@ struct inet_request_sock {
 				wscale_ok  : 1,
 				ecn_ok	   : 1,
 				acked	   : 1,
-				no_srccheck: 1;
+				no_srccheck: 1,
+				smc_ok	   : 1;
 	u32                     ir_mark;
 	union {
 		struct ip_options_rcu __rcu	*ireq_opt;
@@ -110,7 +107,8 @@ static inline struct inet_request_sock *inet_rsk(const struct request_sock *sk)
 
 static inline u32 inet_request_mark(const struct sock *sk, struct sk_buff *skb)
 {
-	if (!sk->sk_mark && sock_net(sk)->ipv4.sysctl_tcp_fwmark_accept)
+	if (!sk->sk_mark &&
+	    READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_fwmark_accept))
 		return skb->mark;
 
 	return sk->sk_mark;
@@ -129,6 +127,27 @@ static inline int inet_request_bound_dev_if(const struct sock *sk,
 	return sk->sk_bound_dev_if;
 }
 
+static inline int inet_sk_bound_l3mdev(const struct sock *sk)
+{
+#ifdef CONFIG_NET_L3_MASTER_DEV
+	struct net *net = sock_net(sk);
+
+	if (!net->ipv4.sysctl_tcp_l3mdev_accept)
+		return l3mdev_master_ifindex_by_index(net,
+						      sk->sk_bound_dev_if);
+#endif
+
+	return 0;
+}
+
+static inline bool inet_bound_dev_eq(bool l3mdev_accept, int bound_dev_if,
+				     int dif, int sdif)
+{
+	if (!bound_dev_if)
+		return !sdif || l3mdev_accept;
+	return bound_dev_if == dif || bound_dev_if == sdif;
+}
+
 struct inet_cork {
 	unsigned int		flags;
 	__be32			addr;
@@ -140,6 +159,9 @@ struct inet_cork {
 	__u8			ttl;
 	__s16			tos;
 	char			priority;
+	__u16			gso_size;
+	u64			transmit_time;
+	u32			mark;
 };
 
 struct inet_cork_full {
@@ -204,6 +226,7 @@ struct inet_sock {
 				mc_all:1,
 				nodefrag:1;
 	__u8			bind_address_no_port:1,
+				recverr_rfc4884:1,
 				defer_connect:1; /* Indicates that fastopen_connect is set
 						  * and cookie exists so we defer connect
 						  * until first data frame is written
@@ -274,15 +297,33 @@ static inline void __inet_sk_copy_descendant(struct sock *sk_to,
 	memcpy(inet_sk(sk_to) + 1, inet_sk(sk_from) + 1,
 	       sk_from->sk_prot->obj_size - ancestor_size);
 }
-#if !(IS_ENABLED(CONFIG_IPV6))
-static inline void inet_sk_copy_descendant(struct sock *sk_to,
-					   const struct sock *sk_from)
-{
-	__inet_sk_copy_descendant(sk_to, sk_from, sizeof(struct inet_sock));
-}
-#endif
 
 int inet_sk_rebuild_header(struct sock *sk);
+
+/**
+ * inet_sk_state_load - read sk->sk_state for lockless contexts
+ * @sk: socket pointer
+ *
+ * Paired with inet_sk_state_store(). Used in places we don't hold socket lock:
+ * tcp_diag_get_info(), tcp_get_info(), tcp_poll(), get_tcp4_sock() ...
+ */
+static inline int inet_sk_state_load(const struct sock *sk)
+{
+	/* state change might impact lockless readers. */
+	return smp_load_acquire(&sk->sk_state);
+}
+
+/**
+ * inet_sk_state_store - update sk->sk_state
+ * @sk: socket pointer
+ * @newstate: new state
+ *
+ * Paired with inet_sk_state_load(). Should be used in contexts where
+ * state change might impact lockless readers.
+ */
+void inet_sk_state_store(struct sock *sk, int newstate);
+
+void inet_sk_set_state(struct sock *sk, int state);
 
 static inline unsigned int __inet_ehashfn(const __be32 laddr,
 					  const __u16 lport,
@@ -323,6 +364,14 @@ static inline void inet_dec_convert_csum(struct sock *sk)
 static inline bool inet_get_convert_csum(struct sock *sk)
 {
 	return !!inet_sk(sk)->convert_csum;
+}
+
+
+static inline bool inet_can_nonlocal_bind(struct net *net,
+					  struct inet_sock *inet)
+{
+	return READ_ONCE(net->ipv4.sysctl_ip_nonlocal_bind) ||
+		inet->freebind || inet->transparent;
 }
 
 #endif	/* _INET_SOCK_H */

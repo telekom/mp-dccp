@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * comedi/drivers/mite.c
  * Hardware driver for NI Mite PCI interface chip
  *
  * COMEDI - Linux Control and Measurement Device Interface
  * Copyright (C) 1997-2002 David A. Schleef <ds@schleef.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 /*
@@ -380,7 +371,6 @@ static unsigned int mite_get_status(struct mite_channel *mite_chan)
 		writel(CHOR_CLRDONE,
 		       mite->mmio + MITE_CHOR(mite_chan->channel));
 	}
-	mmiowb();
 	spin_unlock_irqrestore(&mite->lock, flags);
 	return status;
 }
@@ -460,7 +450,6 @@ void mite_dma_arm(struct mite_channel *mite_chan)
 	mite_chan->done = 0;
 	/* arm */
 	writel(CHOR_START, mite->mmio + MITE_CHOR(mite_chan->channel));
-	mmiowb();
 	spin_unlock_irqrestore(&mite->lock, flags);
 }
 EXPORT_SYMBOL_GPL(mite_dma_arm);
@@ -569,7 +558,14 @@ void mite_prep_dma(struct mite_channel *mite_chan,
 }
 EXPORT_SYMBOL_GPL(mite_prep_dma);
 
-static struct mite_channel *__mite_request_channel(struct mite *mite,
+/**
+ * mite_request_channel_in_range() - Request a MITE dma channel.
+ * @mite: MITE device.
+ * @ring: MITE dma ring.
+ * @min_channel: minimum channel index to use.
+ * @max_channel: maximum channel index to use.
+ */
+struct mite_channel *mite_request_channel_in_range(struct mite *mite,
 						   struct mite_ring *ring,
 						   unsigned int min_channel,
 						   unsigned int max_channel)
@@ -594,21 +590,6 @@ static struct mite_channel *__mite_request_channel(struct mite *mite,
 	spin_unlock_irqrestore(&mite->lock, flags);
 	return mite_chan;
 }
-
-/**
- * mite_request_channel_in_range() - Request a MITE dma channel.
- * @mite: MITE device.
- * @ring: MITE dma ring.
- * @min_channel: minimum channel index to use.
- * @max_channel: maximum channel index to use.
- */
-struct mite_channel *mite_request_channel_in_range(struct mite *mite,
-						   struct mite_ring *ring,
-						   unsigned int min_channel,
-						   unsigned int max_channel)
-{
-	return __mite_request_channel(mite, ring, min_channel, max_channel);
-}
 EXPORT_SYMBOL_GPL(mite_request_channel_in_range);
 
 /**
@@ -619,7 +600,8 @@ EXPORT_SYMBOL_GPL(mite_request_channel_in_range);
 struct mite_channel *mite_request_channel(struct mite *mite,
 					  struct mite_ring *ring)
 {
-	return __mite_request_channel(mite, ring, 0, mite->num_channels - 1);
+	return mite_request_channel_in_range(mite, ring, 0,
+					     mite->num_channels - 1);
 }
 EXPORT_SYMBOL_GPL(mite_request_channel);
 
@@ -647,7 +629,6 @@ void mite_release_channel(struct mite_channel *mite_chan)
 		       CHCR_CLR_LC_IE | CHCR_CLR_CONT_RB_IE,
 		       mite->mmio + MITE_CHCR(mite_chan->channel));
 		mite_chan->ring = NULL;
-		mmiowb();
 	}
 	spin_unlock_irqrestore(&mite->lock, flags);
 }
@@ -952,6 +933,6 @@ static void __exit mite_module_exit(void)
 }
 module_exit(mite_module_exit);
 
-MODULE_AUTHOR("Comedi http://www.comedi.org");
+MODULE_AUTHOR("Comedi https://www.comedi.org");
 MODULE_DESCRIPTION("Comedi helper for NI Mite PCI interface chip");
 MODULE_LICENSE("GPL");

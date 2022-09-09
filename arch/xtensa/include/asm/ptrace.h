@@ -10,6 +10,7 @@
 #ifndef _XTENSA_PTRACE_H
 #define _XTENSA_PTRACE_H
 
+#include <asm/kmem_layout.h>
 #include <uapi/asm/ptrace.h>
 
 /*
@@ -38,19 +39,7 @@
  *		+-----------------------+ --------
  */
 
-#define KERNEL_STACK_SIZE (2 * PAGE_SIZE)
-
-/*  Offsets for exception_handlers[] (3 x 64-entries x 4-byte tables). */
-
-#define EXC_TABLE_KSTK		0x004	/* Kernel Stack */
-#define EXC_TABLE_DOUBLE_SAVE	0x008	/* Double exception save area for a0 */
-#define EXC_TABLE_FIXUP		0x00c	/* Fixup handler */
-#define EXC_TABLE_PARAM		0x010	/* For passing a parameter to fixup */
-#define EXC_TABLE_SYSCALL_SAVE	0x014	/* For fast syscall handler */
-#define EXC_TABLE_FAST_USER	0x100	/* Fast user exception handler */
-#define EXC_TABLE_FAST_KERNEL	0x200	/* Fast kernel exception handler */
-#define EXC_TABLE_DEFAULT	0x300	/* Default C-Handler */
-#define EXC_TABLE_SIZE		0x400
+#define NO_SYSCALL (-1)
 
 #ifndef __ASSEMBLY__
 
@@ -91,7 +80,7 @@ struct pt_regs {
 	unsigned long areg[16];
 };
 
-#include <variant/core.h>
+#include <asm/core.h>
 
 # define arch_has_single_step()	(1)
 # define task_pt_regs(tsk) ((struct pt_regs*) \
@@ -112,6 +101,11 @@ struct pt_regs {
 # endif
 
 #define user_stack_pointer(regs) ((regs)->areg[1])
+
+static inline unsigned long regs_return_value(struct pt_regs *regs)
+{
+	return regs->areg[2];
+}
 
 #else	/* __ASSEMBLY__ */
 

@@ -1,10 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Sysctrl clock implementation for ux500 platform.
  *
  * Copyright (C) 2013 ST-Ericsson SA
  * Author: Ulf Hansson <ulf.hansson@linaro.org>
- *
- * License terms: GNU General Public License (GPL) version 2
  */
 
 #include <linux/clk-provider.h>
@@ -42,7 +41,8 @@ static int clk_sysctrl_prepare(struct clk_hw *hw)
 				clk->reg_bits[0]);
 
 	if (!ret && clk->enable_delay_us)
-		usleep_range(clk->enable_delay_us, clk->enable_delay_us);
+		usleep_range(clk->enable_delay_us, clk->enable_delay_us +
+			     (clk->enable_delay_us >> 2));
 
 	return ret;
 }
@@ -139,11 +139,9 @@ static struct clk *clk_reg_sysctrl(struct device *dev,
 		return ERR_PTR(-EINVAL);
 	}
 
-	clk = devm_kzalloc(dev, sizeof(struct clk_sysctrl), GFP_KERNEL);
-	if (!clk) {
-		dev_err(dev, "clk_sysctrl: could not allocate clk\n");
+	clk = devm_kzalloc(dev, sizeof(*clk), GFP_KERNEL);
+	if (!clk)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	/* set main clock registers */
 	clk->reg_sel[0] = reg_sel[0];

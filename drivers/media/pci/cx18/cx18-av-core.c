@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  cx18 ADEC audio functions
  *
@@ -5,16 +6,6 @@
  *
  *  Copyright (C) 2007  Hans Verkuil <hverkuil@xs4all.nl>
  *  Copyright (C) 2008  Andy Walls <awalls@md.metrocast.net>
- *
- *  This program is free software; you can redistribute it and/or
- *  modify it under the terms of the GNU General Public License
- *  as published by the Free Software Foundation; either version 2
- *  of the License, or (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
  */
 
 #include "cx18-driver.h"
@@ -236,10 +227,10 @@ static void cx18_av_initialize(struct v4l2_subdev *sd)
 	 */
 	cx18_av_and_or4(cx, CXADEC_AFE_CTRL, 0xFF000000, 0x00005D00);
 
-/* 	if(dwEnable && dw3DCombAvailable) { */
-/*      	CxDevWrReg(CXADEC_SRC_COMB_CFG, 0x7728021F); */
+/*	if(dwEnable && dw3DCombAvailable) { */
+/*		CxDevWrReg(CXADEC_SRC_COMB_CFG, 0x7728021F); */
 /*    } else { */
-/*      	CxDevWrReg(CXADEC_SRC_COMB_CFG, 0x6628021F); */
+/*		CxDevWrReg(CXADEC_SRC_COMB_CFG, 0x6628021F); */
 /*    } */
 	cx18_av_write4(cx, CXADEC_SRC_COMB_CFG, 0x6628021F);
 	default_volume = cx18_av_read(cx, 0x8d4);
@@ -319,13 +310,13 @@ void cx18_av_std_setup(struct cx18 *cx)
 		 * vblank656: half lines after line 625/mid-313 of blanked video
 		 * vblank:    half lines, after line 5/317, of blanked video
 		 * vactive:   half lines of active video +
-		 * 		5 half lines after the end of active video
+		 *		5 half lines after the end of active video
 		 *
 		 * As far as I can tell:
 		 * vblank656 starts counting from the falling edge of the first
-		 * 	vsync pulse (start of line 1 or mid-313)
+		 *	vsync pulse (start of line 1 or mid-313)
 		 * vblank starts counting from the after the 5 vsync pulses and
-		 * 	5 or 4 equalization pulses (start of line 6 or 318)
+		 *	5 or 4 equalization pulses (start of line 6 or 318)
 		 *
 		 * For 625 line systems the driver will extract VBI information
 		 * from lines 6-23 and lines 318-335 (but the slicer can only
@@ -395,9 +386,9 @@ void cx18_av_std_setup(struct cx18 *cx)
 		 *
 		 * As far as I can tell:
 		 * vblank656 starts counting from the falling edge of the first
-		 * 	vsync pulse (start of line 4 or mid-266)
+		 *	vsync pulse (start of line 4 or mid-266)
 		 * vblank starts counting from the after the 6 vsync pulses and
-		 * 	6 or 5 equalization pulses (start of line 10 or 272)
+		 *	6 or 5 equalization pulses (start of line 10 or 272)
 		 *
 		 * For 525 line systems the driver will extract VBI information
 		 * from lines 10-21 and lines 273-284.
@@ -851,7 +842,7 @@ static int cx18_av_s_std(struct v4l2_subdev *sd, v4l2_std_id norm)
 	struct cx18_av_state *state = to_cx18_av_state(sd);
 	struct cx18 *cx = v4l2_get_subdevdata(sd);
 
-	u8 fmt = 0; 	/* zero is autodetect */
+	u8 fmt = 0;	/* zero is autodetect */
 	u8 pal_m = 0;
 
 	if (state->radio == 0 && state->std == norm)

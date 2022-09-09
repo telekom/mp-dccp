@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *
  *  Cloned from drivers/media/video/s5p-tv/regs-hdmi.h
@@ -6,10 +7,6 @@
  * http://www.samsung.com/
  *
  * HDMI register header file for Samsung TVOUT driver
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
 */
 
 #ifndef SAMSUNG_REGS_HDMI_H
@@ -419,11 +416,9 @@
 #define HDMI_I2S_DSD_CON		HDMI_I2S_BASE(0x01c)
 #define HDMI_I2S_MUX_CON		HDMI_I2S_BASE(0x020)
 #define HDMI_I2S_CH_ST_CON		HDMI_I2S_BASE(0x024)
-#define HDMI_I2S_CH_ST_0		HDMI_I2S_BASE(0x028)
-#define HDMI_I2S_CH_ST_1		HDMI_I2S_BASE(0x02c)
-#define HDMI_I2S_CH_ST_2		HDMI_I2S_BASE(0x030)
-#define HDMI_I2S_CH_ST_3		HDMI_I2S_BASE(0x034)
-#define HDMI_I2S_CH_ST_4		HDMI_I2S_BASE(0x038)
+/* n must be within range 0...(HDMI_I2S_CH_ST_MAXNUM - 1) */
+#define HDMI_I2S_CH_ST_MAXNUM		5
+#define HDMI_I2S_CH_ST(n)		HDMI_I2S_BASE(0x028 + 4 * (n))
 #define HDMI_I2S_CH_ST_SH_0		HDMI_I2S_BASE(0x03c)
 #define HDMI_I2S_CH_ST_SH_1		HDMI_I2S_BASE(0x040)
 #define HDMI_I2S_CH_ST_SH_2		HDMI_I2S_BASE(0x044)
@@ -466,7 +461,7 @@
 
 /* I2S_PIN_SEL_1 */
 #define HDMI_I2S_SEL_SDATA1(x)		(((x) & 0x7) << 4)
-#define HDMI_I2S_SEL_SDATA2(x)		((x) & 0x7)
+#define HDMI_I2S_SEL_SDATA0(x)		((x) & 0x7)
 
 /* I2S_PIN_SEL_2 */
 #define HDMI_I2S_SEL_SDATA3(x)		(((x) & 0x7) << 4)

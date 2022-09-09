@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2016-17 IBM Corp.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #define pr_fmt(fmt) "vas: " fmt
@@ -18,22 +14,59 @@
 #include <linux/of_platform.h>
 #include <linux/of_address.h>
 #include <linux/of.h>
+#include <linux/irqdomain.h>
+#include <linux/interrupt.h>
+#include <asm/prom.h>
+#include <asm/xive.h>
 
 #include "vas.h"
 
-static DEFINE_MUTEX(vas_mutex);
+DEFINE_MUTEX(vas_mutex);
 static LIST_HEAD(vas_instances);
+
+static DEFINE_PER_CPU(int, cpu_vas_id);
+
+static int vas_irq_fault_window_setup(struct vas_instance *vinst)
+{
+	char devname[64];
+	int rc = 0;
+
+	snprintf(devname, sizeof(devname), "vas-%d", vinst->vas_id);
+	rc = request_threaded_irq(vinst->virq, vas_fault_handler,
+				vas_fault_thread_fn, 0, devname, vinst);
+
+	if (rc) {
+		pr_err("VAS[%d]: Request IRQ(%d) failed with %d\n",
+				vinst->vas_id, vinst->virq, rc);
+		goto out;
+	}
+
+	rc = vas_setup_fault_window(vinst);
+	if (rc)
+		free_irq(vinst->virq, vinst);
+
+out:
+	return rc;
+}
 
 static int init_vas_instance(struct platform_device *pdev)
 {
-	int rc, vasid;
-	struct resource *res;
-	struct vas_instance *vinst;
 	struct device_node *dn = pdev->dev.of_node;
+	struct vas_instance *vinst;
+	struct xive_irq_data *xd;
+	uint32_t chipid, hwirq;
+	struct resource *res;
+	int rc, cpu, vasid;
 
 	rc = of_property_read_u32(dn, "ibm,vas-id", &vasid);
 	if (rc) {
 		pr_err("No ibm,vas-id property for %s?\n", pdev->name);
+		return -ENODEV;
+	}
+
+	rc = of_property_read_u32(dn, "ibm,chip-id", &chipid);
+	if (rc) {
+		pr_err("No ibm,chip-id property for %s?\n", pdev->name);
 		return -ENODEV;
 	}
 
@@ -70,13 +103,59 @@ static int init_vas_instance(struct platform_device *pdev)
 
 	vinst->paste_win_id_shift = 63 - res->end;
 
-	pr_devel("Initialized instance [%s, %d], paste_base 0x%llx, "
-			"paste_win_id_shift 0x%llx\n", pdev->name, vasid,
-			vinst->paste_base_addr, vinst->paste_win_id_shift);
+	hwirq = xive_native_alloc_irq_on_chip(chipid);
+	if (!hwirq) {
+		pr_err("Inst%d: Unable to allocate global irq for chip %d\n",
+				vinst->vas_id, chipid);
+		return -ENOENT;
+	}
+
+	vinst->virq = irq_create_mapping(NULL, hwirq);
+	if (!vinst->virq) {
+		pr_err("Inst%d: Unable to map global irq %d\n",
+				vinst->vas_id, hwirq);
+		return -EINVAL;
+	}
+
+	xd = irq_get_handler_data(vinst->virq);
+	if (!xd) {
+		pr_err("Inst%d: Invalid virq %d\n",
+				vinst->vas_id, vinst->virq);
+		return -EINVAL;
+	}
+
+	vinst->irq_port = xd->trig_page;
+	pr_devel("Initialized instance [%s, %d] paste_base 0x%llx paste_win_id_shift 0x%llx IRQ %d Port 0x%llx\n",
+			pdev->name, vasid, vinst->paste_base_addr,
+			vinst->paste_win_id_shift, vinst->virq,
+			vinst->irq_port);
+
+	for_each_possible_cpu(cpu) {
+		if (cpu_to_chip_id(cpu) == of_get_ibm_chip_id(dn))
+			per_cpu(cpu_vas_id, cpu) = vasid;
+	}
 
 	mutex_lock(&vas_mutex);
 	list_add(&vinst->node, &vas_instances);
 	mutex_unlock(&vas_mutex);
+
+	spin_lock_init(&vinst->fault_lock);
+	/*
+	 * IRQ and fault handling setup is needed only for user space
+	 * send windows.
+	 */
+	if (vinst->virq) {
+		rc = vas_irq_fault_window_setup(vinst);
+		/*
+		 * Fault window is used only for user space send windows.
+		 * So if vinst->virq is NULL, tx_win_open returns -ENODEV
+		 * for user space.
+		 */
+		if (rc)
+			vinst->virq = 0;
+	}
+
+	vas_instance_init_dbgdir(vinst);
 
 	dev_set_drvdata(&pdev->dev, vinst);
 
@@ -98,6 +177,10 @@ struct vas_instance *find_vas_instance(int vasid)
 	struct vas_instance *vinst;
 
 	mutex_lock(&vas_mutex);
+
+	if (vasid == -1)
+		vasid = per_cpu(cpu_vas_id, smp_processor_id());
+
 	list_for_each(ent, &vas_instances) {
 		vinst = list_entry(ent, struct vas_instance, node);
 		if (vinst->vas_id == vasid) {
@@ -110,6 +193,18 @@ struct vas_instance *find_vas_instance(int vasid)
 	pr_devel("Instance %d not found\n", vasid);
 	return NULL;
 }
+
+int chip_to_vas_id(int chipid)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		if (cpu_to_chip_id(cpu) == chipid)
+			return per_cpu(cpu_vas_id, cpu);
+	}
+	return -1;
+}
+EXPORT_SYMBOL(chip_to_vas_id);
 
 static int vas_probe(struct platform_device *pdev)
 {
@@ -141,8 +236,10 @@ static int __init vas_init(void)
 		found++;
 	}
 
-	if (!found)
+	if (!found) {
+		platform_driver_unregister(&vas_driver);
 		return -ENODEV;
+	}
 
 	pr_devel("Found %d instances\n", found);
 

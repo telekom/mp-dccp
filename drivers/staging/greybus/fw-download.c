@@ -1,18 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Greybus Firmware Download Protocol Driver.
  *
  * Copyright 2016 Google Inc.
  * Copyright 2016 Linaro Ltd.
- *
- * Released under the GPLv2 only.
  */
 
 #include <linux/firmware.h>
 #include <linux/jiffies.h>
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
+#include <linux/greybus.h>
 #include "firmware.h"
-#include "greybus.h"
 
 /* Estimated minimum buffer size, actual size can be smaller than this */
 #define MIN_FETCH_SIZE		512

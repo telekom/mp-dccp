@@ -7,7 +7,7 @@
 #ifndef __ASSEMBLY__
 #ifndef	__KERNEL__
 #ifndef __EXPORTED_HEADERS__
-#warning "Attempt to use kernel headers from user space, see http://kernelnewbies.org/KernelHeaders"
+#warning "Attempt to use kernel headers from user space, see https://kernelnewbies.org/KernelHeaders"
 #endif /* __EXPORTED_HEADERS__ */
 #endif
 
@@ -48,6 +48,8 @@ typedef __u32 __bitwise __wsum;
 #define __aligned_u64 __u64 __attribute__((aligned(8)))
 #define __aligned_be64 __be64 __attribute__((aligned(8)))
 #define __aligned_le64 __le64 __attribute__((aligned(8)))
+
+typedef unsigned __bitwise __poll_t;
 
 #endif /*  __ASSEMBLY__ */
 #endif /* _UAPI_LINUX_TYPES_H */

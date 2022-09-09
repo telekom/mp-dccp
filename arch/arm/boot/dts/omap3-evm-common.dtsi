@@ -29,6 +29,7 @@
 		compatible = "usb-nop-xceiv";
 		reset-gpios = <&gpio1 21 GPIO_ACTIVE_LOW>; /* gpio_21 */
 		vcc-supply = <&hsusb2_power>;
+		#phy-cells = <0>;
 	};
 
 	leds {
@@ -121,6 +122,7 @@
 };
 
 &mmc2 {
+	interrupts-extended = <&intc 86 &omap3_pmx_core 0x12e>;
 	vmmc-supply = <&wl12xx_vmmc>;
 	non-removable;
 	bus-width = <4>;
@@ -131,8 +133,10 @@
 	wlcore: wlcore@2 {
 		compatible = "ti,wl1271";
 		reg = <2>;
-		interrupt-parent = <&gpio5>;
-		interrupts = <21 IRQ_TYPE_LEVEL_HIGH>; /* gpio 149 */
+		/* gpio_149 with uart1_rts pad as wakeirq */
+		interrupts-extended = <&gpio5 21 IRQ_TYPE_EDGE_RISING>,
+				      <&omap3_pmx_core 0x14e>;
+		interrupt-names = "irq", "wakeup";
 		ref-clock-frequency = <38400000>;
 	};
 };

@@ -14,7 +14,6 @@
 #define NUM_PRESSES_REBOOT 2	/* How many presses to activate shutdown */
 #define BUTTON_DELAY 30 	/* How many jiffies for sequence to end */
 #define VERSION "0.3"		/* Driver version number */
-#define BUTTON_MINOR 158	/* Major 10, Minor 158, /dev/nwbutton */
 
 /* Structure definitions: */
 
@@ -25,7 +24,7 @@ struct button_callback {
 
 /* Function prototypes: */
 
-static void button_sequence_finished (unsigned long parameters);
+static void button_sequence_finished(struct timer_list *unused);
 static irqreturn_t button_handler (int irq, void *dev_id);
 int button_init (void);
 int button_add_callback (void (*callback) (void), int count);

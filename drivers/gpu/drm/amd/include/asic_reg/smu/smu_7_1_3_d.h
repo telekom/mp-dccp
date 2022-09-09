@@ -52,6 +52,7 @@
 #define ixCG_SPLL_FUNC_CNTL_5                                                   0xc0500150
 #define ixCG_SPLL_FUNC_CNTL_6                                                   0xc0500154
 #define ixCG_SPLL_FUNC_CNTL_7                                                   0xc0500158
+#define ixCG_SPLL_STATUS                                                        0xC050015C
 #define ixSPLL_CNTL_MODE                                                        0xc0500160
 #define ixCG_SPLL_SPREAD_SPECTRUM                                               0xc0500164
 #define ixCG_SPLL_SPREAD_SPECTRUM_2                                             0xc0500168
@@ -1246,5 +1247,6 @@
 #define ixGC_CAC_OVRD_CU                                                        0xe7
 #define ixCURRENT_PG_STATUS                                                     0xc020029c
 #define ixCURRENT_PG_STATUS_APU                                                 0xd020029c
+#define ixPWR_SVI2_STATUS                                                       0xC0200294
 
 #endif /* SMU_7_1_3_D_H */

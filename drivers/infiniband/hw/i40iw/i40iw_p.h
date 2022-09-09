@@ -86,7 +86,7 @@ void i40iw_sc_vsi_init(struct i40iw_sc_vsi *vsi, struct i40iw_vsi_init_info *inf
 
 void i40iw_change_l2params(struct i40iw_sc_vsi *vsi, struct i40iw_l2params *l2params);
 void i40iw_qp_add_qos(struct i40iw_sc_qp *qp);
-
+void i40iw_qp_rem_qos(struct i40iw_sc_qp *qp);
 void i40iw_terminate_send_fin(struct i40iw_sc_qp *qp);
 
 void i40iw_terminate_connection(struct i40iw_sc_qp *qp, struct i40iw_aeqe_info *info);
@@ -105,6 +105,7 @@ enum i40iw_status_code i40iw_sc_static_hmc_pages_allocated(struct i40iw_sc_cqp *
 							   bool poll_registers);
 
 enum i40iw_status_code i40iw_config_fpm_values(struct i40iw_sc_dev *dev, u32 qp_count);
+enum i40iw_status_code i40iw_get_rdma_features(struct i40iw_sc_dev *dev);
 
 void free_sd_mem(struct i40iw_sc_dev *dev);
 
@@ -123,5 +124,6 @@ enum i40iw_status_code i40iw_allocate_virt_mem(struct i40iw_hw *hw,
 enum i40iw_status_code i40iw_free_virt_mem(struct i40iw_hw *hw,
 					   struct i40iw_virt_mem *mem);
 u8 i40iw_get_encoded_wqe_size(u32 wqsize, bool cqpsq);
+void i40iw_reinitialize_ieq(struct i40iw_sc_dev *dev);
 
 #endif

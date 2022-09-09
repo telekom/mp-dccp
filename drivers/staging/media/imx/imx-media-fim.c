@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Frame Interval Monitor.
  *
  * Copyright (c) 2016 Mentor Graphics Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 #include <linux/delay.h>
 #include <linux/irq.h>
@@ -41,8 +37,6 @@ enum {
 #define FIM_CL_TOLERANCE_MAX_DEF   0 /* no max tolerance (unbounded) */
 
 struct imx_media_fim {
-	struct imx_media_dev *md;
-
 	/* the owning subdev of this fim instance */
 	struct v4l2_subdev *sd;
 
@@ -66,7 +60,7 @@ struct imx_media_fim {
 	int               icap_flags;
 
 	int               counter;
-	struct timespec   last_ts;
+	ktime_t		  last_ts;
 	unsigned long     sum;       /* usec */
 	unsigned long     nominal;   /* usec */
 
@@ -147,22 +141,26 @@ static void send_fim_event(struct imx_media_fim *fim, unsigned long error)
  * (presumably random) interrupt latency.
  */
 static void frame_interval_monitor(struct imx_media_fim *fim,
-				   struct timespec *ts)
+				   ktime_t timestamp)
 {
-	unsigned long interval, error, error_avg;
+	long long interval, error;
+	unsigned long error_avg;
 	bool send_event = false;
-	struct timespec diff;
 
 	if (!fim->enabled || ++fim->counter <= 0)
 		goto out_update_ts;
 
-	diff = timespec_sub(*ts, fim->last_ts);
-	interval = diff.tv_sec * 1000 * 1000 + diff.tv_nsec / 1000;
-	error = abs(interval - fim->nominal);
+	/* max error is less than l00µs, so use 32-bit division or fail */
+	interval = ktime_to_ns(ktime_sub(timestamp, fim->last_ts));
+	error = abs(interval - NSEC_PER_USEC * (u64)fim->nominal);
+	if (error > U32_MAX)
+		error = U32_MAX;
+	else
+		error = abs((u32)error / NSEC_PER_USEC);
 
 	if (fim->tolerance_max && error >= fim->tolerance_max) {
 		dev_dbg(fim->sd->dev,
-			"FIM: %lu ignored, out of tolerance bounds\n",
+			"FIM: %llu ignored, out of tolerance bounds\n",
 			error);
 		fim->counter--;
 		goto out_update_ts;
@@ -184,7 +182,7 @@ static void frame_interval_monitor(struct imx_media_fim *fim,
 	}
 
 out_update_ts:
-	fim->last_ts = *ts;
+	fim->last_ts = timestamp;
 	if (send_event)
 		send_fim_event(fim, error_avg);
 }
@@ -195,14 +193,14 @@ out_update_ts:
  * to interrupt latency.
  */
 static void fim_input_capture_handler(int channel, void *dev_id,
-				      struct timespec *ts)
+				      ktime_t timestamp)
 {
 	struct imx_media_fim *fim = dev_id;
 	unsigned long flags;
 
 	spin_lock_irqsave(&fim->lock, flags);
 
-	frame_interval_monitor(fim, ts);
+	frame_interval_monitor(fim, timestamp);
 
 	if (!completion_done(&fim->icap_first_event))
 		complete(&fim->icap_first_event);
@@ -405,18 +403,17 @@ err_free:
  * the frame_interval_monitor() is called by the input capture event
  * callback handler in that case.
  */
-void imx_media_fim_eof_monitor(struct imx_media_fim *fim, struct timespec *ts)
+void imx_media_fim_eof_monitor(struct imx_media_fim *fim, ktime_t timestamp)
 {
 	unsigned long flags;
 
 	spin_lock_irqsave(&fim->lock, flags);
 
 	if (!icap_enabled(fim))
-		frame_interval_monitor(fim, ts);
+		frame_interval_monitor(fim, timestamp);
 
 	spin_unlock_irqrestore(&fim->lock, flags);
 }
-EXPORT_SYMBOL_GPL(imx_media_fim_eof_monitor);
 
 /* Called by the subdev in its s_stream callback */
 int imx_media_fim_set_stream(struct imx_media_fim *fim,
@@ -453,15 +450,13 @@ out:
 	v4l2_ctrl_unlock(fim->ctrl[FIM_CL_ENABLE]);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(imx_media_fim_set_stream);
 
 int imx_media_fim_add_controls(struct imx_media_fim *fim)
 {
 	/* add the FIM controls to the calling subdev ctrl handler */
 	return v4l2_ctrl_add_handler(fim->sd->ctrl_handler,
-				     &fim->ctrl_handler, NULL);
+				     &fim->ctrl_handler, NULL, false);
 }
-EXPORT_SYMBOL_GPL(imx_media_fim_add_controls);
 
 /* Called by the subdev in its subdev registered callback */
 struct imx_media_fim *imx_media_fim_init(struct v4l2_subdev *sd)
@@ -473,8 +468,6 @@ struct imx_media_fim *imx_media_fim_init(struct v4l2_subdev *sd)
 	if (!fim)
 		return ERR_PTR(-ENOMEM);
 
-	/* get media device */
-	fim->md = dev_get_drvdata(sd->v4l2_dev->dev);
 	fim->sd = sd;
 
 	spin_lock_init(&fim->lock);
@@ -485,10 +478,8 @@ struct imx_media_fim *imx_media_fim_init(struct v4l2_subdev *sd)
 
 	return fim;
 }
-EXPORT_SYMBOL_GPL(imx_media_fim_init);
 
 void imx_media_fim_free(struct imx_media_fim *fim)
 {
 	v4l2_ctrl_handler_free(&fim->ctrl_handler);
 }
-EXPORT_SYMBOL_GPL(imx_media_fim_free);

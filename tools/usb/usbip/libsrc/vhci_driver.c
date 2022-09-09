@@ -106,7 +106,7 @@ static int parse_status(const char *value)
 	return 0;
 }
 
-#define MAX_STATUS_NAME 16
+#define MAX_STATUS_NAME 18
 
 static int refresh_imported_device_list(void)
 {
@@ -150,7 +150,7 @@ static int get_nports(struct udev_device *hc_device)
 
 static int vhci_hcd_filter(const struct dirent *dirent)
 {
-	return strcmp(dirent->d_name, "vhci_hcd") >= 0;
+	return !strncmp(dirent->d_name, "vhci_hcd.", 9);
 }
 
 static int get_ncontrollers(void)

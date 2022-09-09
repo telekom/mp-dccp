@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * OMAP2xxx CM module functions
  *
@@ -5,10 +6,6 @@
  * Copyright (C) 2008-2010, 2012 Texas Instruments, Inc.
  * Paul Walmsley
  * Rajendra Nayak <rnayak@ti.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -385,7 +382,7 @@ void omap2xxx_cm_set_mod_dividers(u32 mpu, u32 dsp, u32 gfx, u32 core, u32 mdm)
  *
  */
 
-static struct cm_ll_data omap2xxx_cm_ll_data = {
+static const struct cm_ll_data omap2xxx_cm_ll_data = {
 	.split_idlest_reg	= &omap2xxx_cm_split_idlest_reg,
 	.wait_module_ready	= &omap2xxx_cm_wait_module_ready,
 };

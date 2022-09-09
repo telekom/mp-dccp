@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * OpenRISC traps.c
  *
@@ -9,15 +10,9 @@
  * Copyright (C) 2003 Matjaz Breskvar <phoenix@bsemi.com>
  * Copyright (C) 2010-2011 Jonas Bonn <jonas@southpole.se>
  *
- *      This program is free software; you can redistribute it and/or
- *      modify it under the terms of the GNU General Public License
- *      as published by the Free Software Foundation; either version
- *      2 of the License, or (at your option) any later version.
- *
  *  Here we handle the break vectors not used by the system call
  *  mechanism, as well as some general stack/register dumping
  *  things.
- *
  */
 
 #include <linux/init.h>
@@ -35,78 +30,30 @@
 #include <linux/kallsyms.h>
 #include <linux/uaccess.h>
 
-#include <asm/segment.h>
 #include <asm/io.h>
-#include <asm/pgtable.h>
-
-extern char _etext, _stext;
+#include <asm/unwinder.h>
+#include <asm/sections.h>
 
 int kstack_depth_to_print = 0x180;
 int lwa_flag;
 unsigned long __user *lwa_addr;
 
-static inline int valid_stack_ptr(struct thread_info *tinfo, void *p)
+void print_trace(void *data, unsigned long addr, int reliable)
 {
-	return p > (void *)tinfo && p < (void *)tinfo + THREAD_SIZE - 3;
-}
+	const char *loglvl = data;
 
-void show_trace(struct task_struct *task, unsigned long *stack)
-{
-	struct thread_info *context;
-	unsigned long addr;
-
-	context = (struct thread_info *)
-	    ((unsigned long)stack & (~(THREAD_SIZE - 1)));
-
-	while (valid_stack_ptr(context, stack)) {
-		addr = *stack++;
-		if (__kernel_text_address(addr)) {
-			printk(" [<%08lx>]", addr);
-			print_symbol(" %s", addr);
-			printk("\n");
-		}
-	}
-	printk(" =======================\n");
+	printk("%s[<%p>] %s%pS\n", loglvl, (void *) addr, reliable ? "" : "? ",
+	       (void *) addr);
 }
 
 /* displays a short stack trace */
-void show_stack(struct task_struct *task, unsigned long *esp)
+void show_stack(struct task_struct *task, unsigned long *esp, const char *loglvl)
 {
-	unsigned long addr, *stack;
-	int i;
-
 	if (esp == NULL)
 		esp = (unsigned long *)&esp;
 
-	stack = esp;
-
-	printk("Stack dump [0x%08lx]:\n", (unsigned long)esp);
-	for (i = 0; i < kstack_depth_to_print; i++) {
-		if (kstack_end(stack))
-			break;
-		if (__get_user(addr, stack)) {
-			/* This message matches "failing address" marked
-			   s390 in ksymoops, so lines containing it will
-			   not be filtered out by ksymoops.  */
-			printk("Failing address 0x%lx\n", (unsigned long)stack);
-			break;
-		}
-		stack++;
-
-		printk("sp + %02d: 0x%08lx\n", i * 4, addr);
-	}
-	printk("\n");
-
-	show_trace(task, esp);
-
-	return;
-}
-
-void show_trace_task(struct task_struct *tsk)
-{
-	/*
-	 * TODO: SysRq-T trace dump...
-	 */
+	printk("%sCall trace:\n", loglvl);
+	unwind_stack((void *)loglvl, esp, print_trace);
 }
 
 void show_registers(struct pt_regs *regs)
@@ -115,7 +62,7 @@ void show_registers(struct pt_regs *regs)
 	int in_kernel = 1;
 	unsigned long esp;
 
-	esp = (unsigned long)(&regs->sp);
+	esp = (unsigned long)(regs->sp);
 	if (user_mode(regs))
 		in_kernel = 0;
 
@@ -150,7 +97,7 @@ void show_registers(struct pt_regs *regs)
 	if (in_kernel) {
 
 		printk("\nStack: ");
-		show_stack(NULL, (unsigned long *)esp);
+		show_stack(NULL, (unsigned long *)esp, KERN_EMERG);
 
 		printk("\nCode: ");
 		if (regs->pc < PAGE_OFFSET)
@@ -291,27 +238,16 @@ void __init trap_init(void)
 
 asmlinkage void do_trap(struct pt_regs *regs, unsigned long address)
 {
-	siginfo_t info;
-	memset(&info, 0, sizeof(info));
-	info.si_signo = SIGTRAP;
-	info.si_code = TRAP_TRACE;
-	info.si_addr = (void *)address;
-	force_sig_info(SIGTRAP, &info, current);
+	force_sig_fault(SIGTRAP, TRAP_TRACE, (void __user *)address);
 
 	regs->pc += 4;
 }
 
 asmlinkage void do_unaligned_access(struct pt_regs *regs, unsigned long address)
 {
-	siginfo_t info;
-
 	if (user_mode(regs)) {
 		/* Send a SIGBUS */
-		info.si_signo = SIGBUS;
-		info.si_errno = 0;
-		info.si_code = BUS_ADRALN;
-		info.si_addr = (void __user *)address;
-		force_sig_info(SIGBUS, &info, current);
+		force_sig_fault(SIGBUS, BUS_ADRALN, (void __user *)address);
 	} else {
 		printk("KERNEL: Unaligned Access 0x%.8lx\n", address);
 		show_registers(regs);
@@ -322,15 +258,9 @@ asmlinkage void do_unaligned_access(struct pt_regs *regs, unsigned long address)
 
 asmlinkage void do_bus_fault(struct pt_regs *regs, unsigned long address)
 {
-	siginfo_t info;
-
 	if (user_mode(regs)) {
 		/* Send a SIGBUS */
-		info.si_signo = SIGBUS;
-		info.si_errno = 0;
-		info.si_code = BUS_ADRERR;
-		info.si_addr = (void *)address;
-		force_sig_info(SIGBUS, &info, current);
+		force_sig_fault(SIGBUS, BUS_ADRERR, (void __user *)address);
 	} else {		/* Kernel mode */
 		printk("KERNEL: Bus error (SIGBUS) 0x%.8lx\n", address);
 		show_registers(regs);
@@ -435,7 +365,7 @@ static inline void simulate_lwa(struct pt_regs *regs, unsigned long address,
 
 	if (get_user(value, lwa_addr)) {
 		if (user_mode(regs)) {
-			force_sig(SIGSEGV, current);
+			force_sig(SIGSEGV);
 			return;
 		}
 
@@ -482,7 +412,7 @@ static inline void simulate_swa(struct pt_regs *regs, unsigned long address,
 
 	if (put_user(regs->gpr[rb], vaddr)) {
 		if (user_mode(regs)) {
-			force_sig(SIGSEGV, current);
+			force_sig(SIGSEGV);
 			return;
 		}
 
@@ -505,7 +435,6 @@ static inline void simulate_swa(struct pt_regs *regs, unsigned long address,
 asmlinkage void do_illegal_instruction(struct pt_regs *regs,
 				       unsigned long address)
 {
-	siginfo_t info;
 	unsigned int op;
 	unsigned int insn = *((unsigned int *)address);
 
@@ -526,11 +455,7 @@ asmlinkage void do_illegal_instruction(struct pt_regs *regs,
 
 	if (user_mode(regs)) {
 		/* Send a SIGILL */
-		info.si_signo = SIGILL;
-		info.si_errno = 0;
-		info.si_code = ILL_ILLOPC;
-		info.si_addr = (void *)address;
-		force_sig_info(SIGBUS, &info, current);
+		force_sig_fault(SIGILL, ILL_ILLOPC, (void __user *)address);
 	} else {		/* Kernel mode */
 		printk("KERNEL: Illegal instruction (SIGILL) 0x%.8lx\n",
 		       address);

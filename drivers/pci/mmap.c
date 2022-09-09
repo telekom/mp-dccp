@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * mmap.c — generic PCI resource mmap helper
+ * Generic PCI resource mmap helper
  *
  * Copyright © 2017 Amazon.com, Inc. or its affiliates.
  *
  * Author: David Woodhouse <dwmw2@infradead.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -76,7 +73,7 @@ int pci_mmap_resource_range(struct pci_dev *pdev, int bar,
 #elif defined(HAVE_PCI_MMAP) /* && !ARCH_GENERIC_PCI_MMAP_RESOURCE */
 
 /*
- * Legacy setup: Impement pci_mmap_resource_range() as a wrapper around
+ * Legacy setup: Implement pci_mmap_resource_range() as a wrapper around
  * the architecture's pci_mmap_page_range(), converting to "user visible"
  * addresses as necessary.
  */

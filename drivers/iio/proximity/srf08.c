@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * srf08.c - Support for Devantech SRFxx ultrasonic ranger
  *           with i2c interface
@@ -5,14 +6,10 @@
  *
  * Copyright (c) 2016, 2017 Andreas Klinger <ak@it-klinger.de>
  *
- * This file is subject to the terms and conditions of version 2 of
- * the GNU General Public License. See the file COPYING in the main
- * directory of this archive for more details.
- *
  * For details about the device see:
- * http://www.robot-electronics.co.uk/htm/srf08tech.html
- * http://www.robot-electronics.co.uk/htm/srf10tech.htm
- * http://www.robot-electronics.co.uk/htm/srf02tech.htm
+ * https://www.robot-electronics.co.uk/htm/srf08tech.html
+ * https://www.robot-electronics.co.uk/htm/srf10tech.htm
+ * https://www.robot-electronics.co.uk/htm/srf02tech.htm
  */
 
 #include <linux/err.h>
@@ -66,11 +63,11 @@ struct srf08_data {
 	int			range_mm;
 	struct mutex		lock;
 
-	/*
-	 * triggered buffer
-	 * 1x16-bit channel + 3x16 padding + 4x16 timestamp
-	 */
-	s16			buffer[8];
+	/* Ensure timestamp is naturally aligned */
+	struct {
+		s16 chan;
+		s64 timestamp __aligned(8);
+	} scan;
 
 	/* Sensor-Type */
 	enum srf08_sensor_type	sensor_type;
@@ -193,9 +190,9 @@ static irqreturn_t srf08_trigger_handler(int irq, void *p)
 
 	mutex_lock(&data->lock);
 
-	data->buffer[0] = sensor_data;
+	data->scan.chan = sensor_data;
 	iio_push_to_buffers_with_timestamp(indio_dev,
-						data->buffer, pf->timestamp);
+					   &data->scan, pf->timestamp);
 
 	mutex_unlock(&data->lock);
 err:
@@ -436,7 +433,6 @@ static const struct iio_chan_spec srf08_channels[] = {
 static const struct iio_info srf08_info = {
 	.read_raw = srf08_read_raw,
 	.attrs = &srf08_attribute_group,
-	.driver_module = THIS_MODULE,
 };
 
 /*
@@ -445,7 +441,6 @@ static const struct iio_info srf08_info = {
  */
 static const struct iio_info srf02_info = {
 	.read_raw = srf08_read_raw,
-	.driver_module = THIS_MODULE,
 };
 
 static int srf08_probe(struct i2c_client *client,
@@ -488,7 +483,6 @@ static int srf08_probe(struct i2c_client *client,
 	}
 
 	indio_dev->name = id->name;
-	indio_dev->dev.parent = &client->dev;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = srf08_channels;
 	indio_dev->num_channels = ARRAY_SIZE(srf08_channels);

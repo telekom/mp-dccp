@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Keystone accumulator queue manager
  *
@@ -5,15 +6,6 @@
  * Author:	Sandeep Nair <sandeep_n@ti.com>
  *		Cyril Chemparathy <cyril@ti.com>
  *		Santosh Shilimkar <santosh.shilimkar@ti.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  */
 
 #include <linux/dma-mapping.h>
@@ -405,8 +397,8 @@ static int knav_acc_init_queue(struct knav_range_info *range,
 {
 	unsigned id = kq->id - range->queue_base;
 
-	kq->descs = devm_kzalloc(range->kdev->dev,
-				 ACC_DESCS_MAX * sizeof(u32), GFP_KERNEL);
+	kq->descs = devm_kcalloc(range->kdev->dev,
+				 ACC_DESCS_MAX, sizeof(u32), GFP_KERNEL);
 	if (!kq->descs)
 		return -ENOMEM;
 
@@ -458,7 +450,7 @@ static int knav_acc_free_range(struct knav_range_info *range)
 	return 0;
 }
 
-struct knav_range_ops knav_acc_range_ops = {
+static struct knav_range_ops knav_acc_range_ops = {
 	.set_notify	= knav_acc_set_notify,
 	.init_queue	= knav_acc_init_queue,
 	.open_queue	= knav_acc_open_queue,
@@ -552,7 +544,7 @@ int knav_init_acc_range(struct knav_device *kdev,
 	info->list_size = list_size;
 	mem_size   = PAGE_ALIGN(list_size * 2);
 	info->mem_size  = mem_size;
-	range->acc = devm_kzalloc(kdev->dev, channels * sizeof(*range->acc),
+	range->acc = devm_kcalloc(kdev->dev, channels, sizeof(*range->acc),
 				  GFP_KERNEL);
 	if (!range->acc)
 		return -ENOMEM;

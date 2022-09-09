@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * MELFAS MIP4 Touchscreen
  *
  * Copyright (C) 2016 MELFAS Inc.
  *
  * Author : Sangwon Jee <jeesw@melfas.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
  */
 
 #include <linux/acpi.h>
@@ -400,7 +391,7 @@ static void mip4_clear_input(struct mip4_ts *ts)
 	/* Screen */
 	for (i = 0; i < MIP4_MAX_FINGERS; i++) {
 		input_mt_slot(ts->input, i);
-		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, 0);
+		input_mt_report_slot_inactive(ts->input);
 	}
 
 	/* Keys */
@@ -543,7 +534,7 @@ static void mip4_report_touch(struct mip4_ts *ts, u8 *packet)
 	} else {
 		/* Release event */
 		input_mt_slot(ts->input, id);
-		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, 0);
+		input_mt_report_slot_inactive(ts->input);
 	}
 
 	input_mt_sync_frame(ts->input);
@@ -1433,13 +1424,6 @@ static const struct attribute_group mip4_attr_group = {
 	.attrs = mip4_attrs,
 };
 
-static void mip4_sysfs_remove(void *_data)
-{
-	struct mip4_ts *ts = _data;
-
-	sysfs_remove_group(&ts->client->dev.kobj, &mip4_attr_group);
-}
-
 static int mip4_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	struct mip4_ts *ts;
@@ -1535,18 +1519,10 @@ static int mip4_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		return error;
 	}
 
-	error = sysfs_create_group(&client->dev.kobj, &mip4_attr_group);
+	error = devm_device_add_group(&client->dev, &mip4_attr_group);
 	if (error) {
 		dev_err(&client->dev,
 			"Failed to create sysfs attribute group: %d\n", error);
-		return error;
-	}
-
-	error = devm_add_action(&client->dev, mip4_sysfs_remove, ts);
-	if (error) {
-		mip4_sysfs_remove(ts);
-		dev_err(&client->dev,
-			"Failed to install sysfs remoce action: %d\n", error);
 		return error;
 	}
 
@@ -1626,6 +1602,5 @@ static struct i2c_driver mip4_driver = {
 module_i2c_driver(mip4_driver);
 
 MODULE_DESCRIPTION("MELFAS MIP4 Touchscreen");
-MODULE_VERSION("2016.10.31");
 MODULE_AUTHOR("Sangwon Jee <jeesw@melfas.com>");
 MODULE_LICENSE("GPL");

@@ -1,34 +1,9 @@
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause) */
 /* QLogic qed NIC Driver
  * Copyright (c) 2015-2017  QLogic Corporation
- *
- * This software is available to you under a choice of one of two
- * licenses.  You may choose to be licensed under the terms of the GNU
- * General Public License (GPL) Version 2, available from the file
- * COPYING in the main directory of this source tree, or the
- * OpenIB.org BSD license below:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      - Redistributions of source code must retain the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer.
- *
- *      - Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and /or other materials
- *        provided with the distribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Copyright (c) 2019-2020 Marvell International Ltd.
  */
+
 #ifndef _QED_IWARP_H
 #define _QED_IWARP_H
 
@@ -46,30 +21,69 @@ enum qed_iwarp_qp_state qed_roce2iwarp_state(enum qed_roce_qp_state state);
 
 #define QED_IWARP_LL2_SYN_TX_SIZE       (128)
 #define QED_IWARP_LL2_SYN_RX_SIZE       (256)
-#define QED_IWARP_MAX_SYN_PKT_SIZE      (128)
-#define QED_IWARP_HANDLE_INVAL			(0xff)
+
+#define QED_IWARP_LL2_OOO_DEF_TX_SIZE   (256)
+#define QED_IWARP_MAX_OOO		(16)
+#define QED_IWARP_LL2_OOO_MAX_RX_SIZE   (16384)
+
+#define QED_IWARP_HANDLE_INVAL		(0xff)
 
 struct qed_iwarp_ll2_buff {
+	struct qed_iwarp_ll2_buff *piggy_buf;
 	void *data;
 	dma_addr_t data_phys_addr;
 	u32 buff_size;
+};
+
+struct qed_iwarp_ll2_mpa_buf {
+	struct list_head list_entry;
+	struct qed_iwarp_ll2_buff *ll2_buf;
+	struct unaligned_opaque_data data;
+	u16 tcp_payload_len;
+	u8 placement_offset;
+};
+
+/* In some cases a fpdu will arrive with only one byte of the header, in this
+ * case the fpdu_length will be partial (contain only higher byte and
+ * incomplete bytes will contain the invalid value
+ */
+#define QED_IWARP_INVALID_INCOMPLETE_BYTES 0xffff
+
+struct qed_iwarp_fpdu {
+	struct qed_iwarp_ll2_buff *mpa_buf;
+	void *mpa_frag_virt;
+	dma_addr_t mpa_frag;
+	dma_addr_t pkt_hdr;
+	u16 mpa_frag_len;
+	u16 fpdu_length;
+	u16 incomplete_bytes;
+	u8 pkt_hdr_size;
 };
 
 struct qed_iwarp_info {
 	struct list_head listen_list;	/* qed_iwarp_listener */
 	struct list_head ep_list;	/* qed_iwarp_ep */
 	struct list_head ep_free_list;	/* pre-allocated ep's */
+	struct list_head mpa_buf_list;	/* list of mpa_bufs */
+	struct list_head mpa_buf_pending_list;
 	spinlock_t iw_lock;	/* for iwarp resources */
 	spinlock_t qp_lock;	/* for teardown races */
 	u32 rcv_wnd_scale;
+	u16 rcv_wnd_size;
 	u16 max_mtu;
 	u8 mac_addr[ETH_ALEN];
 	u8 crc_needed;
 	u8 tcp_flags;
 	u8 ll2_syn_handle;
+	u8 ll2_ooo_handle;
+	u8 ll2_mpa_handle;
 	u8 peer2peer;
 	enum mpa_negotiation_mode mpa_rev;
 	enum mpa_rtr_type rtr_type;
+	struct qed_iwarp_fpdu *partial_fpdus;
+	struct qed_iwarp_ll2_mpa_buf *mpa_bufs;
+	u8 *mpa_intermediate_buf;
+	u16 max_num_partial_fpdus;
 };
 
 enum qed_iwarp_ep_state {
@@ -144,10 +158,13 @@ struct qed_iwarp_listener {
 
 int qed_iwarp_alloc(struct qed_hwfn *p_hwfn);
 
-int qed_iwarp_setup(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt,
+int qed_iwarp_setup(struct qed_hwfn *p_hwfn,
 		    struct qed_rdma_start_in_params *params);
 
-int qed_iwarp_stop(struct qed_hwfn *p_hwfn, struct qed_ptt *p_ptt);
+void qed_iwarp_init_fw_ramrod(struct qed_hwfn *p_hwfn,
+			      struct iwarp_init_func_ramrod_data *p_ramrod);
+
+int qed_iwarp_stop(struct qed_hwfn *p_hwfn);
 
 void qed_iwarp_resc_free(struct qed_hwfn *p_hwfn);
 

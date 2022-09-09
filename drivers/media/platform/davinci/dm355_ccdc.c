@@ -1,15 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2005-2009 Texas Instruments Inc
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * CCDC hardware module for DM355
  * ------------------------------
@@ -20,10 +11,10 @@
  * pre-process the Bayer RGB data, before writing it to SDRAM.
  *
  * TODO: 1) Raw bayer parameter settings and bayer capture
- * 	 2) Split module parameter structure to module specific ioctl structs
+ *	 2) Split module parameter structure to module specific ioctl structs
  *	 3) add support for lense shading correction
  *	 4) investigate if enum used for user space type definition
- * 	    to be replaced by #defines or integer
+ *	    to be replaced by #defines or integer
  */
 #include <linux/platform_device.h>
 #include <linux/uaccess.h>
@@ -841,7 +832,7 @@ static int ccdc_set_hw_if_params(struct vpfe_hw_if_param *params)
 	return 0;
 }
 
-static struct ccdc_hw_device ccdc_hw_dev = {
+static const struct ccdc_hw_device ccdc_hw_dev = {
 	.name = "DM355 CCDC",
 	.owner = THIS_MODULE,
 	.hw_ops = {
@@ -892,7 +883,7 @@ static int dm355_ccdc_probe(struct platform_device *pdev)
 		goto fail_nores;
 	}
 
-	ccdc_cfg.base_addr = ioremap_nocache(res->start, resource_size(res));
+	ccdc_cfg.base_addr = ioremap(res->start, resource_size(res));
 	if (!ccdc_cfg.base_addr) {
 		status = -ENOMEM;
 		goto fail_nomem;

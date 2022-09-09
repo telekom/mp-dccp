@@ -1,17 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017 Chen-Yu Tsai. All rights reserved.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/clk-provider.h>
+#include <linux/io.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
 
@@ -76,15 +69,26 @@ static struct ccu_mult pll_c1cpux_clk = {
  */
 #define SUN8I_A83T_PLL_AUDIO_REG	0x008
 
+/* clock rates doubled for post divider */
+static struct ccu_sdm_setting pll_audio_sdm_table[] = {
+	{ .rate = 45158400, .pattern = 0xc00121ff, .m = 29, .n = 54 },
+	{ .rate = 49152000, .pattern = 0xc000e147, .m = 30, .n = 61 },
+};
+
 static struct ccu_nm pll_audio_clk = {
 	.enable		= BIT(31),
 	.lock		= BIT(2),
 	.n		= _SUNXI_CCU_MULT_OFFSET_MIN_MAX(8, 8, 0, 12, 0),
 	.m		= _SUNXI_CCU_DIV(0, 6),
+	.fixed_post_div	= 2,
+	.sdm		= _SUNXI_CCU_SDM(pll_audio_sdm_table, BIT(24),
+					 0x284, BIT(31)),
 	.common		= {
 		.reg		= SUN8I_A83T_PLL_AUDIO_REG,
 		.lock_reg	= CCU_SUN8I_A83T_LOCK_REG,
-		.features	= CCU_FEATURE_LOCK_REG,
+		.features	= CCU_FEATURE_LOCK_REG |
+				  CCU_FEATURE_FIXED_POSTDIV |
+				  CCU_FEATURE_SIGMA_DELTA_MOD,
 		.hw.init	= CLK_HW_INIT("pll-audio", "osc24M",
 					      &ccu_nm_ops, CLK_SET_RATE_UNGATE),
 	},
@@ -97,6 +101,7 @@ static struct ccu_nkmp pll_video0_clk = {
 	.n		= _SUNXI_CCU_MULT_OFFSET_MIN_MAX(8, 8, 0, 12, 0),
 	.m		= _SUNXI_CCU_DIV(16, 1), /* input divider */
 	.p		= _SUNXI_CCU_DIV(0, 2), /* output divider */
+	.max_rate	= 3000000000UL,
 	.common		= {
 		.reg		= 0x010,
 		.lock_reg	= CCU_SUN8I_A83T_LOCK_REG,
@@ -209,6 +214,7 @@ static struct ccu_nkmp pll_video1_clk = {
 	.n		= _SUNXI_CCU_MULT_OFFSET_MIN_MAX(8, 8, 0, 12, 0),
 	.m		= _SUNXI_CCU_DIV(16, 1), /* input divider */
 	.p		= _SUNXI_CCU_DIV(0, 2), /* external divider p */
+	.max_rate	= 3000000000UL,
 	.common		= {
 		.reg		= 0x04c,
 		.lock_reg	= CCU_SUN8I_A83T_LOCK_REG,
@@ -500,13 +506,14 @@ static SUNXI_CCU_GATE(csi_misc_clk, "csi-misc", "osc24M", 0x130, BIT(16), 0);
 
 static SUNXI_CCU_GATE(mipi_csi_clk, "mipi-csi", "osc24M", 0x130, BIT(31), 0);
 
-static const char * const csi_mclk_parents[] = { "pll-de", "osc24M" };
-static const u8 csi_mclk_table[] = { 3, 5 };
+static const char * const csi_mclk_parents[] = { "pll-video0", "pll-de",
+						 "osc24M" };
+static const u8 csi_mclk_table[] = { 0, 3, 5 };
 static SUNXI_CCU_M_WITH_MUX_TABLE_GATE(csi_mclk_clk, "csi-mclk",
 				       csi_mclk_parents, csi_mclk_table,
 				       0x134,
 				       0, 5,	/* M */
-				       10, 3,	/* mux */
+				       8, 3,	/* mux */
 				       BIT(15),	/* gate */
 				       0);
 
@@ -889,9 +896,10 @@ static int sun8i_a83t_ccu_probe(struct platform_device *pdev)
 	if (IS_ERR(reg))
 		return PTR_ERR(reg);
 
-	/* Enforce d1 = 0, d2 = 0 for Audio PLL */
+	/* Enforce d1 = 0, d2 = 1 for Audio PLL */
 	val = readl(reg + SUN8I_A83T_PLL_AUDIO_REG);
-	val &= ~(BIT(16) | BIT(18));
+	val &= ~BIT(16);
+	val |= BIT(18);
 	writel(val, reg + SUN8I_A83T_PLL_AUDIO_REG);
 
 	/* Enforce P = 1 for both CPU cluster PLLs */

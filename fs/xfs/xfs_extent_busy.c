@@ -1,21 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2000-2002,2005 Silicon Graphics, Inc.
  * Copyright (c) 2010 David Chinner.
  * Copyright (c) 2011 Christoph Hellwig.
  * All Rights Reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it would be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write the Free Software Foundation,
- * Inc.,  51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 #include "xfs.h"
 #include "xfs_fs.h"
@@ -45,7 +33,7 @@ xfs_extent_busy_insert(
 	struct rb_node		**rbp;
 	struct rb_node		*parent = NULL;
 
-	new = kmem_zalloc(sizeof(struct xfs_extent_busy), KM_SLEEP);
+	new = kmem_zalloc(sizeof(struct xfs_extent_busy), 0);
 	new->agno = agno;
 	new->bno = bno;
 	new->length = len;
@@ -379,7 +367,7 @@ restart:
 		 * If this is a metadata allocation, try to reuse the busy
 		 * extent instead of trimming the allocation.
 		 */
-		if (!xfs_alloc_is_userdata(args->datatype) &&
+		if (!(args->datatype & XFS_ALLOC_USERDATA) &&
 		    !(busyp->flags & XFS_EXTENT_BUSY_DISCARDED)) {
 			if (!xfs_extent_busy_update_extent(args->mp, args->pag,
 							  busyp, fbno, flen,
@@ -611,10 +599,9 @@ xfs_extent_busy_flush(
 	unsigned		busy_gen)
 {
 	DEFINE_WAIT		(wait);
-	int			log_flushed = 0, error;
+	int			error;
 
-	trace_xfs_log_force(mp, 0, _THIS_IP_);
-	error = _xfs_log_force(mp, XFS_LOG_SYNC, &log_flushed);
+	error = xfs_log_force(mp, XFS_LOG_SYNC);
 	if (error)
 		return;
 
@@ -656,8 +643,8 @@ xfs_extent_busy_wait_all(
 int
 xfs_extent_busy_ag_cmp(
 	void			*priv,
-	struct list_head	*l1,
-	struct list_head	*l2)
+	const struct list_head	*l1,
+	const struct list_head	*l2)
 {
 	struct xfs_extent_busy	*b1 =
 		container_of(l1, struct xfs_extent_busy, list);

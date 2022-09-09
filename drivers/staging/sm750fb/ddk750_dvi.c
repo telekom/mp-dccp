@@ -11,7 +11,7 @@
  * function API. Please set the function pointer to NULL whenever the function
  * is not supported.
  */
-static dvi_ctrl_device_t g_dcftSupportedDviController[] = {
+static struct dvi_ctrl_device g_dcftSupportedDviController[] = {
 #ifdef DVI_CTRL_SII164
 	{
 		.pfnInit = sii164InitChip,
@@ -30,31 +30,31 @@ static dvi_ctrl_device_t g_dcftSupportedDviController[] = {
 #endif
 };
 
-int dviInit(unsigned char edgeSelect,
-	    unsigned char busSelect,
-	    unsigned char dualEdgeClkSelect,
-	    unsigned char hsyncEnable,
-	    unsigned char vsyncEnable,
-	    unsigned char deskewEnable,
-	    unsigned char deskewSetting,
-	    unsigned char continuousSyncEnable,
-	    unsigned char pllFilterEnable,
-	    unsigned char pllFilterValue)
+int dviInit(unsigned char edge_select,
+	    unsigned char bus_select,
+	    unsigned char dual_edge_clk_select,
+	    unsigned char hsync_enable,
+	    unsigned char vsync_enable,
+	    unsigned char deskew_enable,
+	    unsigned char deskew_setting,
+	    unsigned char continuous_sync_enable,
+	    unsigned char pll_filter_enable,
+	    unsigned char pll_filter_value)
 {
-	dvi_ctrl_device_t *pCurrentDviCtrl;
+	struct dvi_ctrl_device *pCurrentDviCtrl;
 
 	pCurrentDviCtrl = g_dcftSupportedDviController;
 	if (pCurrentDviCtrl->pfnInit) {
-		return pCurrentDviCtrl->pfnInit(edgeSelect,
-						busSelect,
-						dualEdgeClkSelect,
-						hsyncEnable,
-						vsyncEnable,
-						deskewEnable,
-						deskewSetting,
-						continuousSyncEnable,
-						pllFilterEnable,
-						pllFilterValue);
+		return pCurrentDviCtrl->pfnInit(edge_select,
+						bus_select,
+						dual_edge_clk_select,
+						hsync_enable,
+						vsync_enable,
+						deskew_enable,
+						deskew_setting,
+						continuous_sync_enable,
+						pll_filter_enable,
+						pll_filter_value);
 	}
 	return -1; /* error */
 }

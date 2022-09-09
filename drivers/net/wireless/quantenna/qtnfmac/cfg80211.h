@@ -1,18 +1,5 @@
-/*
- * Copyright (c) 2015-2016 Quantenna Communications, Inc.
- * All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- */
+/* SPDX-License-Identifier: GPL-2.0+ */
+/* Copyright (c) 2015-2016 Quantenna Communications. All rights reserved. */
 
 #ifndef _QTN_FMAC_CFG80211_H_
 #define _QTN_FMAC_CFG80211_H_
@@ -27,24 +14,5 @@ void qtnf_cfg80211_vif_reset(struct qtnf_vif *vif);
 void qtnf_band_init_rates(struct ieee80211_supported_band *band);
 void qtnf_band_setup_htvht_caps(struct qtnf_mac_info *macinfo,
 				struct ieee80211_supported_band *band);
-
-static inline void qtnf_scan_done(struct qtnf_wmac *mac, bool aborted)
-{
-	struct cfg80211_scan_info info = {
-		.aborted = aborted,
-	};
-
-	if (timer_pending(&mac->scan_timeout))
-		del_timer_sync(&mac->scan_timeout);
-
-	mutex_lock(&mac->mac_lock);
-
-	if (mac->scan_req) {
-		cfg80211_scan_done(mac->scan_req, &info);
-		mac->scan_req = NULL;
-	}
-
-	mutex_unlock(&mac->mac_lock);
-}
 
 #endif /* _QTN_FMAC_CFG80211_H_ */

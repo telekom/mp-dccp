@@ -99,6 +99,7 @@ static bool ccid5_debug;
 
 static int ccid5_hc_tx_alloc_seq(struct ccid5_hc_tx_sock *hc)
 {
+	//printk(KERN_INFO "natrm: enter ccid5_hc_tx_alloc_seq");
 	struct ccid5_seq *seqp;
 	int i;
 
@@ -143,10 +144,17 @@ static void ccid5_change_l_ack_ratio(struct sock *sk, u32 val)
 {
 	u32 max_ratio = DIV_ROUND_UP(ccid5_hc_tx_sk(sk)->tx_cwnd, 2);
 
+	/*
+	 * Ensure that Ack Ratio does not exceed ceil(cwnd/2), which is (2) from
+	 * RFC 4341, 6.1.2. We ignore the statement that Ack Ratio 2 is always
+	 * acceptable since this causes starvation/deadlock whenever cwnd < 2.
+	 * The same problem arises when Ack Ratio is 0 (ie. Ack Ratio disabled).
+	 */
 	if (val == 0 || val > max_ratio) {
 		DCCP_WARN("Limiting Ack Ratio (%u) to %u\n", val, max_ratio);
 		val = max_ratio;
 	}
+	//printk(KERN_INFO "natrm: ccid5 change ack_ratio %lu max %lu", val, max_ratio);
 	dccp_feat_signal_nn_change(sk, DCCPF_ACK_RATIO,
 				   min_t(u32, val, DCCPF_ACK_RATIO_MAX));
 }
@@ -154,6 +162,18 @@ static void ccid5_change_l_ack_ratio(struct sock *sk, u32 val)
 static void ccid5_check_l_ack_ratio(struct sock *sk)
 {
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
+
+	/*
+	 * After a loss, idle period, application limited period, or RTO we
+	 * need to check that the ack ratio is still less than the congestion
+	 * window. Otherwise, we will send an entire congestion window of
+	 * packets and got no response because we haven't sent ack ratio
+	 * packets yet.
+	 * If the ack ratio does need to be reduced, we reduce it to half of
+	 * the congestion window (or 1 if that's zero) instead of to the
+	 * congestion window. This prevents problems if one ack is lost.
+	 */
+
 	if (dccp_feat_nn_get(sk, DCCPF_ACK_RATIO) > hc->tx_cwnd)
 		ccid5_change_l_ack_ratio(sk, hc->tx_cwnd/2 ? : 1U);
 }
@@ -182,6 +202,13 @@ static bool ccid5_do_cwv = true;
 module_param(ccid5_do_cwv, bool, 0644);
 MODULE_PARM_DESC(ccid5_do_cwv, "Perform RFC2861 Congestion Window Validation");
 
+/**
+ * ccid2_update_used_window  -  Track how much of cwnd is actually used
+ * This is done in addition to CWV. The sender needs to have an idea of how many
+ * packets may be in flight, to set the local Sequence Window value accordingly
+ * (RFC 4340, 7.5.2). The CWV mechanism is exploited to keep track of the
+ * maximum-used window. We use an EWMA low-pass filter to filter out noise.
+ */
 static void ccid5_update_used_window(struct ccid5_hc_tx_sock *hc, u32 new_wnd)
 {
 	hc->tx_expected_wnd = (3 * hc->tx_expected_wnd + new_wnd) / 4;
@@ -264,6 +291,7 @@ static void ccid5_hc_tx_packet_sent(struct sock *sk, unsigned int len)
 	if (next == hc->tx_seqt) {
 		if (ccid5_hc_tx_alloc_seq(hc)) {
 			DCCP_CRIT("packet history - out of memory!");
+			/* FIXME: find a more graceful way to bail out */
 			return;
 		}
 		next = hc->tx_seqh->ccid5s_next;
@@ -419,7 +447,7 @@ static void ccid5_rtt_estimator(struct sock *sk, const long mrtt)
 }
 
 /************************************************************/
-/* BELOW THE FUNCTIONS WHICH IN TCP ARE PART OF tcp_rate.c */
+/* BELLOW THE FUNCTIONS WHICH IN TCP ARE PART OF tcp_rate.c */
 /************************************************************/
 
 void dccp_rate_skb_delivered(struct sock *sk, struct ccid5_seq *acked,
@@ -1090,10 +1118,13 @@ static void bbr_set_state(struct sock *sk, u8 new_state)
 /*****************************************************/
 
 
-static void ccid5_hc_tx_rto_expire(unsigned long data)
+//static void ccid5_hc_tx_rto_expire(unsigned long data)
+static void ccid5_hc_tx_rto_expire(struct timer_list *t)
 {
-	struct sock *sk = (struct sock *)data;
-	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
+	struct ccid5_hc_tx_sock *hc = from_timer(hc, t, tx_rtotimer);
+	struct sock *sk = hc->sk;
+	//struct sock *sk = (struct sock *)data;
+	//struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
 	const bool sender_was_blocked = ccid5_cwnd_network_limited(hc);
 
 	bh_lock_sock(sk);
@@ -1270,6 +1301,7 @@ static void ccid5_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 	list_for_each_entry(avp, &hc->tx_av_chunks, node) {
 		/* go through this ack vector */
 		for (; avp->len--; avp->vec++) {
+			//printk(KERN_INFO "natrm: en el for que no entiendo avp_len %d", avp->len);
 			u64 ackno_end_rl = SUB48(ackno,
 						 dccp_ackvec_runlen(avp->vec));
 			/* if the seqno we are analyzing is larger than the
@@ -1466,8 +1498,7 @@ static int ccid5_hc_tx_init(struct ccid *ccid, struct sock *sk)
 	bbr_reset_startup_mode(hc);
 	bbr_reset_lt_bw_sampling(hc);
 
-	setup_timer(&hc->tx_rtotimer, ccid5_hc_tx_rto_expire,
-			(unsigned long)sk);
+	timer_setup(&hc->tx_rtotimer, ccid5_hc_tx_rto_expire, 0);
 	INIT_LIST_HEAD(&hc->tx_av_chunks);
 
 	return 0;
@@ -1529,4 +1560,3 @@ struct ccid_operations ccid5_ops = {
 module_param(ccid5_debug, bool, 0644);
 MODULE_PARM_DESC(ccid5_debug, "Enable CCID-5 debug messages");
 #endif
-

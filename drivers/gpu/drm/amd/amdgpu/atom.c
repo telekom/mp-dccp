@@ -27,6 +27,8 @@
 #include <linux/slab.h>
 #include <asm/unaligned.h>
 
+#include <drm/drm_util.h>
+
 #define ATOM_DEBUG
 
 #include "atom.h"
@@ -51,6 +53,8 @@
 
 #define PLL_INDEX	2
 #define PLL_DATA	3
+
+#define ATOM_CMD_TIMEOUT_SEC	20
 
 typedef struct {
 	struct atom_context *ctx;
@@ -742,8 +746,9 @@ static void atom_op_jump(atom_exec_context *ctx, int *ptr, int arg)
 			cjiffies = jiffies;
 			if (time_after(cjiffies, ctx->last_jump_jiffies)) {
 				cjiffies -= ctx->last_jump_jiffies;
-				if ((jiffies_to_msecs(cjiffies) > 5000)) {
-					DRM_ERROR("atombios stuck in loop for more than 5secs aborting\n");
+				if ((jiffies_to_msecs(cjiffies) > ATOM_CMD_TIMEOUT_SEC*1000)) {
+					DRM_ERROR("atombios stuck in loop for more than %dsecs aborting\n",
+						  ATOM_CMD_TIMEOUT_SEC);
 					ctx->abort = true;
 				}
 			} else {
@@ -1221,7 +1226,7 @@ static int amdgpu_atom_execute_table_locked(struct atom_context *ctx, int index,
 	ectx.abort = false;
 	ectx.last_jump = 0;
 	if (ws)
-		ectx.ws = kzalloc(4 * ws, GFP_KERNEL);
+		ectx.ws = kcalloc(4, ws, GFP_KERNEL);
 	else
 		ectx.ws = NULL;
 
@@ -1343,8 +1348,11 @@ struct atom_context *amdgpu_atom_parse(struct card_info *card, void *bios)
 		idx = 0x80;
 
 	str = CSTR(idx);
-	if (*str != '\0')
+	if (*str != '\0') {
 		pr_info("ATOM BIOS: %s\n", str);
+		strlcpy(ctx->vbios_version, str, sizeof(ctx->vbios_version));
+	}
+
 
 	return ctx;
 }

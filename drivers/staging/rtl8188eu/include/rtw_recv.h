@@ -1,15 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /******************************************************************************
  *
  * Copyright(c) 2007 - 2012 Realtek Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
  *
  ******************************************************************************/
 #ifndef _RTW_RECV_H_
@@ -18,11 +10,10 @@
 #include <osdep_service.h>
 #include <drv_types.h>
 
-
 #define NR_RECVFRAME 256
 
 #define RXFRAME_ALIGN	8
-#define RXFRAME_ALIGN_SZ	(1<<RXFRAME_ALIGN)
+#define RXFRAME_ALIGN_SZ	(1 << RXFRAME_ALIGN)
 
 #define MAX_RXFRAME_CNT	512
 #define MAX_RX_NUMBLKS		(32)
@@ -35,7 +26,7 @@
 /* for Rx reordering buffer control */
 struct recv_reorder_ctrl {
 	struct adapter	*padapter;
-	u8 enable;
+	bool enable;
 	u16 indicate_seq;/* wstart_b, init_value=0xffff */
 	u16 wend_b;
 	u8 wsize_b;
@@ -46,23 +37,23 @@ struct recv_reorder_ctrl {
 struct	stainfo_rxcache	{
 	u16	tid_rxseq[16];
 /*
-	unsigned short	tid0_rxseq;
-	unsigned short	tid1_rxseq;
-	unsigned short	tid2_rxseq;
-	unsigned short	tid3_rxseq;
-	unsigned short	tid4_rxseq;
-	unsigned short	tid5_rxseq;
-	unsigned short	tid6_rxseq;
-	unsigned short	tid7_rxseq;
-	unsigned short	tid8_rxseq;
-	unsigned short	tid9_rxseq;
-	unsigned short	tid10_rxseq;
-	unsigned short	tid11_rxseq;
-	unsigned short	tid12_rxseq;
-	unsigned short	tid13_rxseq;
-	unsigned short	tid14_rxseq;
-	unsigned short	tid15_rxseq;
-*/
+ *	unsigned short	tid0_rxseq;
+ *	unsigned short	tid1_rxseq;
+ *	unsigned short	tid2_rxseq;
+ *	unsigned short	tid3_rxseq;
+ *	unsigned short	tid4_rxseq;
+ *	unsigned short	tid5_rxseq;
+ *	unsigned short	tid6_rxseq;
+ *	unsigned short	tid7_rxseq;
+ *	unsigned short	tid8_rxseq;
+ *	unsigned short	tid9_rxseq;
+ *	unsigned short	tid10_rxseq;
+ *	unsigned short	tid11_rxseq;
+ *	unsigned short	tid12_rxseq;
+ *	unsigned short	tid13_rxseq;
+ *	unsigned short	tid14_rxseq;
+ *	unsigned short	tid15_rxseq;
+ */
 };
 
 struct signal_stat {
@@ -71,7 +62,9 @@ struct signal_stat {
 	u32	total_num;		/* num of valid elements */
 	u32	total_val;		/* sum of valid elements */
 };
+
 #define MAX_PATH_NUM_92CS		3
+
 struct phy_info {
 	u8	RxPWDBAll;
 	u8	SignalQuality;	 /*  in 0-100 index. */
@@ -79,7 +72,8 @@ struct phy_info {
 	u8	RxMIMOSignalStrength[MAX_PATH_NUM_92CS];/*  in 0~100 index */
 	s8	RxPower; /*  in dBm Translate from PWdB */
 /*  Real power in dBm for this packet, no beautification and aggregation.
- * Keep this raw info to be used for the other procedures. */
+ * Keep this raw info to be used for the other procedures.
+ */
 	s8	recvpower;
 	u8	BTRxRSSIPercentage;
 	u8	SignalStrength; /*  in 0-100 index. */
@@ -106,7 +100,8 @@ struct rx_pkt_attrib {
 	u8	privacy; /* in frame_ctrl field */
 	u8	bdecrypted;
 	u8	encrypt; /* when 0 indicate no encrypt. when non-zero,
-			  * indicate the encrypt algorithm */
+			  * indicate the encrypt algorithm
+			  */
 	u8	iv_len;
 	u8	icv_len;
 	u8	crc_err;
@@ -133,7 +128,6 @@ struct rx_pkt_attrib {
 	struct phy_info phy_info;
 };
 
-
 /* These definition is used for Rx packet reordering. */
 #define SN_LESS(a, b)		(((a - b) & 0x800) != 0)
 #define SN_EQUAL(a, b)	(a == b)
@@ -152,12 +146,12 @@ struct recv_stat {
 };
 
 /*
-accesser of recv_priv: rtw_recv_entry(dispatch / passive level);
-recv_thread(passive) ; returnpkt(dispatch)
-; halt(passive) ;
-
-using enter_critical section to protect
-*/
+ * accesser of recv_priv: rtw_recv_entry(dispatch / passive level);
+ * recv_thread(passive) ; returnpkt(dispatch)
+ * ; halt(passive) ;
+ *
+ * using enter_critical section to protect
+ */
 struct recv_priv {
 	struct __queue free_recv_queue;
 	struct __queue recv_pending_queue;
@@ -209,20 +203,20 @@ struct recv_buf {
 };
 
 /*
-	head  ----->
-
-		data  ----->
-
-			payload
-
-		tail  ----->
-
-
-	end   ----->
-
-	len = (unsigned int )(tail - data);
-
-*/
+ *	head  ----->
+ *
+ *		data  ----->
+ *
+ *			payload
+ *
+ *		tail  ----->
+ *
+ *
+ *	end   ----->
+ *
+ *	len = (unsigned int )(tail - data);
+ *
+ */
 struct recv_frame {
 	struct list_head list;
 	struct sk_buff	 *pkt;
@@ -247,7 +241,7 @@ void rtw_free_recvframe_queue(struct __queue *pframequeue,
 			      struct __queue *pfree_recv_queue);
 u32 rtw_free_uc_swdec_pending_queue(struct adapter *adapter);
 
-void rtw_reordering_ctrl_timeout_handler(unsigned long data);
+void rtw_reordering_ctrl_timeout_handler(struct timer_list *t);
 
 static inline s32 translate_percentage_to_dbm(u32 sig_stren_index)
 {
@@ -259,7 +253,6 @@ static inline s32 translate_percentage_to_dbm(u32 sig_stren_index)
 
 	return power;
 }
-
 
 struct sta_info;
 

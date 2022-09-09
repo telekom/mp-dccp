@@ -23,11 +23,17 @@ struct test arch_tests[] = {
 		.desc = "x86 instruction decoder - new instructions",
 		.func = test__insn_x86,
 	},
-#endif
 	{
-		.desc = "Intel cqm nmi context read",
-		.func = test__intel_cqm_count_nmi_context,
+		.desc = "Intel PT packet decoder",
+		.func = test__intel_pt_pkt_decoder,
 	},
+#endif
+#if defined(__x86_64__)
+	{
+		.desc = "x86 bp modify",
+		.func = test__bp_modify,
+	},
+#endif
 	{
 		.func = NULL,
 	},

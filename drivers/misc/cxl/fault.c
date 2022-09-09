@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2014 IBM Corp.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/workqueue.h>
@@ -33,7 +29,7 @@ static bool sste_matches(struct cxl_sste *sste, struct copro_slb *slb)
  * This finds a free SSTE for the given SLB, or returns NULL if it's already in
  * the segment table.
  */
-static struct cxl_sste* find_free_sste(struct cxl_context *ctx,
+static struct cxl_sste *find_free_sste(struct cxl_context *ctx,
 				       struct copro_slb *slb)
 {
 	struct cxl_sste *primary, *sste, *ret = NULL;
@@ -134,7 +130,7 @@ static int cxl_handle_segment_miss(struct cxl_context *ctx,
 
 int cxl_handle_mm_fault(struct mm_struct *mm, u64 dsisr, u64 dar)
 {
-	unsigned flt = 0;
+	vm_fault_t flt = 0;
 	int result;
 	unsigned long access, flags, inv_flags = 0;
 
@@ -168,7 +164,7 @@ int cxl_handle_mm_fault(struct mm_struct *mm, u64 dsisr, u64 dar)
 		if (dsisr & CXL_PSL_DSISR_An_S)
 			access |= _PAGE_WRITE;
 
-		if (!mm && (REGION_ID(dar) != USER_REGION_ID))
+		if (!mm && (get_region_id(dar) != USER_REGION_ID))
 			access |= _PAGE_PRIVILEGED;
 
 		if (dsisr & DSISR_NOHPTE)
@@ -220,22 +216,11 @@ static bool cxl_is_segment_miss(struct cxl_context *ctx, u64 dsisr)
 
 static bool cxl_is_page_fault(struct cxl_context *ctx, u64 dsisr)
 {
-	u64 crs; /* Translation Checkout Response Status */
-
 	if ((cxl_is_power8()) && (dsisr & CXL_PSL_DSISR_An_DM))
 		return true;
 
-	if (cxl_is_power9()) {
-		crs = (dsisr & CXL_PSL9_DSISR_An_CO_MASK);
-		if ((crs == CXL_PSL9_DSISR_An_PF_SLR) ||
-		    (crs == CXL_PSL9_DSISR_An_PF_RGC) ||
-		    (crs == CXL_PSL9_DSISR_An_PF_RGP) ||
-		    (crs == CXL_PSL9_DSISR_An_PF_HRH) ||
-		    (crs == CXL_PSL9_DSISR_An_PF_STEG) ||
-		    (crs == CXL_PSL9_DSISR_An_URTCH)) {
-			return true;
-		}
-	}
+	if (cxl_is_power9())
+		return true;
 
 	return false;
 }
@@ -336,7 +321,7 @@ static void cxl_prefault_vma(struct cxl_context *ctx)
 		return;
 	}
 
-	down_read(&mm->mmap_sem);
+	mmap_read_lock(mm);
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 		for (ea = vma->vm_start; ea < vma->vm_end;
 				ea = next_segment(ea, slb.vsid)) {
@@ -351,7 +336,7 @@ static void cxl_prefault_vma(struct cxl_context *ctx)
 			last_esid = slb.esid;
 		}
 	}
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 
 	mmput(mm);
 }

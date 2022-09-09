@@ -1,22 +1,12 @@
-/*
- *   cx231xx IR glue driver
- *
- *   Copyright (C) 2010 Mauro Carvalho Chehab
- *
- *   Polaris (cx231xx) has its support for IR's with a design close to MCE.
- *   however, a few designs are using an external I2C chip for IR, instead
- *   of using the one provided by the chip.
- *   This driver provides support for those extra devices
- *
- *   This program is free software; you can redistribute it and/or
- *   modify it under the terms of the GNU General Public License as
- *   published by the Free Software Foundation version 2.
- *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *   General Public License for more details.
- */
+// SPDX-License-Identifier: GPL-2.0
+// cx231xx IR glue driver
+//
+// Copyright (c) 2010 Mauro Carvalho Chehab <mchehab@kernel.org>
+//
+// Polaris (cx231xx) has its support for IR's with a design close to MCE.
+// however, a few designs are using an external I2C chip for IR, instead
+// of using the one provided by the chip.
+// This driver provides support for those extra devices
 
 #include "cx231xx.h"
 #include <linux/slab.h>
@@ -77,7 +67,7 @@ int cx231xx_ir_init(struct cx231xx *dev)
 
 	dev->init_data.name = cx231xx_boards[dev->model].name;
 
-	strlcpy(info.type, "ir_video", I2C_NAME_SIZE);
+	strscpy(info.type, "ir_video", I2C_NAME_SIZE);
 	info.platform_data = &dev->init_data;
 
 	/*
@@ -98,7 +88,7 @@ int cx231xx_ir_init(struct cx231xx *dev)
 	ir_i2c_bus = cx231xx_boards[dev->model].ir_i2c_master;
 	dev_dbg(dev->dev, "Trying to bind ir at bus %d, addr 0x%02x\n",
 		ir_i2c_bus, info.addr);
-	dev->ir_i2c_client = i2c_new_device(
+	dev->ir_i2c_client = i2c_new_client_device(
 		cx231xx_get_i2c_adap(dev, ir_i2c_bus), &info);
 
 	return 0;
@@ -106,7 +96,6 @@ int cx231xx_ir_init(struct cx231xx *dev)
 
 void cx231xx_ir_exit(struct cx231xx *dev)
 {
-	if (dev->ir_i2c_client)
-		i2c_unregister_device(dev->ir_i2c_client);
+	i2c_unregister_device(dev->ir_i2c_client);
 	dev->ir_i2c_client = NULL;
 }

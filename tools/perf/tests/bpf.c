@@ -1,31 +1,39 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <util/record.h>
 #include <util/util.h>
 #include <util/bpf-loader.h>
 #include <util/evlist.h>
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/kernel.h>
+#include <linux/string.h>
 #include <api/fs/fs.h>
 #include <bpf/bpf.h>
+#include <perf/mmap.h>
 #include "tests.h"
 #include "llvm.h"
 #include "debug.h"
+#include "parse-events.h"
+#include "util/mmap.h"
 #define NR_ITERS       111
 #define PERF_TEST_BPF_PATH "/sys/fs/bpf/perf_test"
 
 #ifdef HAVE_LIBBPF_SUPPORT
 
-static int epoll_wait_loop(void)
+static int epoll_pwait_loop(void)
 {
 	int i;
 
 	/* Should fail NR_ITERS times */
 	for (i = 0; i < NR_ITERS; i++)
-		epoll_wait(-(i + 1), NULL, 0, 0);
+		epoll_pwait(-(i + 1), NULL, 0, 0, NULL);
 	return 0;
 }
 
@@ -63,46 +71,41 @@ static struct {
 	bool	pin;
 } bpf_testcase_table[] = {
 	{
-		LLVM_TESTCASE_BASE,
-		"Basic BPF filtering",
-		"[basic_bpf_test]",
-		"fix 'perf test LLVM' first",
-		"load bpf object failed",
-		&epoll_wait_loop,
-		(NR_ITERS + 1) / 2,
-		false,
+		.prog_id	  = LLVM_TESTCASE_BASE,
+		.desc		  = "Basic BPF filtering",
+		.name		  = "[basic_bpf_test]",
+		.msg_compile_fail = "fix 'perf test LLVM' first",
+		.msg_load_fail	  = "load bpf object failed",
+		.target_func	  = &epoll_pwait_loop,
+		.expect_result	  = (NR_ITERS + 1) / 2,
 	},
 	{
-		LLVM_TESTCASE_BASE,
-		"BPF pinning",
-		"[bpf_pinning]",
-		"fix kbuild first",
-		"check your vmlinux setting?",
-		&epoll_wait_loop,
-		(NR_ITERS + 1) / 2,
-		true,
+		.prog_id	  = LLVM_TESTCASE_BASE,
+		.desc		  = "BPF pinning",
+		.name		  = "[bpf_pinning]",
+		.msg_compile_fail = "fix kbuild first",
+		.msg_load_fail	  = "check your vmlinux setting?",
+		.target_func	  = &epoll_pwait_loop,
+		.expect_result	  = (NR_ITERS + 1) / 2,
+		.pin 		  = true,
 	},
 #ifdef HAVE_BPF_PROLOGUE
 	{
-		LLVM_TESTCASE_BPF_PROLOGUE,
-		"BPF prologue generation",
-		"[bpf_prologue_test]",
-		"fix kbuild first",
-		"check your vmlinux setting?",
-		&llseek_loop,
-		(NR_ITERS + 1) / 4,
-		false,
+		.prog_id	  = LLVM_TESTCASE_BPF_PROLOGUE,
+		.desc		  = "BPF prologue generation",
+		.name		  = "[bpf_prologue_test]",
+		.msg_compile_fail = "fix kbuild first",
+		.msg_load_fail	  = "check your vmlinux setting?",
+		.target_func	  = &llseek_loop,
+		.expect_result	  = (NR_ITERS + 1) / 4,
 	},
 #endif
 	{
-		LLVM_TESTCASE_BPF_RELOCATION,
-		"BPF relocation checker",
-		"[bpf_relocation_test]",
-		"fix 'perf test LLVM' first",
-		"libbpf error when dealing with relocation",
-		NULL,
-		0,
-		false,
+		.prog_id	  = LLVM_TESTCASE_BPF_RELOCATION,
+		.desc		  = "BPF relocation checker",
+		.name		  = "[bpf_relocation_test]",
+		.msg_compile_fail = "fix 'perf test LLVM' first",
+		.msg_load_fail	  = "libbpf error when dealing with relocation",
 	},
 };
 
@@ -121,7 +124,7 @@ static int do_test(struct bpf_object *obj, int (*func)(void),
 
 	char pid[16];
 	char sbuf[STRERR_BUFSIZE];
-	struct perf_evlist *evlist;
+	struct evlist *evlist;
 	int i, ret = TEST_FAIL, err = 0, count = 0;
 
 	struct parse_events_state parse_state;
@@ -143,7 +146,7 @@ static int do_test(struct bpf_object *obj, int (*func)(void),
 	opts.target.tid = opts.target.pid = pid;
 
 	/* Instead of perf_evlist__new_default, don't add default events */
-	evlist = perf_evlist__new();
+	evlist = evlist__new();
 	if (!evlist) {
 		pr_debug("Not enough memory to create evlist\n");
 		return TEST_FAIL;
@@ -160,44 +163,50 @@ static int do_test(struct bpf_object *obj, int (*func)(void),
 
 	perf_evlist__config(evlist, &opts, NULL);
 
-	err = perf_evlist__open(evlist);
+	err = evlist__open(evlist);
 	if (err < 0) {
 		pr_debug("perf_evlist__open: %s\n",
 			 str_error_r(errno, sbuf, sizeof(sbuf)));
 		goto out_delete_evlist;
 	}
 
-	err = perf_evlist__mmap(evlist, opts.mmap_pages, false);
+	err = evlist__mmap(evlist, opts.mmap_pages);
 	if (err < 0) {
-		pr_debug("perf_evlist__mmap: %s\n",
+		pr_debug("evlist__mmap: %s\n",
 			 str_error_r(errno, sbuf, sizeof(sbuf)));
 		goto out_delete_evlist;
 	}
 
-	perf_evlist__enable(evlist);
+	evlist__enable(evlist);
 	(*func)();
-	perf_evlist__disable(evlist);
+	evlist__disable(evlist);
 
-	for (i = 0; i < evlist->nr_mmaps; i++) {
+	for (i = 0; i < evlist->core.nr_mmaps; i++) {
 		union perf_event *event;
+		struct mmap *md;
 
-		while ((event = perf_evlist__mmap_read(evlist, i)) != NULL) {
+		md = &evlist->mmap[i];
+		if (perf_mmap__read_init(&md->core) < 0)
+			continue;
+
+		while ((event = perf_mmap__read_event(&md->core)) != NULL) {
 			const u32 type = event->header.type;
 
 			if (type == PERF_RECORD_SAMPLE)
 				count ++;
 		}
+		perf_mmap__read_done(&md->core);
 	}
 
-	if (count != expect) {
-		pr_debug("BPF filter result incorrect\n");
+	if (count != expect * evlist->core.nr_entries) {
+		pr_debug("BPF filter result incorrect, expected %d, got %d samples\n", expect * evlist->core.nr_entries, count);
 		goto out_delete_evlist;
 	}
 
 	ret = TEST_OK;
 
 out_delete_evlist:
-	perf_evlist__delete(evlist);
+	evlist__delete(evlist);
 	return ret;
 }
 
@@ -275,6 +284,7 @@ static int __test__bpf(int idx)
 	}
 
 out:
+	free(obj_buf);
 	bpf__clear();
 	return ret;
 }

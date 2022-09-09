@@ -1,20 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * SN9C2028 common functions
  *
  * Copyright (C) 2009 Theodore Kilgore <kilgota@auburn,edu>
  *
  * Based closely upon the file gspca/pac_common.h
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 static const unsigned char sn9c2028_sof_marker[] = {
@@ -43,10 +33,9 @@ static unsigned char *sn9c2028_find_sof(struct gspca_dev *gspca_dev,
 			if (sd->sof_read == 12)
 				sd->avg_lum = (m[i] << 8) + sd->avg_lum_l;
 			if (sd->sof_read == sizeof(sn9c2028_sof_marker)) {
-				PDEBUG(D_FRAM,
-					"SOF found, bytes to analyze: %u."
-					" Frame starts at byte #%u",
-					len, i + 1);
+				gspca_dbg(gspca_dev, D_FRAM,
+					  "SOF found, bytes to analyze: %u - Frame starts at byte #%u\n",
+					  len, i + 1);
 				sd->sof_read = 0;
 				return m + i + 1;
 			}

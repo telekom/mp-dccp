@@ -42,8 +42,7 @@ void ip6_datagram_recv_specific_ctl(struct sock *sk, struct msghdr *msg,
 				    struct sk_buff *skb);
 
 int ip6_datagram_send_ctl(struct net *net, struct sock *sk, struct msghdr *msg,
-			  struct flowi6 *fl6, struct ipcm6_cookie *ipc6,
-			  struct sockcm_cookie *sockc);
+			  struct flowi6 *fl6, struct ipcm6_cookie *ipc6);
 
 void __ip6_dgram_sock_seq_show(struct seq_file *seq, struct sock *sp,
 			       __u16 srcp, __u16 destp, int rqueue, int bucket);
@@ -56,9 +55,6 @@ ip6_dgram_sock_seq_show(struct seq_file *seq, struct sock *sp, __u16 srcp,
 }
 
 #define LOOPBACK4_IPV6 cpu_to_be32(0x7f000006)
-
-/* address family specific functions */
-extern const struct inet_connection_sock_af_ops ipv4_specific;
 
 void inet6_destroy_sock(struct sock *sk);
 

@@ -1,19 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * shdlc Link Layer Control
  *
  * Copyright (C) 2012  Intel Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #define pr_fmt(fmt) "shdlc: %s: " fmt, __func__
@@ -580,27 +569,27 @@ static void llc_shdlc_handle_send_queue(struct llc_shdlc *shdlc)
 	}
 }
 
-static void llc_shdlc_connect_timeout(unsigned long data)
+static void llc_shdlc_connect_timeout(struct timer_list *t)
 {
-	struct llc_shdlc *shdlc = (struct llc_shdlc *)data;
+	struct llc_shdlc *shdlc = from_timer(shdlc, t, connect_timer);
 
 	pr_debug("\n");
 
 	schedule_work(&shdlc->sm_work);
 }
 
-static void llc_shdlc_t1_timeout(unsigned long data)
+static void llc_shdlc_t1_timeout(struct timer_list *t)
 {
-	struct llc_shdlc *shdlc = (struct llc_shdlc *)data;
+	struct llc_shdlc *shdlc = from_timer(shdlc, t, t1_timer);
 
 	pr_debug("SoftIRQ: need to send ack\n");
 
 	schedule_work(&shdlc->sm_work);
 }
 
-static void llc_shdlc_t2_timeout(unsigned long data)
+static void llc_shdlc_t2_timeout(struct timer_list *t)
 {
-	struct llc_shdlc *shdlc = (struct llc_shdlc *)data;
+	struct llc_shdlc *shdlc = from_timer(shdlc, t, t2_timer);
 
 	pr_debug("SoftIRQ: need to retransmit\n");
 
@@ -763,17 +752,9 @@ static void *llc_shdlc_init(struct nfc_hci_dev *hdev, xmit_to_drv_t xmit_to_drv,
 	mutex_init(&shdlc->state_mutex);
 	shdlc->state = SHDLC_DISCONNECTED;
 
-	init_timer(&shdlc->connect_timer);
-	shdlc->connect_timer.data = (unsigned long)shdlc;
-	shdlc->connect_timer.function = llc_shdlc_connect_timeout;
-
-	init_timer(&shdlc->t1_timer);
-	shdlc->t1_timer.data = (unsigned long)shdlc;
-	shdlc->t1_timer.function = llc_shdlc_t1_timeout;
-
-	init_timer(&shdlc->t2_timer);
-	shdlc->t2_timer.data = (unsigned long)shdlc;
-	shdlc->t2_timer.function = llc_shdlc_t2_timeout;
+	timer_setup(&shdlc->connect_timer, llc_shdlc_connect_timeout, 0);
+	timer_setup(&shdlc->t1_timer, llc_shdlc_t1_timeout, 0);
+	timer_setup(&shdlc->t2_timer, llc_shdlc_t2_timeout, 0);
 
 	shdlc->w = SHDLC_MAX_WINDOW;
 	shdlc->srej_support = SHDLC_SREJ_SUPPORT;

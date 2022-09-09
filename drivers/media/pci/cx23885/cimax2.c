@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * cimax2.c
  *
@@ -6,22 +7,11 @@
  * Copyright (C) 2009 NetUP Inc.
  * Copyright (C) 2009 Igor M. Liplianin <liplianin@netup.ru>
  * Copyright (C) 2009 Abylay Ospan <aospan@netup.ru>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *
- * GNU General Public License for more details.
  */
 
 #include "cx23885.h"
 #include "cimax2.h"
-#include "dvb_ca_en50221.h"
+#include <media/dvb_ca_en50221.h>
 
 /* Max transfer size done by I2C transfer functions */
 #define MAX_XFER_SIZE  64
@@ -54,7 +44,7 @@
 #define NETUP_CI_CTL		0x04
 #define NETUP_CI_RD		1
 
-#define NETUP_IRQ_DETAM 	0x1
+#define NETUP_IRQ_DETAM		0x1
 #define NETUP_IRQ_IRQAM		0x4
 
 static unsigned int ci_dbg;

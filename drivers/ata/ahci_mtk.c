@@ -1,17 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * MeidaTek AHCI SATA driver
+ * MediaTek AHCI SATA driver
  *
  * Copyright (c) 2017 MediaTek Inc.
  * Author: Ryder Lee <ryder.lee@mediatek.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/ahci_platform.h>
@@ -25,7 +17,7 @@
 #include <linux/reset.h>
 #include "ahci.h"
 
-#define DRV_NAME		"ahci"
+#define DRV_NAME		"ahci-mtk"
 
 #define SYS_CFG			0x14
 #define SYS_CFG_SATA_MSK	GENMASK(31, 30)
@@ -142,7 +134,7 @@ static int mtk_ahci_probe(struct platform_device *pdev)
 	if (!plat)
 		return -ENOMEM;
 
-	hpriv = ahci_platform_get_resources(pdev);
+	hpriv = ahci_platform_get_resources(pdev, 0);
 	if (IS_ERR(hpriv))
 		return PTR_ERR(hpriv);
 
@@ -192,5 +184,5 @@ static struct platform_driver mtk_ahci_driver = {
 };
 module_platform_driver(mtk_ahci_driver);
 
-MODULE_DESCRIPTION("MeidaTek SATA AHCI Driver");
+MODULE_DESCRIPTION("MediaTek SATA AHCI Driver");
 MODULE_LICENSE("GPL v2");

@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * devices.c
  * (C) Copyright 1999 Randy Dunlap.
  * (C) Copyright 1999,2000 Thomas Sailer <sailer@ife.ee.ethz.ch>.
  *     (proc file per device)
  * (C) Copyright 1999 Deti Fliegl (new USB architecture)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *
  *************************************************************
  *
@@ -52,7 +39,6 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/gfp.h>
-#include <linux/poll.h>
 #include <linux/usb.h>
 #include <linux/usbdevice_fs.h>
 #include <linux/usb/hcd.h>
@@ -110,22 +96,6 @@ static const char format_endpt[] =
 /* E:  Ad=xx(s) Atr=xx(ssss) MxPS=dddd Ivl=D?s */
   "E:  Ad=%02x(%c) Atr=%02x(%-4s) MxPS=%4d Ivl=%d%cs\n";
 
-/*
- * Wait for an connect/disconnect event to happen. We initialize
- * the event counter with an odd number, and each event will increment
- * the event counter by two, so it will always _stay_ odd. That means
- * that it will never be zero, so "event 0" will never match a current
- * event, and thus 'poll' will always trigger as readable for the first
- * time it gets called.
- */
-static struct device_connect_event {
-	atomic_t count;
-	wait_queue_head_t wait;
-} device_event = {
-	.count = ATOMIC_INIT(1),
-	.wait = __WAIT_QUEUE_HEAD_INITIALIZER(device_event.wait)
-};
-
 struct class_info {
 	int class;
 	char *class_name;
@@ -146,6 +116,10 @@ static const struct class_info clas_info[] = {
 	{USB_CLASS_CSCID,		"scard"},
 	{USB_CLASS_CONTENT_SEC,		"c-sec"},
 	{USB_CLASS_VIDEO,		"video"},
+	{USB_CLASS_PERSONAL_HEALTHCARE,	"perhc"},
+	{USB_CLASS_AUDIO_VIDEO,		"av"},
+	{USB_CLASS_BILLBOARD,		"blbrd"},
+	{USB_CLASS_USB_TYPE_C_BRIDGE,	"bridg"},
 	{USB_CLASS_WIRELESS_CONTROLLER,	"wlcon"},
 	{USB_CLASS_MISC,		"misc"},
 	{USB_CLASS_APP_SPEC,		"app."},
@@ -154,12 +128,6 @@ static const struct class_info clas_info[] = {
 };
 
 /*****************************************************************/
-
-void usbfs_conn_disc_event(void)
-{
-	atomic_add(2, &device_event.count);
-	wake_up(&device_event.wait);
-}
 
 static const char *class_decode(const int class)
 {
@@ -611,8 +579,6 @@ static ssize_t usb_device_read(struct file *file, char __user *buf,
 		return -EINVAL;
 	if (nbytes <= 0)
 		return 0;
-	if (!access_ok(VERIFY_WRITE, buf, nbytes))
-		return -EFAULT;
 
 	mutex_lock(&usb_bus_idr_lock);
 	/* print devices for all busses */
@@ -634,25 +600,7 @@ static ssize_t usb_device_read(struct file *file, char __user *buf,
 	return total_written;
 }
 
-/* Kernel lock for "lastev" protection */
-static unsigned int usb_device_poll(struct file *file,
-				    struct poll_table_struct *wait)
-{
-	unsigned int event_count;
-
-	poll_wait(file, &device_event.wait, wait);
-
-	event_count = atomic_read(&device_event.count);
-	if (file->f_version != event_count) {
-		file->f_version = event_count;
-		return POLLIN | POLLRDNORM;
-	}
-
-	return 0;
-}
-
 const struct file_operations usbfs_devices_fops = {
 	.llseek =	no_seek_end_llseek,
 	.read =		usb_device_read,
-	.poll =		usb_device_poll,
 };

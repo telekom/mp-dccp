@@ -1,10 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * aQuantia Corporation Network Driver
  * Copyright (C) 2014-2017 aQuantia Corporation. All rights reserved
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
  */
 
 /* File aq_utils.h: Useful macro and structures used in all layers of driver. */
@@ -13,12 +10,6 @@
 #define AQ_UTILS_H
 
 #include "aq_common.h"
-
-#define AQ_DIMOF(_ARY_)  ARRAY_SIZE(_ARY_)
-
-struct aq_obj_s {
-	atomic_t flags;
-};
 
 static inline void aq_utils_obj_set(atomic_t *flags, u32 mask)
 {

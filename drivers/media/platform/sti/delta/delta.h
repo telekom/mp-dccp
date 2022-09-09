@@ -1,7 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (C) STMicroelectronics SA 2015
  * Author: Hugues Fruchet <hugues.fruchet@st.com> for STMicroelectronics.
- * License terms:  GNU General Public License (GPL), version 2
  */
 
 #ifndef DELTA_H
@@ -286,7 +286,7 @@ struct delta_dec {
 	 * Header parsing must be done using decode(), giving
 	 * explicitly header access unit or first access unit of bitstream.
 	 * If no valid header is found, get_streaminfo will return -ENODATA,
-	 * in this case the next bistream access unit must be decoded till
+	 * in this case the next bitstream access unit must be decoded till
 	 * get_streaminfo becomes successful.
 	 */
 	int (*get_streaminfo)(struct delta_ctx *ctx,

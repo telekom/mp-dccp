@@ -1,11 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * atusb.h - Definitions shared between kernel and ATUSB firmware
  *
  * Written 2013 by Werner Almesberger <werner@almesberger.net>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation, version 2, or
  * (at your option) any later version.
  *
  * This file should be identical for kernel and firmware.
@@ -48,6 +46,14 @@ enum atusb_requests {
 	ATUSB_TX,
 	ATUSB_EUI64_WRITE		= 0x50, /* Parameter in EEPROM grp */
 	ATUSB_EUI64_READ,
+};
+
+enum {
+	ATUSB_HW_TYPE_100813,	/* 2010-08-13 */
+	ATUSB_HW_TYPE_101216,	/* 2010-12-16 */
+	ATUSB_HW_TYPE_110131,	/* 2011-01-31, ATmega32U2-based */
+	ATUSB_HW_TYPE_RZUSB,	/* Atmel Raven USB dongle with at86rf230 */
+	ATUSB_HW_TYPE_HULUSB,	/* Busware HUL USB dongle with at86rf212 */
 };
 
 /*

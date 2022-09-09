@@ -1,10 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * aQuantia Corporation Network Driver
- * Copyright (C) 2014-2017 aQuantia Corporation. All rights reserved
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
+ * Copyright (C) 2014-2019 aQuantia Corporation. All rights reserved
  */
 
 /* File hw_atl_b0_internal.h: Definition of Atlantic B0 chip specific
@@ -67,24 +64,21 @@
 #define HW_ATL_B0_MPI_SPEED_MSK         0xFFFFU
 #define HW_ATL_B0_MPI_SPEED_SHIFT       16U
 
-#define HW_ATL_B0_RATE_10G              BIT(0)
-#define HW_ATL_B0_RATE_5G               BIT(1)
-#define HW_ATL_B0_RATE_2G5              BIT(3)
-#define HW_ATL_B0_RATE_1G               BIT(4)
-#define HW_ATL_B0_RATE_100M             BIT(5)
+#define HW_ATL_B0_TXBUF_MAX              160U
+#define HW_ATL_B0_PTP_TXBUF_SIZE           8U
 
-#define HW_ATL_B0_TXBUF_MAX  160U
-#define HW_ATL_B0_RXBUF_MAX  320U
+#define HW_ATL_B0_RXBUF_MAX              320U
+#define HW_ATL_B0_PTP_RXBUF_SIZE          16U
 
 #define HW_ATL_B0_RSS_REDIRECTION_MAX 64U
 #define HW_ATL_B0_RSS_REDIRECTION_BITS 3U
 #define HW_ATL_B0_RSS_HASHKEY_BITS 320U
 
 #define HW_ATL_B0_TCRSS_4_8  1
-#define HW_ATL_B0_TC_MAX 1U
+#define HW_ATL_B0_TC_MAX 8U
 #define HW_ATL_B0_RSS_MAX 8U
 
-#define HW_ATL_B0_LRO_RXD_MAX 2U
+#define HW_ATL_B0_LRO_RXD_MAX 16U
 #define HW_ATL_B0_RS_SLIP_ENABLED  0U
 
 /* (256k -1(max pay_len) - 54(header)) */
@@ -116,10 +110,17 @@
 #define HW_ATL_B0_RXD_NCEA0 (0x1)
 
 #define HW_ATL_B0_RXD_WB_STAT_RSSTYPE (0x0000000F)
+#define HW_ATL_B0_RXD_WB_STAT_RSSTYPE_SHIFT (0x0)
 #define HW_ATL_B0_RXD_WB_STAT_PKTTYPE (0x00000FF0)
+#define HW_ATL_B0_RXD_WB_STAT_PKTTYPE_SHIFT (0x4)
 #define HW_ATL_B0_RXD_WB_STAT_RXCTRL  (0x00180000)
+#define HW_ATL_B0_RXD_WB_STAT_RXCTRL_SHIFT (0x13)
 #define HW_ATL_B0_RXD_WB_STAT_SPLHDR  (0x00200000)
 #define HW_ATL_B0_RXD_WB_STAT_HDRLEN  (0xFFC00000)
+#define HW_ATL_B0_RXD_WB_STAT_HDRLEN_SHIFT (0x16)
+
+#define HW_ATL_B0_RXD_WB_PKTTYPE_VLAN          BIT(5)
+#define HW_ATL_B0_RXD_WB_PKTTYPE_VLAN_DOUBLE   BIT(6)
 
 #define HW_ATL_B0_RXD_WB_STAT2_DD      (0x0001)
 #define HW_ATL_B0_RXD_WB_STAT2_EOP     (0x0002)
@@ -142,70 +143,18 @@
 #define HW_ATL_INTR_MODER_MAX  0x1FF
 #define HW_ATL_INTR_MODER_MIN  0xFF
 
-/* Hardware tx descriptor */
-struct __packed hw_atl_txd_s {
-	u64 buf_addr;
-	u32 ctl;
-	u32 ctl2; /* 63..46 - payload length, 45 - ctx enable, 44 - ctx index */
-};
+#define HW_ATL_B0_MIN_RXD \
+	(ALIGN(AQ_CFG_SKB_FRAGS_MAX + 1U, AQ_HW_RXD_MULTIPLE))
+#define HW_ATL_B0_MIN_TXD \
+	(ALIGN(AQ_CFG_SKB_FRAGS_MAX + 1U, AQ_HW_TXD_MULTIPLE))
 
-/* Hardware tx context descriptor */
-struct __packed hw_atl_txc_s {
-	u32 rsvd;
-	u32 len;
-	u32 ctl;
-	u32 len2;
-};
+#define HW_ATL_B0_MAX_RXD 8184U
+#define HW_ATL_B0_MAX_TXD 8184U
 
-/* Hardware rx descriptor */
-struct __packed hw_atl_rxd_s {
-	u64 buf_addr;
-	u64 hdr_addr;
-};
-
-/* Hardware rx descriptor writeback */
-struct __packed hw_atl_rxd_wb_s {
-	u32 type;
-	u32 rss_hash;
-	u16 status;
-	u16 pkt_len;
-	u16 next_desc_ptr;
-	u16 vlan;
-};
+#define HW_ATL_RSS_DISABLED 0x00000000U
+#define HW_ATL_RSS_ENABLED_8TCS_2INDEX_BITS 0xA2222222U
+#define HW_ATL_RSS_ENABLED_4TCS_3INDEX_BITS 0x80003333U
 
 /* HW layer capabilities */
-static struct aq_hw_caps_s hw_atl_b0_hw_caps_ = {
-	.ports = 1U,
-	.is_64_dma = true,
-	.msix_irqs = 4U,
-	.irq_mask = ~0U,
-	.vecs = HW_ATL_B0_RSS_MAX,
-	.tcs = HW_ATL_B0_TC_MAX,
-	.rxd_alignment = 1U,
-	.rxd_size = HW_ATL_B0_RXD_SIZE,
-	.rxds = 8U * 1024U,
-	.txd_alignment = 1U,
-	.txd_size = HW_ATL_B0_TXD_SIZE,
-	.txds = 8U * 1024U,
-	.txhwb_alignment = 4096U,
-	.tx_rings = HW_ATL_B0_TX_RINGS,
-	.rx_rings = HW_ATL_B0_RX_RINGS,
-	.hw_features = NETIF_F_HW_CSUM |
-			NETIF_F_RXCSUM |
-			NETIF_F_RXHASH |
-			NETIF_F_SG |
-			NETIF_F_TSO |
-			NETIF_F_LRO,
-	.hw_priv_flags = IFF_UNICAST_FLT,
-	.link_speed_msk = (HW_ATL_B0_RATE_10G |
-			HW_ATL_B0_RATE_5G |
-			HW_ATL_B0_RATE_2G5 |
-			HW_ATL_B0_RATE_1G |
-			HW_ATL_B0_RATE_100M),
-	.flow_control = true,
-	.mtu = HW_ATL_B0_MTU_JUMBO,
-	.mac_regs_count = 88,
-	.fw_ver_expected = HW_ATL_B0_FW_VER_EXPECTED,
-};
 
 #endif /* HW_ATL_B0_INTERNAL_H */

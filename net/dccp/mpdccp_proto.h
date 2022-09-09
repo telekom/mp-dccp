@@ -21,7 +21,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-
 #ifndef _MPDCCP_META_SK_H
 #define _MPDCCP_META_SK_H
 

@@ -1,16 +1,5 @@
-/*****************************************************************************
- * Copyright 2011 Broadcom Corporation.  All rights reserved.
- *
- * Unless you and Broadcom execute a separate written software license
- * agreement governing use of this software, this software is licensed to you
- * under the terms of the GNU General Public License version 2, available at
- * http://www.broadcom.com/licenses/GPLv2.php (the "GPL").
- *
- * Notwithstanding the above, under no circumstances may you combine this
- * software in any way with any other Broadcom software provided under a
- * license other than the GPL, without Broadcom's express prior written
- * consent.
- *****************************************************************************/
+/* SPDX-License-Identifier: GPL-2.0 */
+/* Copyright 2011 Broadcom Corporation.  All rights reserved. */
 
 #ifndef _VC_AUDIO_DEFS_H_
 #define _VC_AUDIO_DEFS_H_
@@ -18,8 +7,9 @@
 #define VC_AUDIOSERV_MIN_VER 1
 #define VC_AUDIOSERV_VER 2
 
-/* FourCC code used for VCHI connection */
-#define VC_AUDIO_SERVER_NAME  MAKE_FOURCC("AUDS")
+/* FourCC codes used for VCHI communication */
+#define VC_AUDIO_WRITE_COOKIE1 VCHIQ_MAKE_FOURCC('B', 'C', 'M', 'A')
+#define VC_AUDIO_WRITE_COOKIE2 VCHIQ_MAKE_FOURCC('D', 'A', 'T', 'A')
 
 /*
  *  List of screens that are currently supported
@@ -102,7 +92,7 @@ struct vc_audio_msg {
 		struct vc_audio_write write;
 		struct vc_audio_result result;
 		struct vc_audio_complete complete;
-	} u;
+	};
 };
 
 #endif /* _VC_AUDIO_DEFS_H_ */

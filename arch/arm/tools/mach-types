@@ -7,7 +7,7 @@
 #   http://www.arm.linux.org.uk/developer/machines/download.php
 #
 # Please do not send patches to this file; it is automatically generated!
-# To add an entry into this database, please see Documentation/arm/README,
+# To add an entry into this database, please see Documentation/arm/arm.rst,
 # or visit:
 #
 #   http://www.arm.linux.org.uk/developer/machines/?action=new
@@ -345,6 +345,7 @@ mxlads			MACH_MXLADS		MXLADS			1851
 linkstation_mini	MACH_LINKSTATION_MINI	LINKSTATION_MINI	1858
 afeb9260		MACH_AFEB9260		AFEB9260		1859
 imx27ipcam		MACH_IMX27IPCAM		IMX27IPCAM		1871
+bk3			MACH_BK3		BK3			1880
 rd88f6183ap_ge		MACH_RD88F6183AP_GE	RD88F6183AP_GE		1894
 realview_pba8		MACH_REALVIEW_PBA8	REALVIEW_PBA8		1897
 realview_pbx		MACH_REALVIEW_PBX	REALVIEW_PBX		1901

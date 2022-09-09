@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * usb_a926x.dts - Device Tree file for Caloa USB A926x board
  *
  *  Copyright (C) 2011-2012 Jean-Christophe PLAGNIOL-VILLARD <plagnioj@jcrosoft.com>
- *
- * Licensed under GPLv2 or later.
  */
 
 / {
@@ -21,6 +20,18 @@
 		apb {
 			dbgu: serial@fffff200 {
 				status = "okay";
+			};
+
+			tcb0: timer@fffa0000 {
+				timer@0 {
+					compatible = "atmel,tcb-timer";
+					reg = <0>, <1>;
+				};
+
+				timer@2 {
+					compatible = "atmel,tcb-timer";
+					reg = <2>;
+				};
 			};
 
 			macb0: ethernet@fffc4000 {

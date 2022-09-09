@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 #define pr_fmt(fmt) "list_sort_test: " fmt
 
 #include <linux/kernel.h>
@@ -55,7 +56,8 @@ static int __init check(struct debug_el *ela, struct debug_el *elb)
 	return 0;
 }
 
-static int __init cmp(void *priv, struct list_head *a, struct list_head *b)
+static int __init cmp(void *priv, const struct list_head *a,
+		      const struct list_head *b)
 {
 	struct debug_el *ela, *elb;
 
@@ -76,17 +78,14 @@ static int __init list_sort_test(void)
 	pr_debug("start testing list_sort()\n");
 
 	elts = kcalloc(TEST_LIST_LEN, sizeof(*elts), GFP_KERNEL);
-	if (!elts) {
-		pr_err("error: cannot allocate memory\n");
+	if (!elts)
 		return err;
-	}
 
 	for (i = 0; i < TEST_LIST_LEN; i++) {
 		el = kmalloc(sizeof(*el), GFP_KERNEL);
-		if (!el) {
-			pr_err("error: cannot allocate memory\n");
+		if (!el)
 			goto exit;
-		}
+
 		 /* force some equivalencies */
 		el->value = prandom_u32() % (TEST_LIST_LEN / 3);
 		el->serial = i;

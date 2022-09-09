@@ -1,16 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Driver for Dell laptop extras
  *
  *  Copyright (c) Red Hat <mjg@redhat.com>
  *  Copyright (c) 2014 Gabriele Mazzotta <gabriele.mzt@gmail.com>
- *  Copyright (c) 2014 Pali Rohár <pali.rohar@gmail.com>
+ *  Copyright (c) 2014 Pali Rohár <pali@kernel.org>
  *
  *  Based on documentation in the libsmbios package:
  *  Copyright (C) 2005-2014 Dell Inc.
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -29,29 +26,18 @@
 #include <linux/mm.h>
 #include <linux/i8042.h>
 #include <linux/debugfs.h>
-#include <linux/dell-led.h>
 #include <linux/seq_file.h>
 #include <acpi/video.h>
 #include "dell-rbtn.h"
 #include "dell-smbios.h"
 
-#define BRIGHTNESS_TOKEN 0x7d
-#define KBD_LED_OFF_TOKEN 0x01E1
-#define KBD_LED_ON_TOKEN 0x01E2
-#define KBD_LED_AUTO_TOKEN 0x01E3
-#define KBD_LED_AUTO_25_TOKEN 0x02EA
-#define KBD_LED_AUTO_50_TOKEN 0x02EB
-#define KBD_LED_AUTO_75_TOKEN 0x02EC
-#define KBD_LED_AUTO_100_TOKEN 0x02F6
-#define GLOBAL_MIC_MUTE_ENABLE 0x0364
-#define GLOBAL_MIC_MUTE_DISABLE 0x0365
-#define KBD_LED_AC_TOKEN 0x0451
-
 struct quirk_entry {
-	u8 touchpad_led;
-	u8 kbd_led_levels_off_1;
+	bool touchpad_led;
+	bool kbd_led_not_present;
+	bool kbd_led_levels_off_1;
+	bool kbd_missing_ac_tag;
 
-	int needs_kbd_timeouts;
+	bool needs_kbd_timeouts;
 	/*
 	 * Ordered list of timeouts expressed in seconds.
 	 * The list must end with -1
@@ -62,7 +48,7 @@ struct quirk_entry {
 static struct quirk_entry *quirks;
 
 static struct quirk_entry quirk_dell_vostro_v130 = {
-	.touchpad_led = 1,
+	.touchpad_led = true,
 };
 
 static int __init dmi_matched(const struct dmi_system_id *dmi)
@@ -76,12 +62,20 @@ static int __init dmi_matched(const struct dmi_system_id *dmi)
  * is used then BIOS silently set timeout to 0 without any error message.
  */
 static struct quirk_entry quirk_dell_xps13_9333 = {
-	.needs_kbd_timeouts = 1,
+	.needs_kbd_timeouts = true,
 	.kbd_timeouts = { 0, 5, 15, 60, 5 * 60, 15 * 60, -1 },
 };
 
+static struct quirk_entry quirk_dell_xps13_9370 = {
+	.kbd_missing_ac_tag = true,
+};
+
 static struct quirk_entry quirk_dell_latitude_e6410 = {
-	.kbd_led_levels_off_1 = 1,
+	.kbd_led_levels_off_1 = true,
+};
+
+static struct quirk_entry quirk_dell_inspiron_1012 = {
+	.kbd_led_not_present = true,
 };
 
 static struct platform_driver platform_driver = {
@@ -118,6 +112,24 @@ static const struct dmi_system_id dell_device_table[] __initconst = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
 			DMI_MATCH(DMI_CHASSIS_TYPE, "10"), /*Notebook*/
+		},
+	},
+	{
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_CHASSIS_TYPE, "30"), /*Tablet*/
+		},
+	},
+	{
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_CHASSIS_TYPE, "31"), /*Convertible*/
+		},
+	},
+	{
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_CHASSIS_TYPE, "32"), /*Detachable*/
 		},
 	},
 	{
@@ -287,6 +299,15 @@ static const struct dmi_system_id dell_quirks[] __initconst = {
 	},
 	{
 		.callback = dmi_matched,
+		.ident = "Dell XPS 13 9370",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "XPS 13 9370"),
+		},
+		.driver_data = &quirk_dell_xps13_9370,
+	},
+	{
+		.callback = dmi_matched,
 		.ident = "Dell Latitude E6410",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
@@ -294,8 +315,49 @@ static const struct dmi_system_id dell_quirks[] __initconst = {
 		},
 		.driver_data = &quirk_dell_latitude_e6410,
 	},
+	{
+		.callback = dmi_matched,
+		.ident = "Dell Inspiron 1012",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Inspiron 1012"),
+		},
+		.driver_data = &quirk_dell_inspiron_1012,
+	},
+	{
+		.callback = dmi_matched,
+		.ident = "Dell Inspiron 1018",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Inspiron 1018"),
+		},
+		.driver_data = &quirk_dell_inspiron_1012,
+	},
 	{ }
 };
+
+static void dell_fill_request(struct calling_interface_buffer *buffer,
+			       u32 arg0, u32 arg1, u32 arg2, u32 arg3)
+{
+	memset(buffer, 0, sizeof(struct calling_interface_buffer));
+	buffer->input[0] = arg0;
+	buffer->input[1] = arg1;
+	buffer->input[2] = arg2;
+	buffer->input[3] = arg3;
+}
+
+static int dell_send_request(struct calling_interface_buffer *buffer,
+			     u16 class, u16 select)
+{
+	int ret;
+
+	buffer->cmd_class = class;
+	buffer->cmd_select = select;
+	ret = dell_smbios_call(buffer);
+	if (ret != 0)
+		return ret;
+	return dell_smbios_error(buffer->output[0]);
+}
 
 /*
  * Derived from information in smbios-wireless-ctl:
@@ -419,29 +481,25 @@ static const struct dmi_system_id dell_quirks[] __initconst = {
 
 static int dell_rfkill_set(void *data, bool blocked)
 {
-	struct calling_interface_buffer *buffer;
 	int disable = blocked ? 1 : 0;
 	unsigned long radio = (unsigned long)data;
 	int hwswitch_bit = (unsigned long)data - 1;
+	struct calling_interface_buffer buffer;
 	int hwswitch;
 	int status;
 	int ret;
 
-	buffer = dell_smbios_get_buffer();
+	dell_fill_request(&buffer, 0, 0, 0, 0);
+	ret = dell_send_request(&buffer, CLASS_INFO, SELECT_RFKILL);
+	if (ret)
+		return ret;
+	status = buffer.output[1];
 
-	dell_smbios_send_request(17, 11);
-	ret = buffer->output[0];
-	status = buffer->output[1];
-
-	if (ret != 0)
-		goto out;
-
-	dell_smbios_clear_buffer();
-
-	buffer->input[0] = 0x2;
-	dell_smbios_send_request(17, 11);
-	ret = buffer->output[0];
-	hwswitch = buffer->output[1];
+	dell_fill_request(&buffer, 0x2, 0, 0, 0);
+	ret = dell_send_request(&buffer, CLASS_INFO, SELECT_RFKILL);
+	if (ret)
+		return ret;
+	hwswitch = buffer.output[1];
 
 	/* If the hardware switch controls this radio, and the hardware
 	   switch is disabled, always disable the radio */
@@ -449,28 +507,21 @@ static int dell_rfkill_set(void *data, bool blocked)
 	    (status & BIT(0)) && !(status & BIT(16)))
 		disable = 1;
 
-	dell_smbios_clear_buffer();
-
-	buffer->input[0] = (1 | (radio<<8) | (disable << 16));
-	dell_smbios_send_request(17, 11);
-	ret = buffer->output[0];
-
- out:
-	dell_smbios_release_buffer();
-	return dell_smbios_error(ret);
+	dell_fill_request(&buffer, 1 | (radio<<8) | (disable << 16), 0, 0, 0);
+	ret = dell_send_request(&buffer, CLASS_INFO, SELECT_RFKILL);
+	return ret;
 }
 
-/* Must be called with the buffer held */
 static void dell_rfkill_update_sw_state(struct rfkill *rfkill, int radio,
-					int status,
-					struct calling_interface_buffer *buffer)
+					int status)
 {
 	if (status & BIT(0)) {
 		/* Has hw-switch, sync sw_state to BIOS */
+		struct calling_interface_buffer buffer;
 		int block = rfkill_blocked(rfkill);
-		dell_smbios_clear_buffer();
-		buffer->input[0] = (1 | (radio << 8) | (block << 16));
-		dell_smbios_send_request(17, 11);
+		dell_fill_request(&buffer,
+				   1 | (radio << 8) | (block << 16), 0, 0, 0);
+		dell_send_request(&buffer, CLASS_INFO, SELECT_RFKILL);
 	} else {
 		/* No hw-switch, sync BIOS state to sw_state */
 		rfkill_set_sw_state(rfkill, !!(status & BIT(radio + 16)));
@@ -486,31 +537,23 @@ static void dell_rfkill_update_hw_state(struct rfkill *rfkill, int radio,
 
 static void dell_rfkill_query(struct rfkill *rfkill, void *data)
 {
-	struct calling_interface_buffer *buffer;
 	int radio = ((unsigned long)data & 0xF);
+	struct calling_interface_buffer buffer;
 	int hwswitch;
 	int status;
 	int ret;
 
-	buffer = dell_smbios_get_buffer();
-
-	dell_smbios_send_request(17, 11);
-	ret = buffer->output[0];
-	status = buffer->output[1];
+	dell_fill_request(&buffer, 0, 0, 0, 0);
+	ret = dell_send_request(&buffer, CLASS_INFO, SELECT_RFKILL);
+	status = buffer.output[1];
 
 	if (ret != 0 || !(status & BIT(0))) {
-		dell_smbios_release_buffer();
 		return;
 	}
 
-	dell_smbios_clear_buffer();
-
-	buffer->input[0] = 0x2;
-	dell_smbios_send_request(17, 11);
-	ret = buffer->output[0];
-	hwswitch = buffer->output[1];
-
-	dell_smbios_release_buffer();
+	dell_fill_request(&buffer, 0x2, 0, 0, 0);
+	ret = dell_send_request(&buffer, CLASS_INFO, SELECT_RFKILL);
+	hwswitch = buffer.output[1];
 
 	if (ret != 0)
 		return;
@@ -527,26 +570,23 @@ static struct dentry *dell_laptop_dir;
 
 static int dell_debugfs_show(struct seq_file *s, void *data)
 {
-	struct calling_interface_buffer *buffer;
+	struct calling_interface_buffer buffer;
 	int hwswitch_state;
 	int hwswitch_ret;
 	int status;
 	int ret;
 
-	buffer = dell_smbios_get_buffer();
+	dell_fill_request(&buffer, 0, 0, 0, 0);
+	ret = dell_send_request(&buffer, CLASS_INFO, SELECT_RFKILL);
+	if (ret)
+		return ret;
+	status = buffer.output[1];
 
-	dell_smbios_send_request(17, 11);
-	ret = buffer->output[0];
-	status = buffer->output[1];
-
-	dell_smbios_clear_buffer();
-
-	buffer->input[0] = 0x2;
-	dell_smbios_send_request(17, 11);
-	hwswitch_ret = buffer->output[0];
-	hwswitch_state = buffer->output[1];
-
-	dell_smbios_release_buffer();
+	dell_fill_request(&buffer, 0x2, 0, 0, 0);
+	hwswitch_ret = dell_send_request(&buffer, CLASS_INFO, SELECT_RFKILL);
+	if (hwswitch_ret)
+		return hwswitch_ret;
+	hwswitch_state = buffer.output[1];
 
 	seq_printf(s, "return:\t%d\n", ret);
 	seq_printf(s, "status:\t0x%X\n", status);
@@ -611,62 +651,41 @@ static int dell_debugfs_show(struct seq_file *s, void *data)
 
 	return 0;
 }
-
-static int dell_debugfs_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, dell_debugfs_show, inode->i_private);
-}
-
-static const struct file_operations dell_debugfs_fops = {
-	.owner = THIS_MODULE,
-	.open = dell_debugfs_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(dell_debugfs);
 
 static void dell_update_rfkill(struct work_struct *ignored)
 {
-	struct calling_interface_buffer *buffer;
+	struct calling_interface_buffer buffer;
 	int hwswitch = 0;
 	int status;
 	int ret;
 
-	buffer = dell_smbios_get_buffer();
-
-	dell_smbios_send_request(17, 11);
-	ret = buffer->output[0];
-	status = buffer->output[1];
+	dell_fill_request(&buffer, 0, 0, 0, 0);
+	ret = dell_send_request(&buffer, CLASS_INFO, SELECT_RFKILL);
+	status = buffer.output[1];
 
 	if (ret != 0)
-		goto out;
+		return;
 
-	dell_smbios_clear_buffer();
-
-	buffer->input[0] = 0x2;
-	dell_smbios_send_request(17, 11);
-	ret = buffer->output[0];
+	dell_fill_request(&buffer, 0x2, 0, 0, 0);
+	ret = dell_send_request(&buffer, CLASS_INFO, SELECT_RFKILL);
 
 	if (ret == 0 && (status & BIT(0)))
-		hwswitch = buffer->output[1];
+		hwswitch = buffer.output[1];
 
 	if (wifi_rfkill) {
 		dell_rfkill_update_hw_state(wifi_rfkill, 1, status, hwswitch);
-		dell_rfkill_update_sw_state(wifi_rfkill, 1, status, buffer);
+		dell_rfkill_update_sw_state(wifi_rfkill, 1, status);
 	}
 	if (bluetooth_rfkill) {
 		dell_rfkill_update_hw_state(bluetooth_rfkill, 2, status,
 					    hwswitch);
-		dell_rfkill_update_sw_state(bluetooth_rfkill, 2, status,
-					    buffer);
+		dell_rfkill_update_sw_state(bluetooth_rfkill, 2, status);
 	}
 	if (wwan_rfkill) {
 		dell_rfkill_update_hw_state(wwan_rfkill, 3, status, hwswitch);
-		dell_rfkill_update_sw_state(wwan_rfkill, 3, status, buffer);
+		dell_rfkill_update_sw_state(wwan_rfkill, 3, status);
 	}
-
- out:
-	dell_smbios_release_buffer();
 }
 static DECLARE_DELAYED_WORK(dell_rfkill_work, dell_update_rfkill);
 
@@ -710,7 +729,7 @@ static struct notifier_block dell_laptop_rbtn_notifier = {
 
 static int __init dell_setup_rfkill(void)
 {
-	struct calling_interface_buffer *buffer;
+	struct calling_interface_buffer buffer;
 	int status, ret, whitelisted;
 	const char *product;
 
@@ -726,11 +745,9 @@ static int __init dell_setup_rfkill(void)
 	if (!force_rfkill && !whitelisted)
 		return 0;
 
-	buffer = dell_smbios_get_buffer();
-	dell_smbios_send_request(17, 11);
-	ret = buffer->output[0];
-	status = buffer->output[1];
-	dell_smbios_release_buffer();
+	dell_fill_request(&buffer, 0, 0, 0, 0);
+	ret = dell_send_request(&buffer, CLASS_INFO, SELECT_RFKILL);
+	status = buffer.output[1];
 
 	/* dell wireless info smbios call is not supported */
 	if (ret != 0)
@@ -883,7 +900,7 @@ static void dell_cleanup_rfkill(void)
 
 static int dell_send_intensity(struct backlight_device *bd)
 {
-	struct calling_interface_buffer *buffer;
+	struct calling_interface_buffer buffer;
 	struct calling_interface_token *token;
 	int ret;
 
@@ -891,24 +908,21 @@ static int dell_send_intensity(struct backlight_device *bd)
 	if (!token)
 		return -ENODEV;
 
-	buffer = dell_smbios_get_buffer();
-	buffer->input[0] = token->location;
-	buffer->input[1] = bd->props.brightness;
-
+	dell_fill_request(&buffer,
+			   token->location, bd->props.brightness, 0, 0);
 	if (power_supply_is_system_supplied() > 0)
-		dell_smbios_send_request(1, 2);
+		ret = dell_send_request(&buffer,
+					CLASS_TOKEN_WRITE, SELECT_TOKEN_AC);
 	else
-		dell_smbios_send_request(1, 1);
+		ret = dell_send_request(&buffer,
+					CLASS_TOKEN_WRITE, SELECT_TOKEN_BAT);
 
-	ret = dell_smbios_error(buffer->output[0]);
-
-	dell_smbios_release_buffer();
 	return ret;
 }
 
 static int dell_get_intensity(struct backlight_device *bd)
 {
-	struct calling_interface_buffer *buffer;
+	struct calling_interface_buffer buffer;
 	struct calling_interface_token *token;
 	int ret;
 
@@ -916,20 +930,17 @@ static int dell_get_intensity(struct backlight_device *bd)
 	if (!token)
 		return -ENODEV;
 
-	buffer = dell_smbios_get_buffer();
-	buffer->input[0] = token->location;
-
+	dell_fill_request(&buffer, token->location, 0, 0, 0);
 	if (power_supply_is_system_supplied() > 0)
-		dell_smbios_send_request(0, 2);
+		ret = dell_send_request(&buffer,
+					CLASS_TOKEN_READ, SELECT_TOKEN_AC);
 	else
-		dell_smbios_send_request(0, 1);
+		ret = dell_send_request(&buffer,
+					CLASS_TOKEN_READ, SELECT_TOKEN_BAT);
 
-	if (buffer->output[0])
-		ret = dell_smbios_error(buffer->output[0]);
-	else
-		ret = buffer->output[1];
+	if (ret == 0)
+		ret = buffer.output[1];
 
-	dell_smbios_release_buffer();
 	return ret;
 }
 
@@ -1194,41 +1205,34 @@ static enum led_brightness kbd_led_level;
 
 static int kbd_get_info(struct kbd_info *info)
 {
-	struct calling_interface_buffer *buffer;
+	struct calling_interface_buffer buffer;
 	u8 units;
 	int ret;
 
-	buffer = dell_smbios_get_buffer();
+	dell_fill_request(&buffer, 0, 0, 0, 0);
+	ret = dell_send_request(&buffer,
+				CLASS_KBD_BACKLIGHT, SELECT_KBD_BACKLIGHT);
+	if (ret)
+		return ret;
 
-	buffer->input[0] = 0x0;
-	dell_smbios_send_request(4, 11);
-	ret = buffer->output[0];
-
-	if (ret) {
-		ret = dell_smbios_error(ret);
-		goto out;
-	}
-
-	info->modes = buffer->output[1] & 0xFFFF;
-	info->type = (buffer->output[1] >> 24) & 0xFF;
-	info->triggers = buffer->output[2] & 0xFF;
-	units = (buffer->output[2] >> 8) & 0xFF;
-	info->levels = (buffer->output[2] >> 16) & 0xFF;
+	info->modes = buffer.output[1] & 0xFFFF;
+	info->type = (buffer.output[1] >> 24) & 0xFF;
+	info->triggers = buffer.output[2] & 0xFF;
+	units = (buffer.output[2] >> 8) & 0xFF;
+	info->levels = (buffer.output[2] >> 16) & 0xFF;
 
 	if (quirks && quirks->kbd_led_levels_off_1 && info->levels)
 		info->levels--;
 
 	if (units & BIT(0))
-		info->seconds = (buffer->output[3] >> 0) & 0xFF;
+		info->seconds = (buffer.output[3] >> 0) & 0xFF;
 	if (units & BIT(1))
-		info->minutes = (buffer->output[3] >> 8) & 0xFF;
+		info->minutes = (buffer.output[3] >> 8) & 0xFF;
 	if (units & BIT(2))
-		info->hours = (buffer->output[3] >> 16) & 0xFF;
+		info->hours = (buffer.output[3] >> 16) & 0xFF;
 	if (units & BIT(3))
-		info->days = (buffer->output[3] >> 24) & 0xFF;
+		info->days = (buffer.output[3] >> 24) & 0xFF;
 
- out:
-	dell_smbios_release_buffer();
 	return ret;
 }
 
@@ -1287,58 +1291,51 @@ static int kbd_set_level(struct kbd_state *state, u8 level)
 
 static int kbd_get_state(struct kbd_state *state)
 {
-	struct calling_interface_buffer *buffer;
+	struct calling_interface_buffer buffer;
 	int ret;
 
-	buffer = dell_smbios_get_buffer();
+	dell_fill_request(&buffer, 0x1, 0, 0, 0);
+	ret = dell_send_request(&buffer,
+				CLASS_KBD_BACKLIGHT, SELECT_KBD_BACKLIGHT);
+	if (ret)
+		return ret;
 
-	buffer->input[0] = 0x1;
-	dell_smbios_send_request(4, 11);
-	ret = buffer->output[0];
-
-	if (ret) {
-		ret = dell_smbios_error(ret);
-		goto out;
-	}
-
-	state->mode_bit = ffs(buffer->output[1] & 0xFFFF);
+	state->mode_bit = ffs(buffer.output[1] & 0xFFFF);
 	if (state->mode_bit != 0)
 		state->mode_bit--;
 
-	state->triggers = (buffer->output[1] >> 16) & 0xFF;
-	state->timeout_value = (buffer->output[1] >> 24) & 0x3F;
-	state->timeout_unit = (buffer->output[1] >> 30) & 0x3;
-	state->als_setting = buffer->output[2] & 0xFF;
-	state->als_value = (buffer->output[2] >> 8) & 0xFF;
-	state->level = (buffer->output[2] >> 16) & 0xFF;
-	state->timeout_value_ac = (buffer->output[2] >> 24) & 0x3F;
-	state->timeout_unit_ac = (buffer->output[2] >> 30) & 0x3;
+	state->triggers = (buffer.output[1] >> 16) & 0xFF;
+	state->timeout_value = (buffer.output[1] >> 24) & 0x3F;
+	state->timeout_unit = (buffer.output[1] >> 30) & 0x3;
+	state->als_setting = buffer.output[2] & 0xFF;
+	state->als_value = (buffer.output[2] >> 8) & 0xFF;
+	state->level = (buffer.output[2] >> 16) & 0xFF;
+	state->timeout_value_ac = (buffer.output[2] >> 24) & 0x3F;
+	state->timeout_unit_ac = (buffer.output[2] >> 30) & 0x3;
 
- out:
-	dell_smbios_release_buffer();
 	return ret;
 }
 
 static int kbd_set_state(struct kbd_state *state)
 {
-	struct calling_interface_buffer *buffer;
+	struct calling_interface_buffer buffer;
 	int ret;
+	u32 input1;
+	u32 input2;
 
-	buffer = dell_smbios_get_buffer();
-	buffer->input[0] = 0x2;
-	buffer->input[1] = BIT(state->mode_bit) & 0xFFFF;
-	buffer->input[1] |= (state->triggers & 0xFF) << 16;
-	buffer->input[1] |= (state->timeout_value & 0x3F) << 24;
-	buffer->input[1] |= (state->timeout_unit & 0x3) << 30;
-	buffer->input[2] = state->als_setting & 0xFF;
-	buffer->input[2] |= (state->level & 0xFF) << 16;
-	buffer->input[2] |= (state->timeout_value_ac & 0x3F) << 24;
-	buffer->input[2] |= (state->timeout_unit_ac & 0x3) << 30;
-	dell_smbios_send_request(4, 11);
-	ret = buffer->output[0];
-	dell_smbios_release_buffer();
+	input1 = BIT(state->mode_bit) & 0xFFFF;
+	input1 |= (state->triggers & 0xFF) << 16;
+	input1 |= (state->timeout_value & 0x3F) << 24;
+	input1 |= (state->timeout_unit & 0x3) << 30;
+	input2 = state->als_setting & 0xFF;
+	input2 |= (state->level & 0xFF) << 16;
+	input2 |= (state->timeout_value_ac & 0x3F) << 24;
+	input2 |= (state->timeout_unit_ac & 0x3) << 30;
+	dell_fill_request(&buffer, 0x2, input1, input2, 0);
+	ret = dell_send_request(&buffer,
+				CLASS_KBD_BACKLIGHT, SELECT_KBD_BACKLIGHT);
 
-	return dell_smbios_error(ret);
+	return ret;
 }
 
 static int kbd_set_state_safe(struct kbd_state *state, struct kbd_state *old)
@@ -1363,7 +1360,7 @@ static int kbd_set_state_safe(struct kbd_state *state, struct kbd_state *old)
 
 static int kbd_set_token_bit(u8 bit)
 {
-	struct calling_interface_buffer *buffer;
+	struct calling_interface_buffer buffer;
 	struct calling_interface_token *token;
 	int ret;
 
@@ -1374,19 +1371,15 @@ static int kbd_set_token_bit(u8 bit)
 	if (!token)
 		return -EINVAL;
 
-	buffer = dell_smbios_get_buffer();
-	buffer->input[0] = token->location;
-	buffer->input[1] = token->value;
-	dell_smbios_send_request(1, 0);
-	ret = buffer->output[0];
-	dell_smbios_release_buffer();
+	dell_fill_request(&buffer, token->location, token->value, 0, 0);
+	ret = dell_send_request(&buffer, CLASS_TOKEN_WRITE, SELECT_TOKEN_STD);
 
-	return dell_smbios_error(ret);
+	return ret;
 }
 
 static int kbd_get_token_bit(u8 bit)
 {
-	struct calling_interface_buffer *buffer;
+	struct calling_interface_buffer buffer;
 	struct calling_interface_token *token;
 	int ret;
 	int val;
@@ -1398,15 +1391,12 @@ static int kbd_get_token_bit(u8 bit)
 	if (!token)
 		return -EINVAL;
 
-	buffer = dell_smbios_get_buffer();
-	buffer->input[0] = token->location;
-	dell_smbios_send_request(0, 0);
-	ret = buffer->output[0];
-	val = buffer->output[1];
-	dell_smbios_release_buffer();
+	dell_fill_request(&buffer, token->location, 0, 0, 0);
+	ret = dell_send_request(&buffer, CLASS_TOKEN_READ, SELECT_TOKEN_STD);
+	val = buffer.output[1];
 
 	if (ret)
-		return dell_smbios_error(ret);
+		return ret;
 
 	return (val == token->value);
 }
@@ -1444,7 +1434,8 @@ static inline int kbd_init_info(void)
 	 *       timeout value which is shared for both battery and AC power
 	 *       settings. So do not try to set AC values on old models.
 	 */
-	if (dell_smbios_find_token(KBD_LED_AC_TOKEN))
+	if ((quirks && quirks->kbd_missing_ac_tag) ||
+	    dell_smbios_find_token(KBD_LED_AC_TOKEN))
 		kbd_timeout_ac_supported = true;
 
 	kbd_get_state(&state);
@@ -1525,6 +1516,9 @@ static void kbd_init(void)
 {
 	int ret;
 
+	if (quirks && quirks->kbd_led_not_present)
+		return;
+
 	ret = kbd_init_info();
 	kbd_init_tokens();
 
@@ -1593,8 +1587,10 @@ static ssize_t kbd_led_timeout_store(struct device *dev,
 		switch (unit) {
 		case KBD_TIMEOUT_DAYS:
 			value *= 24;
+			fallthrough;
 		case KBD_TIMEOUT_HOURS:
 			value *= 60;
+			fallthrough;
 		case KBD_TIMEOUT_MINUTES:
 			value *= 60;
 			unit = KBD_TIMEOUT_SECONDS;
@@ -2137,34 +2133,36 @@ static struct notifier_block dell_laptop_notifier = {
 	.notifier_call = dell_laptop_notifier_call,
 };
 
-int dell_micmute_led_set(int state)
+static int micmute_led_set(struct led_classdev *led_cdev,
+			   enum led_brightness brightness)
 {
-	struct calling_interface_buffer *buffer;
+	struct calling_interface_buffer buffer;
 	struct calling_interface_token *token;
+	int state = brightness != LED_OFF;
 
 	if (state == 0)
 		token = dell_smbios_find_token(GLOBAL_MIC_MUTE_DISABLE);
-	else if (state == 1)
-		token = dell_smbios_find_token(GLOBAL_MIC_MUTE_ENABLE);
 	else
-		return -EINVAL;
+		token = dell_smbios_find_token(GLOBAL_MIC_MUTE_ENABLE);
 
 	if (!token)
 		return -ENODEV;
 
-	buffer = dell_smbios_get_buffer();
-	buffer->input[0] = token->location;
-	buffer->input[1] = token->value;
-	dell_smbios_send_request(1, 0);
-	dell_smbios_release_buffer();
+	dell_fill_request(&buffer, token->location, token->value, 0, 0);
+	dell_send_request(&buffer, CLASS_TOKEN_WRITE, SELECT_TOKEN_STD);
 
-	return state;
+	return 0;
 }
-EXPORT_SYMBOL_GPL(dell_micmute_led_set);
+
+static struct led_classdev micmute_led_cdev = {
+	.name = "platform::micmute",
+	.max_brightness = 1,
+	.brightness_set_blocking = micmute_led_set,
+	.default_trigger = "audio-micmute",
+};
 
 static int __init dell_init(void)
 {
-	struct calling_interface_buffer *buffer;
 	struct calling_interface_token *token;
 	int max_intensity = 0;
 	int ret;
@@ -2201,23 +2199,31 @@ static int __init dell_init(void)
 	kbd_led_init(&platform_device->dev);
 
 	dell_laptop_dir = debugfs_create_dir("dell_laptop", NULL);
-	if (dell_laptop_dir != NULL)
-		debugfs_create_file("rfkill", 0444, dell_laptop_dir, NULL,
-				    &dell_debugfs_fops);
+	debugfs_create_file("rfkill", 0444, dell_laptop_dir, NULL,
+			    &dell_debugfs_fops);
 
 	dell_laptop_register_notifier(&dell_laptop_notifier);
+
+	if (dell_smbios_find_token(GLOBAL_MIC_MUTE_DISABLE) &&
+	    dell_smbios_find_token(GLOBAL_MIC_MUTE_ENABLE)) {
+		micmute_led_cdev.brightness = ledtrig_audio_get(LED_AUDIO_MICMUTE);
+		ret = led_classdev_register(&platform_device->dev, &micmute_led_cdev);
+		if (ret < 0)
+			goto fail_led;
+	}
 
 	if (acpi_video_get_backlight_type() != acpi_backlight_vendor)
 		return 0;
 
 	token = dell_smbios_find_token(BRIGHTNESS_TOKEN);
 	if (token) {
-		buffer = dell_smbios_get_buffer();
-		buffer->input[0] = token->location;
-		dell_smbios_send_request(0, 2);
-		if (buffer->output[0] == 0)
-			max_intensity = buffer->output[3];
-		dell_smbios_release_buffer();
+		struct calling_interface_buffer buffer;
+
+		dell_fill_request(&buffer, token->location, 0, 0, 0);
+		ret = dell_send_request(&buffer,
+					CLASS_TOKEN_READ, SELECT_TOKEN_AC);
+		if (ret == 0)
+			max_intensity = buffer.output[3];
 	}
 
 	if (max_intensity) {
@@ -2251,6 +2257,8 @@ static int __init dell_init(void)
 fail_get_brightness:
 	backlight_device_unregister(dell_backlight_device);
 fail_backlight:
+	led_classdev_unregister(&micmute_led_cdev);
+fail_led:
 	dell_cleanup_rfkill();
 fail_rfkill:
 	platform_device_del(platform_device);
@@ -2270,6 +2278,7 @@ static void __exit dell_exit(void)
 		touchpad_led_exit();
 	kbd_led_exit();
 	backlight_device_unregister(dell_backlight_device);
+	led_classdev_unregister(&micmute_led_cdev);
 	dell_cleanup_rfkill();
 	if (platform_device) {
 		platform_device_unregister(platform_device);
@@ -2289,6 +2298,6 @@ module_exit(dell_exit);
 
 MODULE_AUTHOR("Matthew Garrett <mjg@redhat.com>");
 MODULE_AUTHOR("Gabriele Mazzotta <gabriele.mzt@gmail.com>");
-MODULE_AUTHOR("Pali Rohár <pali.rohar@gmail.com>");
+MODULE_AUTHOR("Pali Rohár <pali@kernel.org>");
 MODULE_DESCRIPTION("Dell laptop driver");
 MODULE_LICENSE("GPL");

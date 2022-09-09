@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * comedi/drivers/daqboard2000.c
  * hardware driver for IOtech DAQboard/2000
  *
  * COMEDI - Linux Control and Measurement Device Interface
  * Copyright (C) 1999 Anders Blomdell <anders.blomdell@control.lth.se>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 /*
  * Driver: daqboard2000
@@ -27,7 +18,7 @@
  * the source code for the Windows driver.
  *
  * The FPGA on the board requires firmware, which is available from
- * http://www.comedi.org in the comedi_nonfree_firmware tarball.
+ * https://www.comedi.org in the comedi_nonfree_firmware tarball.
  *
  * Configuration options: not applicable, uses PCI auto config
  */
@@ -249,7 +240,7 @@ enum db2k_boardid {
 
 struct db2k_boardtype {
 	const char *name;
-	bool has_2_ao:1;	/* false: 4 AO chans; true: 2 AO chans */
+	unsigned int has_2_ao:1;/* false: 4 AO chans; true: 2 AO chans */
 };
 
 static const struct db2k_boardtype db2k_boardtypes[] = {
@@ -674,11 +665,6 @@ static void db2k_initialize_adc(struct comedi_device *dev)
 	db2k_initialize_tmrs(dev);
 }
 
-static void db2k_initialize_dac(struct comedi_device *dev)
-{
-	db2k_dac_disarm(dev);
-}
-
 static int db2k_8255_cb(struct comedi_device *dev, int dir, int port, int data,
 			unsigned long iobase)
 {
@@ -728,7 +714,7 @@ static int db2k_auto_attach(struct comedi_device *dev, unsigned long context)
 		return result;
 
 	db2k_initialize_adc(dev);
-	db2k_initialize_dac(dev);
+	db2k_dac_disarm(dev);
 
 	s = &dev->subdevices[0];
 	/* ai subdevice */
@@ -795,7 +781,7 @@ static struct pci_driver db2k_pci_driver = {
 };
 module_comedi_pci_driver(db2k_driver, db2k_pci_driver);
 
-MODULE_AUTHOR("Comedi http://www.comedi.org");
+MODULE_AUTHOR("Comedi https://www.comedi.org");
 MODULE_DESCRIPTION("Comedi low-level driver");
 MODULE_LICENSE("GPL");
 MODULE_FIRMWARE(DB2K_FIRMWARE);

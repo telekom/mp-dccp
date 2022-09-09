@@ -1,20 +1,18 @@
-.. |struct dev_pm_ops| replace:: :c:type:`struct dev_pm_ops <dev_pm_ops>`
-.. |struct dev_pm_domain| replace:: :c:type:`struct dev_pm_domain <dev_pm_domain>`
-.. |struct bus_type| replace:: :c:type:`struct bus_type <bus_type>`
-.. |struct device_type| replace:: :c:type:`struct device_type <device_type>`
-.. |struct class| replace:: :c:type:`struct class <class>`
-.. |struct wakeup_source| replace:: :c:type:`struct wakeup_source <wakeup_source>`
-.. |struct device| replace:: :c:type:`struct device <device>`
+.. SPDX-License-Identifier: GPL-2.0
+.. include:: <isonum.txt>
+
+.. _driverapi_pm_devices:
 
 ==============================
 Device Power Management Basics
 ==============================
 
-::
+:Copyright: |copy| 2010-2011 Rafael J. Wysocki <rjw@sisk.pl>, Novell Inc.
+:Copyright: |copy| 2010 Alan Stern <stern@rowland.harvard.edu>
+:Copyright: |copy| 2016 Intel Corporation
 
- Copyright (c) 2010-2011 Rafael J. Wysocki <rjw@sisk.pl>, Novell Inc.
- Copyright (c) 2010 Alan Stern <stern@rowland.harvard.edu>
- Copyright (c) 2016 Intel Corp., Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+:Author: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+
 
 Most of the code in Linux is device drivers, so most of the Linux power
 management (PM) code is also driver-specific.  Most drivers will do very
@@ -101,7 +99,7 @@ Device Power Management Operations
 
 Device power management operations, at the subsystem level as well as at the
 device driver level, are implemented by defining and populating objects of type
-|struct dev_pm_ops| defined in :file:`include/linux/pm.h`.  The roles of the
+struct dev_pm_ops defined in :file:`include/linux/pm.h`.  The roles of the
 methods included in it will be explained in what follows.  For now, it should be
 sufficient to remember that the last three methods are specific to runtime power
 management while the remaining ones are used during system-wide power
@@ -109,7 +107,7 @@ transitions.
 
 There also is a deprecated "old" or "legacy" interface for power management
 operations available at least for some subsystems.  This approach does not use
-|struct dev_pm_ops| objects and it is suitable only for implementing system
+struct dev_pm_ops objects and it is suitable only for implementing system
 sleep power management methods in a limited way.  Therefore it is not described
 in this document, so please refer directly to the source code for more
 information about it.
@@ -119,9 +117,9 @@ Subsystem-Level Methods
 -----------------------
 
 The core methods to suspend and resume devices reside in
-|struct dev_pm_ops| pointed to by the :c:member:`ops` member of
-|struct dev_pm_domain|, or by the :c:member:`pm` member of |struct bus_type|,
-|struct device_type| and |struct class|.  They are mostly of interest to the
+struct dev_pm_ops pointed to by the :c:member:`ops` member of
+struct dev_pm_domain, or by the :c:member:`pm` member of struct bus_type,
+struct device_type and struct class.  They are mostly of interest to the
 people writing infrastructure for platforms and buses, like PCI or USB, or
 device type and device class drivers.  They also are relevant to the writers of
 device drivers whose subsystems (PM domains, device types, device classes and
@@ -150,7 +148,7 @@ The :c:member:`power.can_wakeup` flag just records whether the device (and its
 driver) can physically support wakeup events.  The
 :c:func:`device_set_wakeup_capable()` routine affects this flag.  The
 :c:member:`power.wakeup` field is a pointer to an object of type
-|struct wakeup_source| used for controlling whether or not the device should use
+struct wakeup_source used for controlling whether or not the device should use
 its system wakeup mechanism and for notifying the PM core of system wakeup
 events signaled by the device.  This object is only present for wakeup-capable
 devices (i.e. devices whose :c:member:`can_wakeup` flags are set) and is created
@@ -219,7 +217,7 @@ system-wide transition to a sleep state even though its :c:member:`runtime_auto`
 flag is clear.
 
 For more information about the runtime power management framework, refer to
-:file:`Documentation/power/runtime_pm.txt`.
+:file:`Documentation/power/runtime_pm.rst`.
 
 
 Calling Drivers to Enter and Leave System Sleep States
@@ -274,7 +272,7 @@ sleep states and the hibernation state ("suspend-to-disk").  Each phase involves
 executing callbacks for every device before the next phase begins.  Not all
 buses or classes support all these callbacks and not all drivers use all the
 callbacks.  The various phases always run after tasks have been frozen and
-before they are unfrozen.  Furthermore, the ``*_noirq phases`` run at a time
+before they are unfrozen.  Furthermore, the ``*_noirq`` phases run at a time
 when IRQ handlers have been disabled (except for those marked with the
 IRQF_NO_SUSPEND flag).
 
@@ -328,7 +326,10 @@ the phases are: ``prepare``, ``suspend``, ``suspend_late``, ``suspend_noirq``.
 	After the ``->prepare`` callback method returns, no new children may be
 	registered below the device.  The method may also prepare the device or
 	driver in some way for the upcoming system power transition, but it
-	should not put the device into a low-power state.
+	should not put the device into a low-power state.  Moreover, if the
+	device supports runtime power management, the ``->prepare`` callback
+	method must not update its state in case it is necessary to resume it
+	from runtime suspend later on.
 
 	For devices supporting runtime power management, the return value of the
 	prepare callback can be used to indicate to the PM core that it may
@@ -340,7 +341,7 @@ the phases are: ``prepare``, ``suspend``, ``suspend_late``, ``suspend_noirq``.
 	PM core will skip the ``suspend``, ``suspend_late`` and
 	``suspend_noirq`` phases as well as all of the corresponding phases of
 	the subsequent device resume for all of these devices.	In that case,
-	the ``->complete`` callback will be invoked directly after the
+	the ``->complete`` callback will be the next one invoked after the
 	``->prepare`` callback and is entirely responsible for putting the
 	device into a consistent state as appropriate.
 
@@ -351,10 +352,38 @@ the phases are: ``prepare``, ``suspend``, ``suspend_late``, ``suspend_noirq``.
 	is because all such devices are initially set to runtime-suspended with
 	runtime PM disabled.
 
+	This feature also can be controlled by device drivers by using the
+	``DPM_FLAG_NO_DIRECT_COMPLETE`` and ``DPM_FLAG_SMART_PREPARE`` driver
+	power management flags.  [Typically, they are set at the time the driver
+	is probed against the device in question by passing them to the
+	:c:func:`dev_pm_set_driver_flags` helper function.]  If the first of
+	these flags is set, the PM core will not apply the direct-complete
+	procedure described above to the given device and, consequenty, to any
+	of its ancestors.  The second flag, when set, informs the middle layer
+	code (bus types, device types, PM domains, classes) that it should take
+	the return value of the ``->prepare`` callback provided by the driver
+	into account and it may only return a positive value from its own
+	``->prepare`` callback if the driver's one also has returned a positive
+	value.
+
     2.	The ``->suspend`` methods should quiesce the device to stop it from
 	performing I/O.  They also may save the device registers and put it into
 	the appropriate low-power state, depending on the bus type the device is
 	on, and they may enable wakeup events.
+
+	However, for devices supporting runtime power management, the
+	``->suspend`` methods provided by subsystems (bus types and PM domains
+	in particular) must follow an additional rule regarding what can be done
+	to the devices before their drivers' ``->suspend`` methods are called.
+	Namely, they may resume the devices from runtime suspend by
+	calling :c:func:`pm_runtime_resume` for them, if that is necessary, but
+	they must not update the state of the devices in any other way at that
+	time (in case the drivers need to resume the devices from runtime
+	suspend in their ``->suspend`` methods).  In fact, the PM core prevents
+	subsystems or drivers from putting devices into runtime suspend at
+	these times by calling :c:func:`pm_runtime_get_noresume` before issuing
+	the ``->prepare`` callback (and calling :c:func:`pm_runtime_put` after
+	issuing the ``->complete`` callback).
 
     3.	For a number of devices it is convenient to split suspend into the
 	"quiesce device" and "save device state" phases, in which cases
@@ -381,7 +410,7 @@ On many platforms they will gate off one or more clock sources; sometimes they
 will also switch off power supplies or reduce voltages.  [Drivers supporting
 runtime PM may already have performed some or all of these steps.]
 
-If :c:func:`device_may_wakeup(dev)` returns ``true``, the device should be
+If :c:func:`device_may_wakeup()` returns ``true``, the device should be
 prepared for generating hardware wakeup signals to trigger a system wakeup event
 when the system is in the sleep state.  For example, :c:func:`enable_irq_wake()`
 might identify GPIO signals hooked up to a switch or other external hardware,
@@ -426,22 +455,22 @@ When resuming from freeze, standby or memory sleep, the phases are:
 
 	Note, however, that new children may be registered below the device as
 	soon as the ``->resume`` callbacks occur; it's not necessary to wait
-	until the ``complete`` phase with that.
+	until the ``complete`` phase runs.
 
 	Moreover, if the preceding ``->prepare`` callback returned a positive
 	number, the device may have been left in runtime suspend throughout the
-	whole system suspend and resume (the ``suspend``, ``suspend_late``,
-	``suspend_noirq`` phases of system suspend and the ``resume_noirq``,
-	``resume_early``, ``resume`` phases of system resume may have been
-	skipped for it).  In that case, the ``->complete`` callback is entirely
+	whole system suspend and resume (its ``->suspend``, ``->suspend_late``,
+	``->suspend_noirq``, ``->resume_noirq``,
+	``->resume_early``, and ``->resume`` callbacks may have been
+	skipped).  In that case, the ``->complete`` callback is entirely
 	responsible for putting the device into a consistent state after system
 	suspend if necessary.  [For example, it may need to queue up a runtime
 	resume request for the device for this purpose.]  To check if that is
 	the case, the ``->complete`` callback can consult the device's
-	``power.direct_complete`` flag.  Namely, if that flag is set when the
-	``->complete`` callback is being run, it has been called directly after
-	the preceding ``->prepare`` and special actions may be required
-	to make the device work correctly afterward.
+	``power.direct_complete`` flag.  If that flag is set when the
+	``->complete`` callback is being run then the direct-complete mechanism
+	was used, and special actions may be required to make the device work
+	correctly afterward.
 
 At the end of these phases, drivers should be as functional as they were before
 suspending: I/O can be performed using DMA and IRQs, and the relevant clocks are
@@ -542,10 +571,12 @@ and the phases are similar.
 
 The ``->poweroff``, ``->poweroff_late`` and ``->poweroff_noirq`` callbacks
 should do essentially the same things as the ``->suspend``, ``->suspend_late``
-and ``->suspend_noirq`` callbacks, respectively.  The only notable difference is
+and ``->suspend_noirq`` callbacks, respectively.  A notable difference is
 that they need not store the device register values, because the registers
 should already have been stored during the ``freeze``, ``freeze_late`` or
-``freeze_noirq`` phases.
+``freeze_noirq`` phases.  Also, on many machines the firmware will power-down
+the entire system, so it is not necessary for the callback to put the device in
+a low-power state.
 
 
 Leaving Hibernation
@@ -674,8 +705,8 @@ nested inside another power domain. The nested domain is referred to as the
 sub-domain of the parent domain.
 
 Support for power domains is provided through the :c:member:`pm_domain` field of
-|struct device|.  This field is a pointer to an object of type
-|struct dev_pm_domain|, defined in :file:`include/linux/pm.h`, providing a set
+struct device.  This field is a pointer to an object of type
+struct dev_pm_domain, defined in :file:`include/linux/pm.h`, providing a set
 of power management callbacks analogous to the subsystem-level and device driver
 callbacks that are executed for the given device during all power transitions,
 instead of the respective subsystem-level callbacks.  Specifically, if a
@@ -695,7 +726,7 @@ it into account in any way.
 
 Devices may be defined as IRQ-safe which indicates to the PM core that their
 runtime PM callbacks may be invoked with disabled interrupts (see
-:file:`Documentation/power/runtime_pm.txt` for more information).  If an
+:file:`Documentation/power/runtime_pm.rst` for more information).  If an
 IRQ-safe device belongs to a PM domain, the runtime PM of the domain will be
 disallowed, unless the domain itself is defined as IRQ-safe. However, it
 makes sense to define a PM domain as IRQ-safe only if all the devices in it
@@ -729,8 +760,121 @@ state temporarily, for example so that its system wakeup capability can be
 disabled.  This all depends on the hardware and the design of the subsystem and
 device driver in question.
 
+If it is necessary to resume a device from runtime suspend during a system-wide
+transition into a sleep state, that can be done by calling
+:c:func:`pm_runtime_resume` from the ``->suspend`` callback (or the ``->freeze``
+or ``->poweroff`` callback for transitions related to hibernation) of either the
+device's driver or its subsystem (for example, a bus type or a PM domain).
+However, subsystems must not otherwise change the runtime status of devices
+from their ``->prepare`` and ``->suspend`` callbacks (or equivalent) *before*
+invoking device drivers' ``->suspend`` callbacks (or equivalent).
+
+.. _smart_suspend_flag:
+
+The ``DPM_FLAG_SMART_SUSPEND`` Driver Flag
+------------------------------------------
+
+Some bus types and PM domains have a policy to resume all devices from runtime
+suspend upfront in their ``->suspend`` callbacks, but that may not be really
+necessary if the device's driver can cope with runtime-suspended devices.
+The driver can indicate this by setting ``DPM_FLAG_SMART_SUSPEND`` in
+:c:member:`power.driver_flags` at probe time, with the assistance of the
+:c:func:`dev_pm_set_driver_flags` helper routine.
+
+Setting that flag causes the PM core and middle-layer code
+(bus types, PM domains etc.) to skip the ``->suspend_late`` and
+``->suspend_noirq`` callbacks provided by the driver if the device remains in
+runtime suspend throughout those phases of the system-wide suspend (and
+similarly for the "freeze" and "poweroff" parts of system hibernation).
+[Otherwise the same driver
+callback might be executed twice in a row for the same device, which would not
+be valid in general.]  If the middle-layer system-wide PM callbacks are present
+for the device then they are responsible for skipping these driver callbacks;
+if not then the PM core skips them.  The subsystem callback routines can
+determine whether they need to skip the driver callbacks by testing the return
+value from the :c:func:`dev_pm_skip_suspend` helper function.
+
+In addition, with ``DPM_FLAG_SMART_SUSPEND`` set, the driver's ``->thaw_noirq``
+and ``->thaw_early`` callbacks are skipped in hibernation if the device remained
+in runtime suspend throughout the preceding "freeze" transition.  Again, if the
+middle-layer callbacks are present for the device, they are responsible for
+doing this, otherwise the PM core takes care of it.
+
+
+The ``DPM_FLAG_MAY_SKIP_RESUME`` Driver Flag
+--------------------------------------------
+
 During system-wide resume from a sleep state it's easiest to put devices into
-the full-power state, as explained in :file:`Documentation/power/runtime_pm.txt`.
-Refer to that document for more information regarding this particular issue as
+the full-power state, as explained in :file:`Documentation/power/runtime_pm.rst`.
+[Refer to that document for more information regarding this particular issue as
 well as for information on the device runtime power management framework in
-general.
+general.]  However, it often is desirable to leave devices in suspend after
+system transitions to the working state, especially if those devices had been in
+runtime suspend before the preceding system-wide suspend (or analogous)
+transition.
+
+To that end, device drivers can use the ``DPM_FLAG_MAY_SKIP_RESUME`` flag to
+indicate to the PM core and middle-layer code that they allow their "noirq" and
+"early" resume callbacks to be skipped if the device can be left in suspend
+after system-wide PM transitions to the working state.  Whether or not that is
+the case generally depends on the state of the device before the given system
+suspend-resume cycle and on the type of the system transition under way.
+In particular, the "thaw" and "restore" transitions related to hibernation are
+not affected by ``DPM_FLAG_MAY_SKIP_RESUME`` at all.  [All callbacks are
+issued during the "restore" transition regardless of the flag settings,
+and whether or not any driver callbacks
+are skipped during the "thaw" transition depends whether or not the
+``DPM_FLAG_SMART_SUSPEND`` flag is set (see `above <smart_suspend_flag_>`_).
+In addition, a device is not allowed to remain in runtime suspend if any of its
+children will be returned to full power.]
+
+The ``DPM_FLAG_MAY_SKIP_RESUME`` flag is taken into account in combination with
+the :c:member:`power.may_skip_resume` status bit set by the PM core during the
+"suspend" phase of suspend-type transitions.  If the driver or the middle layer
+has a reason to prevent the driver's "noirq" and "early" resume callbacks from
+being skipped during the subsequent system resume transition, it should
+clear :c:member:`power.may_skip_resume` in its ``->suspend``, ``->suspend_late``
+or ``->suspend_noirq`` callback.  [Note that the drivers setting
+``DPM_FLAG_SMART_SUSPEND`` need to clear :c:member:`power.may_skip_resume` in
+their ``->suspend`` callback in case the other two are skipped.]
+
+Setting the :c:member:`power.may_skip_resume` status bit along with the
+``DPM_FLAG_MAY_SKIP_RESUME`` flag is necessary, but generally not sufficient,
+for the driver's "noirq" and "early" resume callbacks to be skipped.  Whether or
+not they should be skipped can be determined by evaluating the
+:c:func:`dev_pm_skip_resume` helper function.
+
+If that function returns ``true``, the driver's "noirq" and "early" resume
+callbacks should be skipped and the device's runtime PM status will be set to
+"suspended" by the PM core.  Otherwise, if the device was runtime-suspended
+during the preceding system-wide suspend transition and its
+``DPM_FLAG_SMART_SUSPEND`` is set, its runtime PM status will be set to
+"active" by the PM core.  [Hence, the drivers that do not set
+``DPM_FLAG_SMART_SUSPEND`` should not expect the runtime PM status of their
+devices to be changed from "suspended" to "active" by the PM core during
+system-wide resume-type transitions.]
+
+If the ``DPM_FLAG_MAY_SKIP_RESUME`` flag is not set for a device, but
+``DPM_FLAG_SMART_SUSPEND`` is set and the driver's "late" and "noirq" suspend
+callbacks are skipped, its system-wide "noirq" and "early" resume callbacks, if
+present, are invoked as usual and the device's runtime PM status is set to
+"active" by the PM core before enabling runtime PM for it.  In that case, the
+driver must be prepared to cope with the invocation of its system-wide resume
+callbacks back-to-back with its ``->runtime_suspend`` one (without the
+intervening ``->runtime_resume`` and system-wide suspend callbacks) and the
+final state of the device must reflect the "active" runtime PM status in that
+case.  [Note that this is not a problem at all if the driver's
+``->suspend_late`` callback pointer points to the same function as its
+``->runtime_suspend`` one and its ``->resume_early`` callback pointer points to
+the same function as the ``->runtime_resume`` one, while none of the other
+system-wide suspend-resume callbacks of the driver are present, for example.]
+
+Likewise, if ``DPM_FLAG_MAY_SKIP_RESUME`` is set for a device, its driver's
+system-wide "noirq" and "early" resume callbacks may be skipped while its "late"
+and "noirq" suspend callbacks may have been executed (in principle, regardless
+of whether or not ``DPM_FLAG_SMART_SUSPEND`` is set).  In that case, the driver
+needs to be able to cope with the invocation of its ``->runtime_resume``
+callback back-to-back with its "late" and "noirq" suspend ones.  [For instance,
+that is not a concern if the driver sets both ``DPM_FLAG_SMART_SUSPEND`` and
+``DPM_FLAG_MAY_SKIP_RESUME`` and uses the same pair of suspend/resume callback
+functions for runtime PM and system-wide suspend/resume.]

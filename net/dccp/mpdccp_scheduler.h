@@ -1,24 +1,17 @@
-/*  SPDX-License-Identifier: GNU General Public License v2 only (GPL-2.0-only)
+/*
+ * MPDCCP - DCCP bundling kernel module
  *
- * Copyright (C) 2017 by Andreas Philipp Matz, Deutsche Telekom AG
- * Copyright (C) 2017 by Markus Amend, Deutsche Telekom AG
- * Copyright (C) 2020-2021 by Frank Reker, Deutsche Telekom AG
- *
- * MPDCCP - Scheduler Framework
+ * This module implements a bundling mechanism that aggregates
+ * multiple paths using the DCCP protocol.
  * 
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 2 of the License, or
- * (at your option) any later version.
-
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
-
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
+ * Copyright (C) 2017 by Andreas Philipp Matz <info@andreasmatz.de>
+ * Copyright (C) 2020-2021 by Frank Reker <frank@reker.net>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ */
 
 #ifndef _MPDCCP_SCHEDULER_H
 #define _MPDCCP_SCHEDULER_H
@@ -85,6 +78,7 @@ struct mpdccp_sched_ops *mpdccp_sched_find(const char *name);
  */
 int mpdccp_sched_default_register (void);
 void mpdccp_sched_default_unregister (void);
+
 
 
 #endif /* _MPDCCP_SCHEDULER_H */

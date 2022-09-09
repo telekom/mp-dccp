@@ -207,7 +207,7 @@ static void bcma_of_fill_device(struct device *parent,
 
 	core->irq = bcma_of_get_irq(parent, core, 0);
 
-	of_dma_configure(&core->dev, node);
+	of_dma_configure(&core->dev, node, false);
 }
 
 unsigned int bcma_core_irq(struct bcma_device *core, int num)
@@ -223,8 +223,8 @@ unsigned int bcma_core_irq(struct bcma_device *core, int num)
 			mips_irq = bcma_core_mips_irq(core);
 			return mips_irq <= 4 ? mips_irq + 2 : 0;
 		}
-		if (bus->host_pdev)
-			return bcma_of_get_irq(&bus->host_pdev->dev, core, num);
+		if (bus->dev)
+			return bcma_of_get_irq(bus->dev, core, num);
 		return 0;
 	case BCMA_HOSTTYPE_SDIO:
 		return 0;
@@ -236,21 +236,22 @@ EXPORT_SYMBOL(bcma_core_irq);
 
 void bcma_prepare_core(struct bcma_bus *bus, struct bcma_device *core)
 {
+	device_initialize(&core->dev);
 	core->dev.release = bcma_release_core_dev;
 	core->dev.bus = &bcma_bus_type;
 	dev_set_name(&core->dev, "bcma%d:%d", bus->num, core->core_index);
-	core->dev.parent = bcma_bus_get_host_dev(bus);
-	if (core->dev.parent)
-		bcma_of_fill_device(core->dev.parent, core);
+	core->dev.parent = bus->dev;
+	if (bus->dev)
+		bcma_of_fill_device(bus->dev, core);
 
 	switch (bus->hosttype) {
 	case BCMA_HOSTTYPE_PCI:
-		core->dma_dev = &bus->host_pci->dev;
+		core->dma_dev = bus->dev;
 		core->irq = bus->host_pci->irq;
 		break;
 	case BCMA_HOSTTYPE_SOC:
-		if (IS_ENABLED(CONFIG_OF) && bus->host_pdev) {
-			core->dma_dev = &bus->host_pdev->dev;
+		if (IS_ENABLED(CONFIG_OF) && bus->dev) {
+			core->dma_dev = bus->dev;
 		} else {
 			core->dev.dma_mask = &core->dev.coherent_dma_mask;
 			core->dma_dev = &core->dev;
@@ -259,28 +260,6 @@ void bcma_prepare_core(struct bcma_bus *bus, struct bcma_device *core)
 	case BCMA_HOSTTYPE_SDIO:
 		break;
 	}
-}
-
-struct device *bcma_bus_get_host_dev(struct bcma_bus *bus)
-{
-	switch (bus->hosttype) {
-	case BCMA_HOSTTYPE_PCI:
-		if (bus->host_pci)
-			return &bus->host_pci->dev;
-		else
-			return NULL;
-	case BCMA_HOSTTYPE_SOC:
-		if (bus->host_pdev)
-			return &bus->host_pdev->dev;
-		else
-			return NULL;
-	case BCMA_HOSTTYPE_SDIO:
-		if (bus->host_sdio)
-			return &bus->host_sdio->dev;
-		else
-			return NULL;
-	}
-	return NULL;
 }
 
 void bcma_init_bus(struct bcma_bus *bus)
@@ -299,11 +278,10 @@ static void bcma_register_core(struct bcma_bus *bus, struct bcma_device *core)
 {
 	int err;
 
-	err = device_register(&core->dev);
+	err = device_add(&core->dev);
 	if (err) {
 		bcma_err(bus, "Could not register dev for core 0x%03X\n",
 			 core->id.id);
-		put_device(&core->dev);
 		return;
 	}
 	core->dev_registered = true;
@@ -394,7 +372,7 @@ void bcma_unregister_cores(struct bcma_bus *bus)
 	/* Now noone uses internally-handled cores, we can free them */
 	list_for_each_entry_safe(core, tmp, &bus->cores, list) {
 		list_del(&core->list);
-		kfree(core);
+		put_device(&core->dev);
 	}
 }
 
@@ -402,7 +380,6 @@ int bcma_bus_register(struct bcma_bus *bus)
 {
 	int err;
 	struct bcma_device *core;
-	struct device *dev;
 
 	/* Scan for devices (cores) */
 	err = bcma_bus_scan(bus);
@@ -425,10 +402,8 @@ int bcma_bus_register(struct bcma_bus *bus)
 		bcma_core_pci_early_init(&bus->drv_pci[0]);
 	}
 
-	dev = bcma_bus_get_host_dev(bus);
-	if (dev) {
-		of_platform_default_populate(dev->of_node, NULL, dev);
-	}
+	if (bus->dev)
+		of_platform_default_populate(bus->dev->of_node, NULL, bus->dev);
 
 	/* Cores providing flash access go before SPROM init */
 	list_for_each_entry(core, &bus->cores, list) {

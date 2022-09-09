@@ -2,7 +2,7 @@ Binding for Silicon Labs Si5351a/b/c programmable i2c clock generator.
 
 Reference
 [1] Si5351A/B/C Data Sheet
-    http://www.silabs.com/Support%20Documents/TechnicalDocs/Si5351.pdf
+    https://www.silabs.com/Support%20Documents/TechnicalDocs/Si5351.pdf
 
 The Si5351a/b/c are programmable i2c clock generators with up to 8 output
 clocks. Si5351a also has a reduced pin-count package (MSOP10) where only
@@ -49,6 +49,7 @@ Optional child node properties:
 - silabs,multisynth-source: source pll A(0) or B(1) of corresponding multisynth
   divider.
 - silabs,pll-master: boolean, multisynth can change pll frequency.
+- silabs,pll-reset: boolean, clock output can reset its pll.
 - silabs,disable-state : clock output disable state, shall be
   0 = clock output is driven LOW when disabled
   1 = clock output is driven HIGH when disabled

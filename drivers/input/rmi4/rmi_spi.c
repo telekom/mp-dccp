@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2011-2016 Synaptics Incorporated
  * Copyright (c) 2011 Unixphere
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -69,7 +66,7 @@ static int rmi_spi_manage_pools(struct rmi_spi_xport *rmi_spi, int len)
 		buf_size = RMI_SPI_XFER_SIZE_LIMIT;
 
 	tmp = rmi_spi->rx_buf;
-	buf = devm_kzalloc(&spi->dev, buf_size * 2,
+	buf = devm_kcalloc(&spi->dev, buf_size, 2,
 				GFP_KERNEL | GFP_DMA);
 	if (!buf)
 		return -ENOMEM;
@@ -96,9 +93,10 @@ static int rmi_spi_manage_pools(struct rmi_spi_xport *rmi_spi, int len)
 	 * per byte delays.
 	 */
 	tmp = rmi_spi->rx_xfers;
-	xfer_buf = devm_kzalloc(&spi->dev,
-		(rmi_spi->rx_xfer_count + rmi_spi->tx_xfer_count)
-		* sizeof(struct spi_transfer), GFP_KERNEL);
+	xfer_buf = devm_kcalloc(&spi->dev,
+		rmi_spi->rx_xfer_count + rmi_spi->tx_xfer_count,
+		sizeof(struct spi_transfer),
+		GFP_KERNEL);
 	if (!xfer_buf)
 		return -ENOMEM;
 
@@ -531,4 +529,3 @@ MODULE_AUTHOR("Christopher Heiny <cheiny@synaptics.com>");
 MODULE_AUTHOR("Andrew Duggan <aduggan@synaptics.com>");
 MODULE_DESCRIPTION("RMI SPI driver");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(RMI_DRIVER_VERSION);

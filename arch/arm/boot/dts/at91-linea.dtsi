@@ -1,11 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * at91-linea.dtsi - Device Tree Include file for the Axentia Linea Module.
  *
  * Copyright (C) 2017 Axentia Technologies AB
  *
  * Author: Peter Rosin <peda@axentia.se>
- *
- * Licensed under GPLv2 or later.
  */
 
 #include "sama5d31.dtsi"
@@ -14,7 +13,7 @@
 	compatible = "axentia,linea",
 		     "atmel,sama5d31", "atmel,sama5d3", "atmel,sama5";
 
-	memory {
+	memory@20000000 {
 		reg = <0x20000000 0x4000000>;
 	};
 };
@@ -25,6 +24,18 @@
 
 &main_xtal {
 	clock-frequency = <12000000>;
+};
+
+&tcb0 {
+	timer@0 {
+		compatible = "atmel,tcb-timer";
+		reg = <0>;
+	};
+
+	timer@1 {
+		compatible = "atmel,tcb-timer";
+		reg = <1>;
+	};
 };
 
 &i2c0 {

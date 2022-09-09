@@ -1,16 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  * Copyright (C) 2017 Linaro Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 #ifndef __VENUS_HFI_HELPER_H__
 #define __VENUS_HFI_HELPER_H__
@@ -121,6 +112,7 @@
 #define HFI_EXTRADATA_METADATA_FILLER			0x7fe00002
 
 #define HFI_INDEX_EXTRADATA_INPUT_CROP			0x0700000e
+#define HFI_INDEX_EXTRADATA_OUTPUT_CROP			0x0700000f
 #define HFI_INDEX_EXTRADATA_DIGITAL_ZOOM		0x07000010
 #define HFI_INDEX_EXTRADATA_ASPECT_RATIO		0x7f100003
 
@@ -239,6 +231,7 @@
 #define HFI_RATE_CONTROL_VBR_CFR		0x1000003
 #define HFI_RATE_CONTROL_CBR_VFR		0x1000004
 #define HFI_RATE_CONTROL_CBR_CFR		0x1000005
+#define HFI_RATE_CONTROL_CQ			0x1000008
 
 #define HFI_VIDEO_CODEC_H264			0x00000002
 #define HFI_VIDEO_CODEC_H263			0x00000004
@@ -371,18 +364,41 @@
 #define HFI_HEVC_TIER_MAIN			0x1
 #define HFI_HEVC_TIER_HIGH0			0x2
 
+/* VP9 Profile 0, 8-bit */
+#define HFI_VP9_PROFILE_P0			0x00000001
+/* VP9 Profile 2, 10-bit */
+#define HFI_VP9_PROFILE_P2_10B			0x00000004
+
+#define HFI_VP9_LEVEL_1				0x00000001
+#define HFI_VP9_LEVEL_11			0x00000002
+#define HFI_VP9_LEVEL_2				0x00000004
+#define HFI_VP9_LEVEL_21			0x00000008
+#define HFI_VP9_LEVEL_3				0x00000010
+#define HFI_VP9_LEVEL_31			0x00000020
+#define HFI_VP9_LEVEL_4				0x00000040
+#define HFI_VP9_LEVEL_41			0x00000080
+#define HFI_VP9_LEVEL_5				0x00000100
+#define HFI_VP9_LEVEL_51			0x00000200
+#define HFI_VP9_LEVEL_6				0x00000400
+#define HFI_VP9_LEVEL_61			0x00000800
+
 #define HFI_BUFFER_INPUT			0x1
 #define HFI_BUFFER_OUTPUT			0x2
 #define HFI_BUFFER_OUTPUT2			0x3
 #define HFI_BUFFER_INTERNAL_PERSIST		0x4
 #define HFI_BUFFER_INTERNAL_PERSIST_1		0x5
-#define HFI_BUFFER_INTERNAL_SCRATCH		0x1000001
-#define HFI_BUFFER_EXTRADATA_INPUT		0x1000002
-#define HFI_BUFFER_EXTRADATA_OUTPUT		0x1000003
-#define HFI_BUFFER_EXTRADATA_OUTPUT2		0x1000004
-#define HFI_BUFFER_INTERNAL_SCRATCH_1		0x1000005
-#define HFI_BUFFER_INTERNAL_SCRATCH_2		0x1000006
-
+#define HFI_BUFFER_INTERNAL_SCRATCH(ver)	\
+	(((ver) == HFI_VERSION_4XX) ? 0x6 : 0x1000001)
+#define HFI_BUFFER_INTERNAL_SCRATCH_1(ver)	\
+	(((ver) == HFI_VERSION_4XX) ? 0x7 : 0x1000005)
+#define HFI_BUFFER_INTERNAL_SCRATCH_2(ver)	\
+	(((ver) == HFI_VERSION_4XX) ? 0x8 : 0x1000006)
+#define HFI_BUFFER_EXTRADATA_INPUT(ver)		\
+	(((ver) == HFI_VERSION_4XX) ? 0xc : 0x1000002)
+#define HFI_BUFFER_EXTRADATA_OUTPUT(ver)	\
+	(((ver) == HFI_VERSION_4XX) ? 0xa : 0x1000003)
+#define HFI_BUFFER_EXTRADATA_OUTPUT2(ver)	\
+	(((ver) == HFI_VERSION_4XX) ? 0xb : 0x1000004)
 #define HFI_BUFFER_TYPE_MAX			11
 
 #define HFI_BUFFER_MODE_STATIC			0x1000001
@@ -424,12 +440,14 @@
 #define HFI_PROPERTY_PARAM_CODEC_MASK_SUPPORTED			0x100e
 #define HFI_PROPERTY_PARAM_MVC_BUFFER_LAYOUT			0x100f
 #define HFI_PROPERTY_PARAM_MAX_SESSIONS_SUPPORTED		0x1010
+#define HFI_PROPERTY_PARAM_WORK_MODE				0x1015
 
 /*
  * HFI_PROPERTY_CONFIG_COMMON_START
  * HFI_DOMAIN_BASE_COMMON + HFI_ARCH_COMMON_OFFSET + 0x2000
  */
 #define HFI_PROPERTY_CONFIG_FRAME_RATE				0x2001
+#define HFI_PROPERTY_CONFIG_VIDEOCORES_USAGE			0x2002
 
 /*
  * HFI_PROPERTY_PARAM_VDEC_COMMON_START
@@ -438,6 +456,9 @@
 #define HFI_PROPERTY_PARAM_VDEC_MULTI_STREAM			0x1003001
 #define HFI_PROPERTY_PARAM_VDEC_CONCEAL_COLOR			0x1003002
 #define HFI_PROPERTY_PARAM_VDEC_NONCP_OUTPUT2			0x1003003
+#define HFI_PROPERTY_PARAM_VDEC_PIXEL_BITDEPTH			0x1003007
+#define HFI_PROPERTY_PARAM_VDEC_PIC_STRUCT			0x1003009
+#define HFI_PROPERTY_PARAM_VDEC_COLOUR_SPACE			0x100300a
 
 /*
  * HFI_PROPERTY_CONFIG_VDEC_COMMON_START
@@ -502,6 +523,7 @@
 #define HFI_PROPERTY_CONFIG_VENC_HIER_P_ENH_LAYER		0x200600b
 #define HFI_PROPERTY_CONFIG_VENC_LTRPERIOD			0x200600c
 #define HFI_PROPERTY_CONFIG_VENC_PERF_MODE			0x200600e
+#define HFI_PROPERTY_CONFIG_HEIC_FRAME_QUALITY			0x2006014
 
 /*
  * HFI_PROPERTY_PARAM_VPE_COMMON_START
@@ -518,6 +540,8 @@
 enum hfi_version {
 	HFI_VERSION_1XX,
 	HFI_VERSION_3XX,
+	HFI_VERSION_4XX,
+	HFI_VERSION_6XX,
 };
 
 struct hfi_buffer_info {
@@ -547,6 +571,7 @@ struct hfi_bitrate {
 #define HFI_CAPABILITY_LCU_SIZE				0x14
 #define HFI_CAPABILITY_HIER_P_HYBRID_NUM_ENH_LAYERS	0x15
 #define HFI_CAPABILITY_MBS_PER_SECOND_POWERSAVE		0x16
+#define HFI_CAPABILITY_MAX_VIDEOCORES			0x2b
 
 struct hfi_capability {
 	u32 capability_type;
@@ -557,7 +582,7 @@ struct hfi_capability {
 
 struct hfi_capabilities {
 	u32 num_capabilities;
-	struct hfi_capability data[1];
+	struct hfi_capability data[];
 };
 
 #define HFI_DEBUG_MSG_LOW	0x01
@@ -585,8 +610,8 @@ struct hfi_enable {
 
 struct hfi_h264_db_control {
 	u32 mode;
-	u32 slice_alpha_offset;
-	u32 slice_beta_offset;
+	s32 slice_alpha_offset;
+	s32 slice_beta_offset;
 };
 
 #define HFI_H264_ENTROPY_CAVLC			0x1
@@ -714,11 +739,16 @@ struct hfi_profile_level {
 
 struct hfi_profile_level_supported {
 	u32 profile_count;
-	struct hfi_profile_level profile_level[1];
+	struct hfi_profile_level profile_level[];
 };
 
 struct hfi_quality_vs_speed {
 	u32 quality_vs_speed;
+};
+
+struct hfi_heic_frame_quality {
+	u32 frame_quality;
+	u32 reserved[3];
 };
 
 struct hfi_quantization {
@@ -767,10 +797,57 @@ struct hfi_framesize {
 	u32 height;
 };
 
+#define VIDC_CORE_ID_DEFAULT	0
+#define VIDC_CORE_ID_1		1
+#define VIDC_CORE_ID_2		2
+#define VIDC_CORE_ID_3		3
+
+struct hfi_videocores_usage_type {
+	u32 video_core_enable_mask;
+};
+
+#define VIDC_WORK_MODE_1	1
+#define VIDC_WORK_MODE_2	2
+
+struct hfi_video_work_mode {
+	u32 video_work_mode;
+};
+
 struct hfi_h264_vui_timing_info {
 	u32 enable;
 	u32 fixed_framerate;
 	u32 time_scale;
+};
+
+#define VIDC_BITDEPTH_8		0x00000
+#define VIDC_BITDEPTH_10	0x20002
+
+struct hfi_bit_depth {
+	u32 buffer_type;
+	u32 bit_depth;
+};
+
+struct hfi_picture_type {
+	u32 is_sync_frame;
+	u32 picture_type;
+};
+
+struct hfi_pic_struct {
+	u32 progressive_only;
+};
+
+struct hfi_colour_space {
+	u32 colour_space;
+};
+
+struct hfi_extradata_input_crop {
+	u32 size;
+	u32 version;
+	u32 port_index;
+	u32 left;
+	u32 top;
+	u32 width;
+	u32 height;
 };
 
 #define HFI_COLOR_FORMAT_MONOCHROME		0x01
@@ -793,30 +870,15 @@ struct hfi_h264_vui_timing_info {
 #define HFI_COLOR_FORMAT_10_BIT_BASE		0x4000
 
 #define HFI_COLOR_FORMAT_YUV420_TP10		0x4002
+#define HFI_COLOR_FORMAT_P010			0x4003
 #define HFI_COLOR_FORMAT_NV12_UBWC		0x8002
 #define HFI_COLOR_FORMAT_YUV420_TP10_UBWC	0xc002
+#define HFI_COLOR_FORMAT_P010_UBWC		0xc003
 #define HFI_COLOR_FORMAT_RGBA8888_UBWC		0x8010
 
 struct hfi_uncompressed_format_select {
 	u32 buffer_type;
 	u32 format;
-};
-
-struct hfi_uncompressed_format_supported {
-	u32 buffer_type;
-	u32 format_entries;
-	u32 format_info[1];
-};
-
-struct hfi_uncompressed_plane_actual {
-	int actual_stride;
-	u32 actual_plane_buffer_height;
-};
-
-struct hfi_uncompressed_plane_actual_info {
-	u32 buffer_type;
-	u32 num_planes;
-	struct hfi_uncompressed_plane_actual plane_format[1];
 };
 
 struct hfi_uncompressed_plane_constraints {
@@ -829,7 +891,24 @@ struct hfi_uncompressed_plane_constraints {
 struct hfi_uncompressed_plane_info {
 	u32 format;
 	u32 num_planes;
-	struct hfi_uncompressed_plane_constraints plane_format[1];
+	struct hfi_uncompressed_plane_constraints plane_constraints[1];
+};
+
+struct hfi_uncompressed_format_supported {
+	u32 buffer_type;
+	u32 format_entries;
+	struct hfi_uncompressed_plane_info plane_info[1];
+};
+
+struct hfi_uncompressed_plane_actual {
+	int actual_stride;
+	u32 actual_plane_buffer_height;
+};
+
+struct hfi_uncompressed_plane_actual_info {
+	u32 buffer_type;
+	u32 num_planes;
+	struct hfi_uncompressed_plane_actual plane_format[1];
 };
 
 struct hfi_uncompressed_plane_actual_constraints_info {
@@ -961,6 +1040,12 @@ struct hfi_buffer_count_actual {
 	u32 count_actual;
 };
 
+struct hfi_buffer_count_actual_4xx {
+	u32 type;
+	u32 count_actual;
+	u32 count_min_host;
+};
+
 struct hfi_buffer_size_actual {
 	u32 type;
 	u32 size;
@@ -970,6 +1055,14 @@ struct hfi_buffer_display_hold_count_actual {
 	u32 type;
 	u32 hold_count;
 };
+
+/* HFI 4XX reorder the fields, use these macros */
+#define HFI_BUFREQ_HOLD_COUNT(bufreq, ver)	\
+	((ver) == HFI_VERSION_4XX ? 0 : (bufreq)->hold_count)
+#define HFI_BUFREQ_COUNT_MIN(bufreq, ver)	\
+	((ver) == HFI_VERSION_4XX ? (bufreq)->hold_count : (bufreq)->count_min)
+#define HFI_BUFREQ_COUNT_MIN_HOST(bufreq, ver)	\
+	((ver) == HFI_VERSION_4XX ? (bufreq)->count_min : 0)
 
 struct hfi_buffer_requirements {
 	u32 type;

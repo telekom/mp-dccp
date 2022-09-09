@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Crypto acceleration support for Rockchip RK3288
  *
@@ -5,12 +6,9 @@
  *
  * Author: Zain Wang <zain.wang@rock-chips.com>
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
  * Some ideas are from marvell/cesa.c and s5p-sss.c driver.
  */
+#include <linux/device.h>
 #include "rk3288_crypto.h"
 
 /*

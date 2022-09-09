@@ -193,7 +193,7 @@ static void hp_sdc_take(int irq, void *dev_id, uint8_t status, uint8_t data)
 	curr->seq[curr->idx++] = status;
 	curr->seq[curr->idx++] = data;
 	hp_sdc.rqty -= 2;
-	do_gettimeofday(&hp_sdc.rtv);
+	hp_sdc.rtime = ktime_get();
 
 	if (hp_sdc.rqty <= 0) {
 		/* All data has been gathered. */
@@ -306,13 +306,10 @@ static void hp_sdc_tasklet(unsigned long foo)
 	write_lock_irq(&hp_sdc.rtq_lock);
 
 	if (hp_sdc.rcurr >= 0) {
-		struct timeval tv;
+		ktime_t now = ktime_get();
 
-		do_gettimeofday(&tv);
-		if (tv.tv_sec > hp_sdc.rtv.tv_sec)
-			tv.tv_usec += USEC_PER_SEC;
-
-		if (tv.tv_usec - hp_sdc.rtv.tv_usec > HP_SDC_MAX_REG_DELAY) {
+		if (ktime_after(now, ktime_add_us(hp_sdc.rtime,
+						  HP_SDC_MAX_REG_DELAY))) {
 			hp_sdc_transaction *curr;
 			uint8_t tmp;
 
@@ -321,8 +318,8 @@ static void hp_sdc_tasklet(unsigned long foo)
 			 * we'll need to figure out a way to communicate
 			 * it back to the application. and be less verbose.
 			 */
-			printk(KERN_WARNING PREFIX "read timeout (%ius)!\n",
-			       (int)(tv.tv_usec - hp_sdc.rtv.tv_usec));
+			printk(KERN_WARNING PREFIX "read timeout (%lldus)!\n",
+			       ktime_us_delta(now, hp_sdc.rtime));
 			curr->idx += hp_sdc.rqty;
 			hp_sdc.rqty = 0;
 			tmp = curr->seq[curr->actidx];
@@ -551,7 +548,7 @@ unsigned long hp_sdc_put(void)
 
 			/* Start a new read */
 			hp_sdc.rqty = curr->seq[curr->idx];
-			do_gettimeofday(&hp_sdc.rtv);
+			hp_sdc.rtime = ktime_get();
 			curr->idx++;
 			/* Still need to lock here in case of spurious irq. */
 			write_lock_irq(&hp_sdc.rtq_lock);
@@ -794,7 +791,7 @@ int hp_sdc_release_cooked_irq(hp_sdc_irqhook *callback)
 
 /************************* Keepalive timer task *********************/
 
-static void hp_sdc_kicker(unsigned long data)
+static void hp_sdc_kicker(struct timer_list *unused)
 {
 	tasklet_schedule(&hp_sdc.task);
 	/* Re-insert the periodic task. */
@@ -887,8 +884,8 @@ static int __init hp_sdc_init(void)
 			"HP SDC NMI", &hp_sdc))
 		goto err2;
 
-	printk(KERN_INFO PREFIX "HP SDC at 0x%p, IRQ %d (NMI IRQ %d)\n",
-	       (void *)hp_sdc.base_io, hp_sdc.irq, hp_sdc.nmi);
+	pr_info(PREFIX "HP SDC at 0x%08lx, IRQ %d (NMI IRQ %d)\n",
+	       hp_sdc.base_io, hp_sdc.irq, hp_sdc.nmi);
 
 	hp_sdc_status_in8();
 	hp_sdc_data_in8();
@@ -909,9 +906,8 @@ static int __init hp_sdc_init(void)
 	down(&s_sync); /* Wait for t_sync to complete */
 
 	/* Create the keepalive task */
-	init_timer(&hp_sdc.kicker);
+	timer_setup(&hp_sdc.kicker, hp_sdc_kicker, 0);
 	hp_sdc.kicker.expires = jiffies + HZ;
-	hp_sdc.kicker.function = &hp_sdc_kicker;
 	add_timer(&hp_sdc.kicker);
 
 	hp_sdc.dev_err = 0;
@@ -1025,7 +1021,7 @@ static int __init hp_sdc_register(void)
 	hp_sdc.base_io	 = (unsigned long) 0xf0428000;
 	hp_sdc.data_io	 = (unsigned long) hp_sdc.base_io + 1;
 	hp_sdc.status_io = (unsigned long) hp_sdc.base_io + 3;
-	if (!probe_kernel_read(&i, (unsigned char *)hp_sdc.data_io, 1))
+	if (!copy_from_kernel_nofault(&i, (unsigned char *)hp_sdc.data_io, 1))
 		hp_sdc.dev = (void *)1;
 	hp_sdc.dev_err   = hp_sdc_init();
 #endif

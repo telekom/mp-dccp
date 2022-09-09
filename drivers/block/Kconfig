@@ -7,7 +7,7 @@ menuconfig BLK_DEV
 	bool "Block devices"
 	depends on BLOCK
 	default y
-	---help---
+	help
 	  Say Y here to get to see options for various different block device
 	  drivers. This option alone does not add any kernel code.
 
@@ -20,20 +20,40 @@ config BLK_DEV_NULL_BLK
 	tristate "Null test block driver"
 	select CONFIGFS_FS
 
+config BLK_DEV_NULL_BLK_FAULT_INJECTION
+	bool "Support fault injection for Null test block driver"
+	depends on BLK_DEV_NULL_BLK && FAULT_INJECTION
+
 config BLK_DEV_FD
 	tristate "Normal floppy disk support"
 	depends on ARCH_MAY_HAVE_PC_FDC
-	---help---
+	help
 	  If you want to use the floppy disk drive(s) of your PC under Linux,
 	  say Y. Information about this driver, especially important for IBM
 	  Thinkpad users, is contained in
-	  <file:Documentation/blockdev/floppy.txt>.
+	  <file:Documentation/admin-guide/blockdev/floppy.rst>.
 	  That file also contains the location of the Floppy driver FAQ as
 	  well as location of the fdutils package used to configure additional
 	  parameters of the driver at run time.
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called floppy.
+
+config BLK_DEV_FD_RAWCMD
+	bool "Support for raw floppy disk commands (DEPRECATED)"
+	depends on BLK_DEV_FD
+	help
+	  If you want to use actual physical floppies and expect to do
+	  special low-level hardware accesses to them (access and use
+	  non-standard formats, for example), then enable this.
+
+	  Note that the code enabled by this option is rarely used and
+	  might be unstable or insecure, and distros should not enable it.
+
+	  Note: FDRAWCMD is deprecated and will be removed from the kernel
+	  in the near future.
+
+	  If unsure, say N.
 
 config AMIGA_FLOPPY
 	tristate "Amiga floppy support"
@@ -68,10 +88,14 @@ config AMIGA_Z2RAM
 	  To compile this driver as a module, choose M here: the
 	  module will be called z2ram.
 
+config CDROM
+	tristate
+	select BLK_SCSI_REQUEST
+
 config GDROM
 	tristate "SEGA Dreamcast GD-ROM drive"
 	depends on SH_DREAMCAST
-	select BLK_SCSI_REQUEST # only for the generic cdrom code
+	select CDROM
 	help
 	  A standard SEGA Dreamcast comes with a modified CD ROM drive called a
 	  "GD-ROM" by SEGA to signify it is capable of reading special disks
@@ -83,12 +107,12 @@ config GDROM
 config PARIDE
 	tristate "Parallel port IDE device support"
 	depends on PARPORT_PC
-	---help---
+	help
 	  There are many external CD-ROM and disk devices that connect through
 	  your computer's parallel port. Most of them are actually IDE devices
 	  using a parallel port IDE adapter. This option enables the PARIDE
 	  subsystem which contains drivers for many of these external drives.
-	  Read <file:Documentation/blockdev/paride.txt> for more information.
+	  Read <file:Documentation/admin-guide/blockdev/paride.rst> for more information.
 
 	  If you have said Y to the "Parallel-port support" configuration
 	  option, you may share a single port between your printer and other
@@ -113,22 +137,10 @@ source "drivers/block/mtip32xx/Kconfig"
 
 source "drivers/block/zram/Kconfig"
 
-config BLK_DEV_DAC960
-	tristate "Mylex DAC960/DAC1100 PCI RAID Controller support"
-	depends on PCI
-	help
-	  This driver adds support for the Mylex DAC960, AcceleRAID, and
-	  eXtremeRAID PCI RAID controllers.  See the file
-	  <file:Documentation/blockdev/README.DAC960> for further information
-	  about this driver.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called DAC960.
-
 config BLK_DEV_UMEM
 	tristate "Micro Memory MM5415 Battery Backed RAM support"
 	depends on PCI
-	---help---
+	help
 	  Saying Y here will include support for the MM5415 family of
 	  battery backed (Non-volatile) RAM cards.
 	  <http://www.umem.com/>
@@ -145,7 +157,7 @@ config BLK_DEV_UMEM
 config BLK_DEV_UBD
 	bool "Virtual block device"
 	depends on UML
-	---help---
+	help
           The User-Mode Linux port includes a driver called UBD which will let
           you access arbitrary files on the host computer as block devices.
           Unless you know that you do not need such virtual block devices say
@@ -154,7 +166,7 @@ config BLK_DEV_UBD
 config BLK_DEV_UBD_SYNC
 	bool "Always do synchronous disk IO for UBD"
 	depends on BLK_DEV_UBD
-	---help---
+	help
 	  Writes to the virtual block device are not immediately written to the
 	  host's disk; this may cause problems if, for example, the User-Mode
 	  Linux 'Virtual Machine' uses a journalling filesystem and the host
@@ -177,7 +189,7 @@ config BLK_DEV_COW_COMMON
 
 config BLK_DEV_LOOP
 	tristate "Loopback device support"
-	---help---
+	help
 	  Saying Y here will allow you to use a regular file as a block
 	  device; you can then create a file system on that block device and
 	  mount it just as you would mount other block devices such as hard
@@ -234,11 +246,11 @@ config BLK_DEV_LOOP_MIN_COUNT
 	  dynamically allocated with the /dev/loop-control interface.
 
 config BLK_DEV_CRYPTOLOOP
-	tristate "Cryptoloop Support"
+	tristate "Cryptoloop Support (DEPRECATED)"
 	select CRYPTO
 	select CRYPTO_CBC
 	depends on BLK_DEV_LOOP
-	---help---
+	help
 	  Say Y here if you want to be able to use the ciphers that are 
 	  provided by the CryptoAPI as loop transformation. This might be
 	  used as hard disk encryption.
@@ -246,14 +258,14 @@ config BLK_DEV_CRYPTOLOOP
 	  WARNING: This device is not safe for journaled file systems like
 	  ext3 or Reiserfs. Please use the Device Mapper crypto module
 	  instead, which can be configured to be on-disk compatible with the
-	  cryptoloop device.
+	  cryptoloop device.  cryptoloop support will be removed in Linux 5.16.
 
 source "drivers/block/drbd/Kconfig"
 
 config BLK_DEV_NBD
 	tristate "Network block device support"
 	depends on NET
-	---help---
+	help
 	  Saying Y here will allow your computer to be a client for network
 	  block devices, i.e. it will be able to use block devices exported by
 	  servers (mount file systems on them etc.). Communication between
@@ -265,7 +277,7 @@ config BLK_DEV_NBD
 	  userland (making server and client physically the same computer,
 	  communicating using the loopback network device).
 
-	  Read <file:Documentation/blockdev/nbd.txt> for more information,
+	  Read <file:Documentation/admin-guide/blockdev/nbd.rst> for more information,
 	  especially about where to find the server code, which runs in user
 	  space and does not need special kernel support.
 
@@ -281,7 +293,7 @@ config BLK_DEV_SKD
 	tristate "STEC S1120 Block Driver"
 	depends on PCI
 	depends on 64BIT
-	---help---
+	help
 	Saying Y or M here will enable support for the
 	STEC, Inc. S1120 PCIe SSD.
 
@@ -290,7 +302,7 @@ config BLK_DEV_SKD
 config BLK_DEV_SX8
 	tristate "Promise SATA SX8 support"
 	depends on PCI
-	---help---
+	help
 	  Saying Y or M here will enable support for the 
 	  Promise SATA SX8 controllers.
 
@@ -298,8 +310,7 @@ config BLK_DEV_SX8
 
 config BLK_DEV_RAM
 	tristate "RAM block device support"
-	select DAX if BLK_DEV_RAM_DAX
-	---help---
+	help
 	  Saying Y here will allow you to use a portion of your RAM memory as
 	  a block device, so that you can make file systems on it, read and
 	  write to it and do all the other things that you can do with normal
@@ -308,7 +319,7 @@ config BLK_DEV_RAM
 	  during the initial install of Linux.
 
 	  Note that the kernel command line option "ramdisk=XX" is now obsolete.
-	  For details, read <file:Documentation/blockdev/ramdisk.txt>.
+	  For details, read <file:Documentation/admin-guide/blockdev/ramdisk.rst>.
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called brd. An alias "rd" has been defined
@@ -334,20 +345,10 @@ config BLK_DEV_RAM_SIZE
 	  The default value is 4096 kilobytes. Only change this if you know
 	  what you are doing.
 
-config BLK_DEV_RAM_DAX
-	bool "Support Direct Access (DAX) to RAM block devices"
-	depends on BLK_DEV_RAM && FS_DAX
-	default n
-	help
-	  Support filesystems using DAX to access RAM block devices.  This
-	  avoids double-buffering data in the page cache before copying it
-	  to the block device.  Answering Y will slightly enlarge the kernel,
-	  and will prevent RAM block device backing store memory from being
-	  allocated from highmem (only a problem for highmem systems).
-
 config CDROM_PKTCDVD
 	tristate "Packet writing on CD/DVD media (DEPRECATED)"
 	depends on !UML
+	select CDROM
 	select BLK_SCSI_REQUEST
 	help
 	  Note: This driver is deprecated and will be removed from the
@@ -362,7 +363,7 @@ config CDROM_PKTCDVD
 	  is possible.
 	  DVD-RW disks must be in restricted overwrite mode.
 
-	  See the file <file:Documentation/cdrom/packet-writing.txt>
+	  See the file <file:Documentation/cdrom/packet-writing.rst>
 	  for further information on the use of this driver.
 
 	  To compile this driver as a module, choose M here: the
@@ -443,19 +444,9 @@ config XEN_BLKDEV_BACKEND
 config VIRTIO_BLK
 	tristate "Virtio block driver"
 	depends on VIRTIO
-	---help---
+	help
 	  This is the virtual block driver for virtio.  It can be used with
           QEMU based VMMs (like KVM or Xen).  Say Y or M.
-
-config VIRTIO_BLK_SCSI
-	bool "SCSI passthrough request for the Virtio block driver"
-	depends on VIRTIO_BLK
-	select BLK_SCSI_REQUEST
-	---help---
-	  Enable support for SCSI passthrough (e.g. the SG_IO ioctl) on
-	  virtio-blk devices.  This is only supported for the legacy
-	  virtio protocol and not enabled by default by any hypervisor.
-	  You probably want to use virtio-scsi instead.
 
 config BLK_DEV_RBD
 	tristate "Rados block device (RBD)"
@@ -464,7 +455,6 @@ config BLK_DEV_RBD
 	select LIBCRC32C
 	select CRYPTO_AES
 	select CRYPTO
-	default n
 	help
 	  Say Y here if you want include the Rados block device, which stripes
 	  a block device over objects stored in the Ceph distributed object
@@ -477,11 +467,14 @@ config BLK_DEV_RBD
 config BLK_DEV_RSXX
 	tristate "IBM Flash Adapter 900GB Full Height PCIe Device Driver"
 	depends on PCI
+	select CRC32
 	help
 	  Device driver for IBM's high speed PCIe SSD
 	  storage device: Flash Adapter 900GB Full Height.
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called rsxx.
+
+source "drivers/block/rnbd/Kconfig"
 
 endif # BLK_DEV

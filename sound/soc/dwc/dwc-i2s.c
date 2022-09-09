@@ -390,10 +390,6 @@ static const struct snd_soc_dai_ops dw_i2s_dai_ops = {
 	.set_fmt	= dw_i2s_set_fmt,
 };
 
-static const struct snd_soc_component_driver dw_i2s_component = {
-	.name		= "dw-i2s",
-};
-
 #ifdef CONFIG_PM
 static int dw_i2s_runtime_suspend(struct device *dev)
 {
@@ -407,32 +403,43 @@ static int dw_i2s_runtime_suspend(struct device *dev)
 static int dw_i2s_runtime_resume(struct device *dev)
 {
 	struct dw_i2s_dev *dw_dev = dev_get_drvdata(dev);
+	int ret;
 
-	if (dw_dev->capability & DW_I2S_MASTER)
-		clk_enable(dw_dev->clk);
+	if (dw_dev->capability & DW_I2S_MASTER) {
+		ret = clk_enable(dw_dev->clk);
+		if (ret)
+			return ret;
+	}
 	return 0;
 }
 
-static int dw_i2s_suspend(struct snd_soc_dai *dai)
+static int dw_i2s_suspend(struct snd_soc_component *component)
 {
-	struct dw_i2s_dev *dev = snd_soc_dai_get_drvdata(dai);
+	struct dw_i2s_dev *dev = snd_soc_component_get_drvdata(component);
 
 	if (dev->capability & DW_I2S_MASTER)
 		clk_disable(dev->clk);
 	return 0;
 }
 
-static int dw_i2s_resume(struct snd_soc_dai *dai)
+static int dw_i2s_resume(struct snd_soc_component *component)
 {
-	struct dw_i2s_dev *dev = snd_soc_dai_get_drvdata(dai);
+	struct dw_i2s_dev *dev = snd_soc_component_get_drvdata(component);
+	struct snd_soc_dai *dai;
+	int stream, ret;
 
-	if (dev->capability & DW_I2S_MASTER)
-		clk_enable(dev->clk);
+	if (dev->capability & DW_I2S_MASTER) {
+		ret = clk_enable(dev->clk);
+		if (ret)
+			return ret;
+	}
 
-	if (dai->playback_active)
-		dw_i2s_config(dev, SNDRV_PCM_STREAM_PLAYBACK);
-	if (dai->capture_active)
-		dw_i2s_config(dev, SNDRV_PCM_STREAM_CAPTURE);
+	for_each_component_dais(component, dai) {
+		for_each_pcm_streams(stream)
+			if (snd_soc_dai_stream_active(dai, stream))
+				dw_i2s_config(dev, stream);
+	}
+
 	return 0;
 }
 
@@ -440,6 +447,12 @@ static int dw_i2s_resume(struct snd_soc_dai *dai)
 #define dw_i2s_suspend	NULL
 #define dw_i2s_resume	NULL
 #endif
+
+static const struct snd_soc_component_driver dw_i2s_component = {
+	.name		= "dw-i2s",
+	.suspend	= dw_i2s_suspend,
+	.resume		= dw_i2s_resume,
+};
 
 /*
  * The following tables allow a direct lookup of various parameters
@@ -490,6 +503,10 @@ static int dw_configure_dai(struct dw_i2s_dev *dev,
 	if (dev->capability & DWC_I2S_RECORD &&
 			dev->quirks & DW_I2S_QUIRK_COMP_PARAM1)
 		comp1 = comp1 & ~BIT(5);
+
+	if (dev->capability & DWC_I2S_PLAY &&
+			dev->quirks & DW_I2S_QUIRK_COMP_PARAM1)
+		comp1 = comp1 & ~BIT(6);
 
 	if (COMP1_TX_ENABLED(comp1)) {
 		dev_dbg(dev->dev, " designware: play supported\n");
@@ -625,8 +642,6 @@ static int dw_i2s_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	dw_i2s_dai->ops = &dw_i2s_dai_ops;
-	dw_i2s_dai->suspend = dw_i2s_suspend;
-	dw_i2s_dai->resume = dw_i2s_resume;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	dev->i2s_base = devm_ioremap_resource(&pdev->dev, res);

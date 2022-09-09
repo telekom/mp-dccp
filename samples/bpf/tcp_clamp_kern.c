@@ -9,7 +9,7 @@
  * the same datacenter. For his example, we assume they are within the same
  * datacenter when the first 5.5 bytes of their IPv6 addresses are the same.
  *
- * Use load_sock_ops to load this BPF program.
+ * Use "bpftool cgroup attach $cg sock_ops $prog" to load this BPF program.
  */
 
 #include <uapi/linux/bpf.h>
@@ -17,17 +17,10 @@
 #include <uapi/linux/if_packet.h>
 #include <uapi/linux/ip.h>
 #include <linux/socket.h>
-#include "bpf_helpers.h"
-#include "bpf_endian.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
 
 #define DEBUG 1
-
-#define bpf_printk(fmt, ...)					\
-({								\
-	       char ____fmt[] = fmt;				\
-	       bpf_trace_printk(____fmt, sizeof(____fmt),	\
-				##__VA_ARGS__);			\
-})
 
 SEC("sockops")
 int bpf_clamp(struct bpf_sock_ops *skops)
@@ -41,8 +34,10 @@ int bpf_clamp(struct bpf_sock_ops *skops)
 	/* For testing purposes, only execute rest of BPF program
 	 * if neither port numberis 55601
 	 */
-	if (bpf_ntohl(skops->remote_port) != 55601 && skops->local_port != 55601)
-		return -1;
+	if (bpf_ntohl(skops->remote_port) != 55601 && skops->local_port != 55601) {
+		skops->reply = -1;
+		return 0;
+	}
 
 	op = (int) skops->op;
 
@@ -66,9 +61,9 @@ int bpf_clamp(struct bpf_sock_ops *skops)
 			/* Set sndbuf and rcvbuf of active connections */
 			rv = bpf_setsockopt(skops, SOL_SOCKET, SO_SNDBUF,
 					    &bufsize, sizeof(bufsize));
-			rv = rv*100 + bpf_setsockopt(skops, SOL_SOCKET,
-						      SO_RCVBUF, &bufsize,
-						      sizeof(bufsize));
+			rv += bpf_setsockopt(skops, SOL_SOCKET,
+					     SO_RCVBUF, &bufsize,
+					     sizeof(bufsize));
 			break;
 		case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
 			rv = bpf_setsockopt(skops, SOL_TCP,
@@ -80,12 +75,12 @@ int bpf_clamp(struct bpf_sock_ops *skops)
 			rv = bpf_setsockopt(skops, SOL_TCP,
 					    TCP_BPF_SNDCWND_CLAMP,
 					    &clamp, sizeof(clamp));
-			rv = rv*100 + bpf_setsockopt(skops, SOL_SOCKET,
-						      SO_SNDBUF, &bufsize,
-						      sizeof(bufsize));
-			rv = rv*100 + bpf_setsockopt(skops, SOL_SOCKET,
-						      SO_RCVBUF, &bufsize,
-						      sizeof(bufsize));
+			rv += bpf_setsockopt(skops, SOL_SOCKET,
+					     SO_SNDBUF, &bufsize,
+					     sizeof(bufsize));
+			rv += bpf_setsockopt(skops, SOL_SOCKET,
+					     SO_RCVBUF, &bufsize,
+					     sizeof(bufsize));
 			break;
 		default:
 			rv = -1;

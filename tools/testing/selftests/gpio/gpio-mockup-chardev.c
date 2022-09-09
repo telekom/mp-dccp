@@ -1,18 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * GPIO chardev test helper
  *
  * Copyright (C) 2016 Bamvor Jian Zhang
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
  */
 
 #define _GNU_SOURCE
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <errno.h>
 #include <string.h>
 #include <fcntl.h>
@@ -228,10 +224,10 @@ int gpio_pin_test(struct gpiochip_info *cinfo, int line, int flag, int value)
 		if (flag & GPIOHANDLE_REQUEST_ACTIVE_LOW)
 			debugfs_value = !debugfs_value;
 
-		if (!(debugfs_dir == OUT && value == debugfs_value))
+		if (!(debugfs_dir == OUT && value == debugfs_value)) {
 			errno = -EINVAL;
-		ret = -errno;
-
+			ret = -errno;
+		}
 	}
 	gpiotools_release_linehandle(fd);
 

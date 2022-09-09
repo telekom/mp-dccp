@@ -2,8 +2,60 @@
 # SPDX-License-Identifier: GPL-2.0
 
 use strict;
+use Getopt::Long qw(:config no_auto_abbrev);
 
+my $input_file = "MAINTAINERS";
+my $output_file = "MAINTAINERS.new";
+my $output_section = "SECTION.new";
+my $help = 0;
+my $order = 0;
 my $P = $0;
+
+if (!GetOptions(
+		'input=s' => \$input_file,
+		'output=s' => \$output_file,
+		'section=s' => \$output_section,
+		'order!' => \$order,
+		'h|help|usage' => \$help,
+	    )) {
+    die "$P: invalid argument - use --help if necessary\n";
+}
+
+if ($help != 0) {
+    usage();
+    exit 0;
+}
+
+sub usage {
+    print <<EOT;
+usage: $P [options] <pattern matching regexes>
+
+  --input => MAINTAINERS file to read (default: MAINTAINERS)
+  --output => sorted MAINTAINERS file to write (default: MAINTAINERS.new)
+  --section => new sorted MAINTAINERS file to write to (default: SECTION.new)
+  --order => Use the preferred section content output ordering (default: 0)
+    Preferred ordering of section output is:
+      M:  Person acting as a maintainer
+      R:  Person acting as a patch reviewer
+      L:  Mailing list where patches should be sent
+      S:  Maintenance status
+      W:  URI for general information
+      Q:  URI for patchwork tracking
+      B:  URI for bug tracking/submission
+      C:  URI for chat
+      P:  URI or file for subsystem specific coding styles
+      T:  SCM tree type and location
+      F:  File and directory pattern
+      X:  File and directory exclusion pattern
+      N:  File glob
+      K:  Keyword - patch content regex
+
+If <pattern match regexes> exist, then the sections that match the
+regexes are not written to the output file but are written to the
+section file.
+
+EOT
+}
 
 # sort comparison functions
 sub by_category($$) {
@@ -21,7 +73,7 @@ sub by_category($$) {
 
 sub by_pattern($$) {
     my ($a, $b) = @_;
-    my $preferred_order = 'MRPLSWTQBCFXNK';
+    my $preferred_order = 'MRLSWQBCPTFXNK';
 
     my $a1 = uc(substr($a, 0, 1));
     my $b1 = uc(substr($b, 0, 1));
@@ -56,15 +108,28 @@ sub trim {
 sub alpha_output {
     my ($hashref, $filename) = (@_);
 
+    return if ! scalar(keys %$hashref);
+
     open(my $file, '>', "$filename") or die "$P: $filename: open failed - $!\n";
+    my $separator;
     foreach my $key (sort by_category keys %$hashref) {
 	if ($key eq " ") {
-	    chomp $$hashref{$key};
 	    print $file $$hashref{$key};
 	} else {
-	    print $file "\n" . $key . "\n";
-	    foreach my $pattern (sort by_pattern split('\n', %$hashref{$key})) {
-		print $file ($pattern . "\n");
+	    if (! defined $separator) {
+		$separator = "\n";
+	    } else {
+		print $file $separator;
+	    }
+	    print $file $key . "\n";
+	    if ($order) {
+		foreach my $pattern (sort by_pattern split('\n', %$hashref{$key})) {
+		    print $file ($pattern . "\n");
+		}
+	    } else {
+		foreach my $pattern (split('\n', %$hashref{$key})) {
+		    print $file ($pattern . "\n");
+		}
 	    }
 	}
     }
@@ -112,7 +177,7 @@ sub file_input {
 my %hash;
 my %new_hash;
 
-file_input(\%hash, "MAINTAINERS");
+file_input(\%hash, $input_file);
 
 foreach my $type (@ARGV) {
     foreach my $key (keys %hash) {
@@ -123,7 +188,7 @@ foreach my $type (@ARGV) {
     }
 }
 
-alpha_output(\%hash, "MAINTAINERS.new");
-alpha_output(\%new_hash, "SECTION.new");
+alpha_output(\%hash, $output_file);
+alpha_output(\%new_hash, $output_section);
 
 exit(0);

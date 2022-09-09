@@ -1,3 +1,5 @@
+.. _kernel_hacking_hack:
+
 ============================================
 Unreliable Guide To Hacking The Linux Kernel
 ============================================
@@ -523,7 +525,7 @@ this expression is true, or ``-ERESTARTSYS`` if a signal is received. The
 Waking Up Queued Tasks
 ----------------------
 
-Call :c:func:`wake_up()` (``include/linux/wait.h``);, which will wake
+Call :c:func:`wake_up()` (``include/linux/wait.h``), which will wake
 up every process in the queue. The exception is if one has
 ``TASK_EXCLUSIVE`` set, in which case the remainder of the queue will
 not be woken. There are other variants of this basic function available
@@ -591,6 +593,24 @@ compatible license. It implies that the function is considered an
 internal implementation issue, and not really an interface. Some
 maintainers and developers may however require EXPORT_SYMBOL_GPL()
 when adding any new APIs or functionality.
+
+:c:func:`EXPORT_SYMBOL_NS()`
+----------------------------
+
+Defined in ``include/linux/export.h``
+
+This is the variant of `EXPORT_SYMBOL()` that allows specifying a symbol
+namespace. Symbol Namespaces are documented in
+:doc:`../core-api/symbol-namespaces`
+
+:c:func:`EXPORT_SYMBOL_NS_GPL()`
+--------------------------------
+
+Defined in ``include/linux/export.h``
+
+This is the variant of `EXPORT_SYMBOL_GPL()` that allows specifying a symbol
+namespace. Symbol Namespaces are documented in
+:doc:`../core-api/symbol-namespaces`
 
 Routines and Conventions
 ========================
@@ -690,8 +710,8 @@ not provide the necessary runtime environment and the include files are
 not tested for it. It is still possible, but not recommended. If you
 really want to do this, forget about exceptions at least.
 
-NUMif
------
+#if
+---
 
 It is generally considered cleaner to use macros in header files (or at
 the top of .c files) to abstract away functions rather than using \`#if'
@@ -716,7 +736,7 @@ make a neat patch, there's administrative work to be done:
 -  Usually you want a configuration option for your kernel hack. Edit
    ``Kconfig`` in the appropriate directory. The Config language is
    simple to use by cut and paste, and there's complete documentation in
-   ``Documentation/kbuild/kconfig-language.txt``.
+   ``Documentation/kbuild/kconfig-language.rst``.
 
    In your description of the option, make sure you address both the
    expert user and the user who knows nothing about your feature.
@@ -726,7 +746,7 @@ make a neat patch, there's administrative work to be done:
 
 -  Edit the ``Makefile``: the CONFIG variables are exported here so you
    can usually just add a "obj-$(CONFIG_xxx) += xxx.o" line. The syntax
-   is documented in ``Documentation/kbuild/makefiles.txt``.
+   is documented in ``Documentation/kbuild/makefiles.rst``.
 
 -  Put yourself in ``CREDITS`` if you've done something noteworthy,
    usually beyond a single file (your name should be at the top of the

@@ -1,11 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2005-2016 Broadcom.
  * All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.  The full GNU General
- * Public License is included in this distribution in the file called COPYING.
  *
  * Contact Information:
  * linux-drivers@emulex.com
@@ -261,6 +257,7 @@ struct be_eth_hdr_wrb {
 #define LANCER_TX_COMP_HSW_DROP_MAC_ERR		0x3
 #define LANCER_TX_COMP_HSW_DROP_VLAN_ERR	0x5
 #define LANCER_TX_COMP_QINQ_ERR			0x7
+#define LANCER_TX_COMP_SGE_ERR			0x9
 #define LANCER_TX_COMP_PARITY_ERR		0xb
 #define LANCER_TX_COMP_DMA_ERR			0xd
 

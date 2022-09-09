@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * pmcraid.c -- driver for PMC Sierra MaxRAID controller adapters
  *
@@ -5,22 +6,6 @@
  *             PMC-Sierra Inc
  *
  * Copyright (C) 2008, 2009 PMC Sierra Inc
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307,
- * USA
- *
  */
 #include <linux/fs.h>
 #include <linux/init.h>
@@ -348,7 +333,7 @@ static void pmcraid_init_cmdblk(struct pmcraid_cmd *cmd, int index)
 	cmd->sense_buffer = NULL;
 	cmd->sense_buffer_dma = 0;
 	cmd->dma_handle = 0;
-	init_timer(&cmd->timer);
+	timer_setup(&cmd->timer, NULL, 0);
 }
 
 /**
@@ -557,8 +542,9 @@ static void pmcraid_reset_type(struct pmcraid_instance *pinstance)
 
 static void pmcraid_ioa_reset(struct pmcraid_cmd *);
 
-static void pmcraid_bist_done(struct pmcraid_cmd *cmd)
+static void pmcraid_bist_done(struct timer_list *t)
 {
+	struct pmcraid_cmd *cmd = from_timer(cmd, t, timer);
 	struct pmcraid_instance *pinstance = cmd->drv_inst;
 	unsigned long lock_flags;
 	int rc;
@@ -572,9 +558,6 @@ static void pmcraid_bist_done(struct pmcraid_cmd *cmd)
 		pmcraid_info("BIST not complete, waiting another 2 secs\n");
 		cmd->timer.expires = jiffies + cmd->time_left;
 		cmd->time_left = 0;
-		cmd->timer.data = (unsigned long)cmd;
-		cmd->timer.function =
-			(void (*)(unsigned long))pmcraid_bist_done;
 		add_timer(&cmd->timer);
 	} else {
 		cmd->time_left = 0;
@@ -605,9 +588,8 @@ static void pmcraid_start_bist(struct pmcraid_cmd *cmd)
 		      doorbells, intrs);
 
 	cmd->time_left = msecs_to_jiffies(PMCRAID_BIST_TIMEOUT);
-	cmd->timer.data = (unsigned long)cmd;
 	cmd->timer.expires = jiffies + msecs_to_jiffies(PMCRAID_BIST_TIMEOUT);
-	cmd->timer.function = (void (*)(unsigned long))pmcraid_bist_done;
+	cmd->timer.function = pmcraid_bist_done;
 	add_timer(&cmd->timer);
 }
 
@@ -617,8 +599,9 @@ static void pmcraid_start_bist(struct pmcraid_cmd *cmd)
  * Return value
  *  None
  */
-static void pmcraid_reset_alert_done(struct pmcraid_cmd *cmd)
+static void pmcraid_reset_alert_done(struct timer_list *t)
 {
+	struct pmcraid_cmd *cmd = from_timer(cmd, t, timer);
 	struct pmcraid_instance *pinstance = cmd->drv_inst;
 	u32 status = ioread32(pinstance->ioa_status);
 	unsigned long lock_flags;
@@ -637,10 +620,8 @@ static void pmcraid_reset_alert_done(struct pmcraid_cmd *cmd)
 		pmcraid_info("critical op is not yet reset waiting again\n");
 		/* restart timer if some more time is available to wait */
 		cmd->time_left -= PMCRAID_CHECK_FOR_RESET_TIMEOUT;
-		cmd->timer.data = (unsigned long)cmd;
 		cmd->timer.expires = jiffies + PMCRAID_CHECK_FOR_RESET_TIMEOUT;
-		cmd->timer.function =
-			(void (*)(unsigned long))pmcraid_reset_alert_done;
+		cmd->timer.function = pmcraid_reset_alert_done;
 		add_timer(&cmd->timer);
 	}
 }
@@ -676,10 +657,8 @@ static void pmcraid_reset_alert(struct pmcraid_cmd *cmd)
 		 * bit to be reset.
 		 */
 		cmd->time_left = PMCRAID_RESET_TIMEOUT;
-		cmd->timer.data = (unsigned long)cmd;
 		cmd->timer.expires = jiffies + PMCRAID_CHECK_FOR_RESET_TIMEOUT;
-		cmd->timer.function =
-			(void (*)(unsigned long))pmcraid_reset_alert_done;
+		cmd->timer.function = pmcraid_reset_alert_done;
 		add_timer(&cmd->timer);
 
 		iowrite32(DOORBELL_IOA_RESET_ALERT,
@@ -704,8 +683,9 @@ static void pmcraid_reset_alert(struct pmcraid_cmd *cmd)
  * Return value:
  *   None
  */
-static void pmcraid_timeout_handler(struct pmcraid_cmd *cmd)
+static void pmcraid_timeout_handler(struct timer_list *t)
 {
+	struct pmcraid_cmd *cmd = from_timer(cmd, t, timer);
 	struct pmcraid_instance *pinstance = cmd->drv_inst;
 	unsigned long lock_flags;
 
@@ -851,16 +831,9 @@ static void pmcraid_erp_done(struct pmcraid_cmd *cmd)
 			    cmd->ioa_cb->ioarcb.cdb[0], ioasc);
 	}
 
-	/* if we had allocated sense buffers for request sense, copy the sense
-	 * release the buffers
-	 */
-	if (cmd->sense_buffer != NULL) {
-		memcpy(scsi_cmd->sense_buffer,
-		       cmd->sense_buffer,
-		       SCSI_SENSE_BUFFERSIZE);
-		pci_free_consistent(pinstance->pdev,
-				    SCSI_SENSE_BUFFERSIZE,
-				    cmd->sense_buffer, cmd->sense_buffer_dma);
+	if (cmd->sense_buffer) {
+		dma_unmap_single(&pinstance->pdev->dev, cmd->sense_buffer_dma,
+				 SCSI_SENSE_BUFFERSIZE, DMA_FROM_DEVICE);
 		cmd->sense_buffer = NULL;
 		cmd->sense_buffer_dma = 0;
 	}
@@ -919,7 +892,7 @@ static void pmcraid_send_cmd(
 	struct pmcraid_cmd *cmd,
 	void (*cmd_done) (struct pmcraid_cmd *),
 	unsigned long timeout,
-	void (*timeout_func) (struct pmcraid_cmd *)
+	void (*timeout_func) (struct timer_list *)
 )
 {
 	/* initialize done function */
@@ -927,9 +900,8 @@ static void pmcraid_send_cmd(
 
 	if (timeout_func) {
 		/* setup timeout handler */
-		cmd->timer.data = (unsigned long)cmd;
 		cmd->timer.expires = jiffies + timeout;
-		cmd->timer.function = (void (*)(unsigned long))timeout_func;
+		cmd->timer.function = timeout_func;
 		add_timer(&cmd->timer);
 	}
 
@@ -1031,7 +1003,7 @@ static void pmcraid_get_fwversion_done(struct pmcraid_cmd *cmd)
 static void pmcraid_get_fwversion(struct pmcraid_cmd *cmd)
 {
 	struct pmcraid_ioarcb *ioarcb = &cmd->ioa_cb->ioarcb;
-	struct pmcraid_ioadl_desc *ioadl = ioarcb->add_data.u.ioadl;
+	struct pmcraid_ioadl_desc *ioadl;
 	struct pmcraid_instance *pinstance = cmd->drv_inst;
 	u16 data_size = sizeof(struct pmcraid_inquiry_data);
 
@@ -1955,10 +1927,9 @@ static void pmcraid_soft_reset(struct pmcraid_cmd *cmd)
 	 * would re-initiate a reset
 	 */
 	cmd->cmd_done = pmcraid_ioa_reset;
-	cmd->timer.data = (unsigned long)cmd;
 	cmd->timer.expires = jiffies +
 			     msecs_to_jiffies(PMCRAID_TRANSOP_TIMEOUT);
-	cmd->timer.function = (void (*)(unsigned long))pmcraid_timeout_handler;
+	cmd->timer.function = pmcraid_timeout_handler;
 
 	if (!timer_pending(&cmd->timer))
 		add_timer(&cmd->timer);
@@ -2451,13 +2422,12 @@ static void pmcraid_request_sense(struct pmcraid_cmd *cmd)
 {
 	struct pmcraid_ioarcb *ioarcb = &cmd->ioa_cb->ioarcb;
 	struct pmcraid_ioadl_desc *ioadl = ioarcb->add_data.u.ioadl;
+	struct device *dev = &cmd->drv_inst->pdev->dev;
 
-	/* allocate DMAable memory for sense buffers */
-	cmd->sense_buffer = pci_alloc_consistent(cmd->drv_inst->pdev,
-						 SCSI_SENSE_BUFFERSIZE,
-						 &cmd->sense_buffer_dma);
-
-	if (cmd->sense_buffer == NULL) {
+	cmd->sense_buffer = cmd->scsi_cmd->sense_buffer;
+	cmd->sense_buffer_dma = dma_map_single(dev, cmd->sense_buffer,
+			SCSI_SENSE_BUFFERSIZE, DMA_FROM_DEVICE);
+	if (dma_mapping_error(dev, cmd->sense_buffer_dma)) {
 		pmcraid_err
 			("couldn't allocate sense buffer for request sense\n");
 		pmcraid_erp_done(cmd);
@@ -2498,17 +2468,15 @@ static void pmcraid_request_sense(struct pmcraid_cmd *cmd)
 /**
  * pmcraid_cancel_all - cancel all outstanding IOARCBs as part of error recovery
  * @cmd: command that failed
- * @sense: true if request_sense is required after cancel all
+ * @need_sense: true if request_sense is required after cancel all
  *
  * This function sends a cancel all to a device to clear the queue.
  */
-static void pmcraid_cancel_all(struct pmcraid_cmd *cmd, u32 sense)
+static void pmcraid_cancel_all(struct pmcraid_cmd *cmd, bool need_sense)
 {
 	struct scsi_cmnd *scsi_cmd = cmd->scsi_cmd;
 	struct pmcraid_ioarcb *ioarcb = &cmd->ioa_cb->ioarcb;
 	struct pmcraid_resource_entry *res = scsi_cmd->device->hostdata;
-	void (*cmd_done) (struct pmcraid_cmd *) = sense ? pmcraid_erp_done
-							: pmcraid_request_sense;
 
 	memset(ioarcb->cdb, 0, PMCRAID_MAX_CDB_LEN);
 	ioarcb->request_flags0 = SYNC_OVERRIDE;
@@ -2526,7 +2494,8 @@ static void pmcraid_cancel_all(struct pmcraid_cmd *cmd, u32 sense)
 	/* writing to IOARRIN must be protected by host_lock, as mid-layer
 	 * schedule queuecommand while we are doing this
 	 */
-	pmcraid_send_cmd(cmd, cmd_done,
+	pmcraid_send_cmd(cmd, need_sense ?
+			 pmcraid_erp_done : pmcraid_request_sense,
 			 PMCRAID_REQUEST_SENSE_TIMEOUT,
 			 pmcraid_timeout_handler);
 }
@@ -2619,7 +2588,7 @@ static int pmcraid_error_handler(struct pmcraid_cmd *cmd)
 	struct pmcraid_ioasa *ioasa = &cmd->ioa_cb->ioasa;
 	u32 ioasc = le32_to_cpu(ioasa->ioasc);
 	u32 masked_ioasc = ioasc & PMCRAID_IOASC_SENSE_MASK;
-	u32 sense_copied = 0;
+	bool sense_copied = false;
 
 	if (!res) {
 		pmcraid_info("resource pointer is NULL\n");
@@ -2691,7 +2660,7 @@ static int pmcraid_error_handler(struct pmcraid_cmd *cmd)
 			memcpy(scsi_cmd->sense_buffer,
 			       ioasa->sense_data,
 			       data_size);
-			sense_copied = 1;
+			sense_copied = true;
 		}
 
 		if (RES_IS_GSCSI(res->cfg_entry))
@@ -2891,10 +2860,8 @@ static struct pmcraid_cmd *pmcraid_abort_cmd(struct pmcraid_cmd *cmd)
 {
 	struct pmcraid_cmd *cancel_cmd;
 	struct pmcraid_instance *pinstance;
-	struct pmcraid_resource_entry *res;
 
 	pinstance = (struct pmcraid_instance *)cmd->drv_inst;
-	res = cmd->scsi_cmd->device->hostdata;
 
 	cancel_cmd = pmcraid_get_free_cmd(pinstance);
 
@@ -3182,7 +3149,7 @@ static int pmcraid_build_ioadl(
 
 	struct scsi_cmnd *scsi_cmd = cmd->scsi_cmd;
 	struct pmcraid_ioarcb *ioarcb = &(cmd->ioa_cb->ioarcb);
-	struct pmcraid_ioadl_desc *ioadl = ioarcb->add_data.u.ioadl;
+	struct pmcraid_ioadl_desc *ioadl;
 
 	u32 length = scsi_bufflen(scsi_cmd);
 
@@ -3232,12 +3199,7 @@ static int pmcraid_build_ioadl(
  */
 static void pmcraid_free_sglist(struct pmcraid_sglist *sglist)
 {
-	int i;
-
-	for (i = 0; i < sglist->num_sg; i++)
-		__free_pages(sg_page(&(sglist->scatterlist[i])),
-			     sglist->order);
-
+	sgl_free_order(sglist->scatterlist, sglist->order);
 	kfree(sglist);
 }
 
@@ -3254,50 +3216,20 @@ static void pmcraid_free_sglist(struct pmcraid_sglist *sglist)
 static struct pmcraid_sglist *pmcraid_alloc_sglist(int buflen)
 {
 	struct pmcraid_sglist *sglist;
-	struct scatterlist *scatterlist;
-	struct page *page;
-	int num_elem, i, j;
 	int sg_size;
 	int order;
-	int bsize_elem;
 
 	sg_size = buflen / (PMCRAID_MAX_IOADLS - 1);
 	order = (sg_size > 0) ? get_order(sg_size) : 0;
-	bsize_elem = PAGE_SIZE * (1 << order);
-
-	/* Determine the actual number of sg entries needed */
-	if (buflen % bsize_elem)
-		num_elem = (buflen / bsize_elem) + 1;
-	else
-		num_elem = buflen / bsize_elem;
 
 	/* Allocate a scatter/gather list for the DMA */
-	sglist = kzalloc(sizeof(struct pmcraid_sglist) +
-			 (sizeof(struct scatterlist) * (num_elem - 1)),
-			 GFP_KERNEL);
-
+	sglist = kzalloc(sizeof(struct pmcraid_sglist), GFP_KERNEL);
 	if (sglist == NULL)
 		return NULL;
 
-	scatterlist = sglist->scatterlist;
-	sg_init_table(scatterlist, num_elem);
 	sglist->order = order;
-	sglist->num_sg = num_elem;
-	sg_size = buflen;
-
-	for (i = 0; i < num_elem; i++) {
-		page = alloc_pages(GFP_KERNEL|GFP_DMA|__GFP_ZERO, order);
-		if (!page) {
-			for (j = i - 1; j >= 0; j--)
-				__free_pages(sg_page(&scatterlist[j]), order);
-			kfree(sglist);
-			return NULL;
-		}
-
-		sg_set_page(&scatterlist[i], page,
-			sg_size < bsize_elem ? sg_size : bsize_elem, 0);
-		sg_size -= bsize_elem;
-	}
+	sgl_alloc_order(buflen, order, false,
+			GFP_KERNEL | GFP_DMA | __GFP_ZERO, &sglist->num_sg);
 
 	return sglist;
 }
@@ -3321,7 +3253,7 @@ static int pmcraid_copy_sglist(
 	int direction
 )
 {
-	struct scatterlist *scatterlist;
+	struct scatterlist *sg;
 	void *kaddr;
 	int bsize_elem;
 	int i;
@@ -3330,10 +3262,10 @@ static int pmcraid_copy_sglist(
 	/* Determine the actual number of bytes per element */
 	bsize_elem = PAGE_SIZE * (1 << sglist->order);
 
-	scatterlist = sglist->scatterlist;
+	sg = sglist->scatterlist;
 
-	for (i = 0; i < (len / bsize_elem); i++, buffer += bsize_elem) {
-		struct page *page = sg_page(&scatterlist[i]);
+	for (i = 0; i < (len / bsize_elem); i++, sg = sg_next(sg), buffer += bsize_elem) {
+		struct page *page = sg_page(sg);
 
 		kaddr = kmap(page);
 		if (direction == DMA_TO_DEVICE)
@@ -3348,11 +3280,11 @@ static int pmcraid_copy_sglist(
 			return -EFAULT;
 		}
 
-		scatterlist[i].length = bsize_elem;
+		sg->length = bsize_elem;
 	}
 
 	if (len % bsize_elem) {
-		struct page *page = sg_page(&scatterlist[i]);
+		struct page *page = sg_page(sg);
 
 		kaddr = kmap(page);
 
@@ -3363,7 +3295,7 @@ static int pmcraid_copy_sglist(
 
 		kunmap(page);
 
-		scatterlist[i].length = len % bsize_elem;
+		sg->length = len % bsize_elem;
 	}
 
 	if (rc) {
@@ -3565,7 +3497,7 @@ static int pmcraid_build_passthrough_ioadls(
 		return -ENOMEM;
 	}
 
-	sglist->num_dma_sg = pci_map_sg(cmd->drv_inst->pdev,
+	sglist->num_dma_sg = dma_map_sg(&cmd->drv_inst->pdev->dev,
 					sglist->scatterlist,
 					sglist->num_sg, direction);
 
@@ -3614,7 +3546,7 @@ static void pmcraid_release_passthrough_ioadls(
 	struct pmcraid_sglist *sglist = cmd->sglist;
 
 	if (buflen > 0) {
-		pci_unmap_sg(cmd->drv_inst->pdev,
+		dma_unmap_sg(&cmd->drv_inst->pdev->dev,
 			     sglist->scatterlist,
 			     sglist->num_sg,
 			     direction);
@@ -3651,7 +3583,7 @@ static long pmcraid_ioctl_passthrough(
 	u32 ioasc;
 	int request_size;
 	int buffer_size;
-	u8 access, direction;
+	u8 direction;
 	int rc = 0;
 
 	/* If IOA reset is in progress, wait 10 secs for reset to complete */
@@ -3700,10 +3632,8 @@ static long pmcraid_ioctl_passthrough(
 	request_size = le32_to_cpu(buffer->ioarcb.data_transfer_length);
 
 	if (buffer->ioarcb.request_flags0 & TRANSFER_DIR_WRITE) {
-		access = VERIFY_READ;
 		direction = DMA_TO_DEVICE;
 	} else {
-		access = VERIFY_WRITE;
 		direction = DMA_FROM_DEVICE;
 	}
 
@@ -4041,9 +3971,7 @@ static const struct file_operations pmcraid_fops = {
 	.open = pmcraid_chr_open,
 	.fasync = pmcraid_chr_fasync,
 	.unlocked_ioctl = pmcraid_chr_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl = pmcraid_chr_ioctl,
-#endif
+	.compat_ioctl = compat_ptr_ioctl,
 	.llseek = noop_llseek,
 };
 
@@ -4200,7 +4128,6 @@ static struct scsi_host_template pmcraid_host_template = {
 	.max_sectors = PMCRAID_IOA_MAX_SECTORS,
 	.no_write_same = 1,
 	.cmd_per_lun = PMCRAID_MAX_CMD_PER_LUN,
-	.use_clustering = ENABLE_CLUSTERING,
 	.shost_attrs = pmcraid_host_attrs,
 	.proc_name = PMCRAID_DRIVER_NAME,
 };
@@ -4601,7 +4528,7 @@ pmcraid_register_interrupt_handler(struct pmcraid_instance *pinstance)
 	return 0;
 
 out_unwind:
-	while (--i > 0)
+	while (--i >= 0)
 		free_irq(pci_irq_vector(pdev, i), &pinstance->hrrq_vector[i]);
 	pci_free_irq_vectors(pdev);
 	return rc;
@@ -4723,7 +4650,7 @@ static int pmcraid_allocate_control_blocks(struct pmcraid_instance *pinstance)
 
 	for (i = 0; i < PMCRAID_MAX_CMD; i++) {
 		pinstance->cmd_list[i]->ioa_cb =
-			dma_pool_alloc(
+			dma_pool_zalloc(
 				pinstance->control_pool,
 				GFP_KERNEL,
 				&(pinstance->cmd_list[i]->ioa_cb_bus_addr));
@@ -4732,8 +4659,6 @@ static int pmcraid_allocate_control_blocks(struct pmcraid_instance *pinstance)
 			pmcraid_release_control_blocks(pinstance, i);
 			return -ENOMEM;
 		}
-		memset(pinstance->cmd_list[i]->ioa_cb, 0,
-			sizeof(struct pmcraid_control_block));
 	}
 	return 0;
 }
@@ -4750,9 +4675,9 @@ static void
 pmcraid_release_host_rrqs(struct pmcraid_instance *pinstance, int maxindex)
 {
 	int i;
-	for (i = 0; i < maxindex; i++) {
 
-		pci_free_consistent(pinstance->pdev,
+	for (i = 0; i < maxindex; i++) {
+		dma_free_coherent(&pinstance->pdev->dev,
 				    HRRQ_ENTRY_SIZE * PMCRAID_MAX_CMD,
 				    pinstance->hrrq_start[i],
 				    pinstance->hrrq_start_bus_addr[i]);
@@ -4779,11 +4704,9 @@ static int pmcraid_allocate_host_rrqs(struct pmcraid_instance *pinstance)
 
 	for (i = 0; i < pinstance->num_hrrq; i++) {
 		pinstance->hrrq_start[i] =
-			pci_alloc_consistent(
-					pinstance->pdev,
-					buffer_size,
-					&(pinstance->hrrq_start_bus_addr[i]));
-
+			dma_alloc_coherent(&pinstance->pdev->dev, buffer_size,
+					   &pinstance->hrrq_start_bus_addr[i],
+					   GFP_KERNEL);
 		if (!pinstance->hrrq_start[i]) {
 			pmcraid_err("pci_alloc failed for hrrq vector : %d\n",
 				    i);
@@ -4791,7 +4714,6 @@ static int pmcraid_allocate_host_rrqs(struct pmcraid_instance *pinstance)
 			return -ENOMEM;
 		}
 
-		memset(pinstance->hrrq_start[i], 0, buffer_size);
 		pinstance->hrrq_curr[i] = pinstance->hrrq_start[i];
 		pinstance->hrrq_end[i] =
 			pinstance->hrrq_start[i] + PMCRAID_MAX_CMD - 1;
@@ -4812,7 +4734,7 @@ static int pmcraid_allocate_host_rrqs(struct pmcraid_instance *pinstance)
 static void pmcraid_release_hcams(struct pmcraid_instance *pinstance)
 {
 	if (pinstance->ccn.msg != NULL) {
-		pci_free_consistent(pinstance->pdev,
+		dma_free_coherent(&pinstance->pdev->dev,
 				    PMCRAID_AEN_HDR_SIZE +
 				    sizeof(struct pmcraid_hcam_ccn_ext),
 				    pinstance->ccn.msg,
@@ -4824,7 +4746,7 @@ static void pmcraid_release_hcams(struct pmcraid_instance *pinstance)
 	}
 
 	if (pinstance->ldn.msg != NULL) {
-		pci_free_consistent(pinstance->pdev,
+		dma_free_coherent(&pinstance->pdev->dev,
 				    PMCRAID_AEN_HDR_SIZE +
 				    sizeof(struct pmcraid_hcam_ldn),
 				    pinstance->ldn.msg,
@@ -4845,17 +4767,15 @@ static void pmcraid_release_hcams(struct pmcraid_instance *pinstance)
  */
 static int pmcraid_allocate_hcams(struct pmcraid_instance *pinstance)
 {
-	pinstance->ccn.msg = pci_alloc_consistent(
-					pinstance->pdev,
+	pinstance->ccn.msg = dma_alloc_coherent(&pinstance->pdev->dev,
 					PMCRAID_AEN_HDR_SIZE +
 					sizeof(struct pmcraid_hcam_ccn_ext),
-					&(pinstance->ccn.baddr));
+					&pinstance->ccn.baddr, GFP_KERNEL);
 
-	pinstance->ldn.msg = pci_alloc_consistent(
-					pinstance->pdev,
+	pinstance->ldn.msg = dma_alloc_coherent(&pinstance->pdev->dev,
 					PMCRAID_AEN_HDR_SIZE +
 					sizeof(struct pmcraid_hcam_ldn),
-					&(pinstance->ldn.baddr));
+					&pinstance->ldn.baddr, GFP_KERNEL);
 
 	if (pinstance->ldn.msg == NULL || pinstance->ccn.msg == NULL) {
 		pmcraid_release_hcams(pinstance);
@@ -4883,7 +4803,7 @@ static void pmcraid_release_config_buffers(struct pmcraid_instance *pinstance)
 {
 	if (pinstance->cfg_table != NULL &&
 	    pinstance->cfg_table_bus_addr != 0) {
-		pci_free_consistent(pinstance->pdev,
+		dma_free_coherent(&pinstance->pdev->dev,
 				    sizeof(struct pmcraid_config_table),
 				    pinstance->cfg_table,
 				    pinstance->cfg_table_bus_addr);
@@ -4915,8 +4835,9 @@ static int pmcraid_allocate_config_buffers(struct pmcraid_instance *pinstance)
 	int i;
 
 	pinstance->res_entries =
-			kzalloc(sizeof(struct pmcraid_resource_entry) *
-				PMCRAID_MAX_RESOURCES, GFP_KERNEL);
+			kcalloc(PMCRAID_MAX_RESOURCES,
+				sizeof(struct pmcraid_resource_entry),
+				GFP_KERNEL);
 
 	if (NULL == pinstance->res_entries) {
 		pmcraid_err("failed to allocate memory for resource table\n");
@@ -4927,10 +4848,10 @@ static int pmcraid_allocate_config_buffers(struct pmcraid_instance *pinstance)
 		list_add_tail(&pinstance->res_entries[i].queue,
 			      &pinstance->free_res_q);
 
-	pinstance->cfg_table =
-		pci_alloc_consistent(pinstance->pdev,
+	pinstance->cfg_table = dma_alloc_coherent(&pinstance->pdev->dev,
 				     sizeof(struct pmcraid_config_table),
-				     &pinstance->cfg_table_bus_addr);
+				     &pinstance->cfg_table_bus_addr,
+				     GFP_KERNEL);
 
 	if (NULL == pinstance->cfg_table) {
 		pmcraid_err("couldn't alloc DMA memory for config table\n");
@@ -4995,7 +4916,7 @@ static void pmcraid_release_buffers(struct pmcraid_instance *pinstance)
 	pmcraid_release_host_rrqs(pinstance, pinstance->num_hrrq);
 
 	if (pinstance->inq_data != NULL) {
-		pci_free_consistent(pinstance->pdev,
+		dma_free_coherent(&pinstance->pdev->dev,
 				    sizeof(struct pmcraid_inquiry_data),
 				    pinstance->inq_data,
 				    pinstance->inq_data_baddr);
@@ -5005,7 +4926,7 @@ static void pmcraid_release_buffers(struct pmcraid_instance *pinstance)
 	}
 
 	if (pinstance->timestamp_data != NULL) {
-		pci_free_consistent(pinstance->pdev,
+		dma_free_coherent(&pinstance->pdev->dev,
 				    sizeof(struct pmcraid_timestamp_data),
 				    pinstance->timestamp_data,
 				    pinstance->timestamp_data_baddr);
@@ -5022,8 +4943,8 @@ static void pmcraid_release_buffers(struct pmcraid_instance *pinstance)
  * This routine pre-allocates memory based on the type of block as below:
  * cmdblocks(PMCRAID_MAX_CMD): kernel memory using kernel's slab_allocator,
  * IOARCBs(PMCRAID_MAX_CMD)  : DMAable memory, using pci pool allocator
- * config-table entries      : DMAable memory using pci_alloc_consistent
- * HostRRQs                  : DMAable memory, using pci_alloc_consistent
+ * config-table entries      : DMAable memory using dma_alloc_coherent
+ * HostRRQs                  : DMAable memory, using dma_alloc_coherent
  *
  * Return Value
  *	 0 in case all of the blocks are allocated, -ENOMEM otherwise.
@@ -5060,11 +4981,9 @@ static int pmcraid_init_buffers(struct pmcraid_instance *pinstance)
 	}
 
 	/* allocate DMAable memory for page D0 INQUIRY buffer */
-	pinstance->inq_data = pci_alloc_consistent(
-					pinstance->pdev,
+	pinstance->inq_data = dma_alloc_coherent(&pinstance->pdev->dev,
 					sizeof(struct pmcraid_inquiry_data),
-					&pinstance->inq_data_baddr);
-
+					&pinstance->inq_data_baddr, GFP_KERNEL);
 	if (pinstance->inq_data == NULL) {
 		pmcraid_err("couldn't allocate DMA memory for INQUIRY\n");
 		pmcraid_release_buffers(pinstance);
@@ -5072,11 +4991,10 @@ static int pmcraid_init_buffers(struct pmcraid_instance *pinstance)
 	}
 
 	/* allocate DMAable memory for set timestamp data buffer */
-	pinstance->timestamp_data = pci_alloc_consistent(
-					pinstance->pdev,
+	pinstance->timestamp_data = dma_alloc_coherent(&pinstance->pdev->dev,
 					sizeof(struct pmcraid_timestamp_data),
-					&pinstance->timestamp_data_baddr);
-
+					&pinstance->timestamp_data_baddr,
+					GFP_KERNEL);
 	if (pinstance->timestamp_data == NULL) {
 		pmcraid_err("couldn't allocate DMA memory for \
 				set time_stamp \n");
@@ -5223,7 +5141,7 @@ static unsigned short pmcraid_get_minor(void)
 {
 	int minor;
 
-	minor = find_first_zero_bit(pmcraid_minor, sizeof(pmcraid_minor));
+	minor = find_first_zero_bit(pmcraid_minor, PMCRAID_MAX_ADAPTERS);
 	__set_bit(minor, pmcraid_minor);
 	return minor;
 }
@@ -5365,12 +5283,12 @@ static int pmcraid_resume(struct pci_dev *pdev)
 
 	pci_set_master(pdev);
 
-	if ((sizeof(dma_addr_t) == 4) ||
-	     pci_set_dma_mask(pdev, DMA_BIT_MASK(64)))
-		rc = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+	if (sizeof(dma_addr_t) == 4 ||
+	    dma_set_mask(&pdev->dev, DMA_BIT_MASK(64)))
+		rc = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
 
 	if (rc == 0)
-		rc = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
+		rc = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
 
 	if (rc != 0) {
 		dev_err(&pdev->dev, "resume: Failed to set PCI DMA mask\n");
@@ -5499,7 +5417,7 @@ static void pmcraid_set_timestamp(struct pmcraid_cmd *cmd)
 	struct pmcraid_instance *pinstance = cmd->drv_inst;
 	struct pmcraid_ioarcb *ioarcb = &cmd->ioa_cb->ioarcb;
 	__be32 time_stamp_len = cpu_to_be32(PMCRAID_TIMESTAMP_LEN);
-	struct pmcraid_ioadl_desc *ioadl = ioarcb->add_data.u.ioadl;
+	struct pmcraid_ioadl_desc *ioadl;
 	u64 timestamp;
 
 	timestamp = ktime_get_real_seconds() * 1000;
@@ -5672,7 +5590,7 @@ static void pmcraid_init_res_table(struct pmcraid_cmd *cmd)
 static void pmcraid_querycfg(struct pmcraid_cmd *cmd)
 {
 	struct pmcraid_ioarcb *ioarcb = &cmd->ioa_cb->ioarcb;
-	struct pmcraid_ioadl_desc *ioadl = ioarcb->add_data.u.ioadl;
+	struct pmcraid_ioadl_desc *ioadl;
 	struct pmcraid_instance *pinstance = cmd->drv_inst;
 	__be32 cfg_table_size = cpu_to_be32(sizeof(struct pmcraid_config_table));
 
@@ -5774,19 +5692,19 @@ static int pmcraid_probe(struct pci_dev *pdev,
 	/* Firmware requires the system bus address of IOARCB to be within
 	 * 32-bit addressable range though it has 64-bit IOARRIN register.
 	 * However, firmware supports 64-bit streaming DMA buffers, whereas
-	 * coherent buffers are to be 32-bit. Since pci_alloc_consistent always
+	 * coherent buffers are to be 32-bit. Since dma_alloc_coherent always
 	 * returns memory within 4GB (if not, change this logic), coherent
 	 * buffers are within firmware acceptable address ranges.
 	 */
-	if ((sizeof(dma_addr_t) == 4) ||
-	    pci_set_dma_mask(pdev, DMA_BIT_MASK(64)))
-		rc = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+	if (sizeof(dma_addr_t) == 4 ||
+	    dma_set_mask(&pdev->dev, DMA_BIT_MASK(64)))
+		rc = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
 
 	/* firmware expects 32-bit DMA addresses for IOARRIN register; set 32
-	 * bit mask for pci_alloc_consistent to return addresses within 4GB
+	 * bit mask for dma_alloc_coherent to return addresses within 4GB
 	 */
 	if (rc == 0)
-		rc = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
+		rc = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
 
 	if (rc != 0) {
 		dev_err(&pdev->dev, "Failed to set PCI DMA mask\n");
@@ -5916,7 +5834,7 @@ out_disable_device:
 }
 
 /*
- * PCI driver structure of pcmraid driver
+ * PCI driver structure of pmcraid driver
  */
 static struct pci_driver pmcraid_driver = {
 	.name = PMCRAID_DRIVER_NAME,

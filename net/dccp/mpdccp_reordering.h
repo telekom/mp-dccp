@@ -62,7 +62,7 @@ extern int ro_dbug_state;
 #define ro_info(fmt, a...)                                                                    \
     if(ro_info_state) pr_info(fmt, ##a)
 #define ro_warn(fmt, a...)                                                                    \
-    if(ro_warn_state) pr_warning(fmt, ##a)
+    if(ro_warn_state) pr_warn(fmt, ##a)
 #define ro_dbug1(fmt, a...)                                                                   \
     MPDCCP_PRINTK (ro_dbug_state, KERN_DEBUG fmt, ##a)
 #define ro_dbug2(fmt, a...)                                                                   \
@@ -190,3 +190,4 @@ void mpdccp_reorder_default_unregister (void);
 
 
 #endif /* _MPDCCP_REORDERING_H */
+

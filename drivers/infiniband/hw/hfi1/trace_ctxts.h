@@ -1,5 +1,5 @@
 /*
-* Copyright(c) 2015, 2016 Intel Corporation.
+* Copyright(c) 2015 - 2020 Intel Corporation.
 *
 * This file is provided under a dual BSD/GPLv2 license.  When using or
 * redistributing this file, you may do so under either license.
@@ -80,7 +80,7 @@ TRACE_EVENT(hfi1_uctxtdata,
 			   __entry->credits = uctxt->sc->credits;
 			   __entry->hw_free = le64_to_cpu(*uctxt->sc->hw_free);
 			   __entry->piobase = uctxt->sc->base_addr;
-			   __entry->rcvhdrq_cnt = uctxt->rcvhdrq_cnt;
+			   __entry->rcvhdrq_cnt = get_hdrq_cnt(uctxt);
 			   __entry->rcvhdrq_dma = uctxt->rcvhdrq_dma;
 			   __entry->eager_cnt = uctxt->egrbufs.alloced;
 			   __entry->rcvegr_dma = uctxt->egrbufs.rcvtids[0].dma;
@@ -106,7 +106,7 @@ TRACE_EVENT(hfi1_uctxtdata,
 TRACE_EVENT(hfi1_ctxt_info,
 	    TP_PROTO(struct hfi1_devdata *dd, unsigned int ctxt,
 		     unsigned int subctxt,
-		     struct hfi1_ctxt_info cinfo),
+		     struct hfi1_ctxt_info *cinfo),
 	    TP_ARGS(dd, ctxt, subctxt, cinfo),
 	    TP_STRUCT__entry(DD_DEV_ENTRY(dd)
 			     __field(unsigned int, ctxt)
@@ -120,11 +120,11 @@ TRACE_EVENT(hfi1_ctxt_info,
 	    TP_fast_assign(DD_DEV_ASSIGN(dd);
 			    __entry->ctxt = ctxt;
 			    __entry->subctxt = subctxt;
-			    __entry->egrtids = cinfo.egrtids;
-			    __entry->rcvhdrq_cnt = cinfo.rcvhdrq_cnt;
-			    __entry->rcvhdrq_size = cinfo.rcvhdrq_entsize;
-			    __entry->sdma_ring_size = cinfo.sdma_ring_size;
-			    __entry->rcvegr_size = cinfo.rcvegr_size;
+			    __entry->egrtids = cinfo->egrtids;
+			    __entry->rcvhdrq_cnt = cinfo->rcvhdrq_cnt;
+			    __entry->rcvhdrq_size = cinfo->rcvhdrq_entsize;
+			    __entry->sdma_ring_size = cinfo->sdma_ring_size;
+			    __entry->rcvegr_size = cinfo->rcvegr_size;
 			    ),
 	    TP_printk("[%s] ctxt %u:%u " CINFO_FMT,
 		      __get_str(dev),
@@ -136,6 +136,15 @@ TRACE_EVENT(hfi1_ctxt_info,
 		      __entry->rcvhdrq_size,
 		      __entry->sdma_ring_size
 		      )
+);
+
+const char *hfi1_trace_print_rsm_hist(struct trace_seq *p, unsigned int ctxt);
+TRACE_EVENT(ctxt_rsm_hist,
+	    TP_PROTO(unsigned int ctxt),
+	    TP_ARGS(ctxt),
+	    TP_STRUCT__entry(__field(unsigned int, ctxt)),
+	    TP_fast_assign(__entry->ctxt = ctxt;),
+	    TP_printk("%s", hfi1_trace_print_rsm_hist(p, __entry->ctxt))
 );
 
 #endif /* __HFI1_TRACE_CTXTS_H */

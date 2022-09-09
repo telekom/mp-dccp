@@ -2,6 +2,8 @@
 #ifndef _SPARC_TRAP_BLOCK_H
 #define _SPARC_TRAP_BLOCK_H
 
+#include <linux/threads.h>
+
 #include <asm/hypervisor.h>
 #include <asm/asi.h>
 
@@ -76,6 +78,8 @@ extern struct sun4v_1insn_patch_entry __sun4v_1insn_patch,
 	__sun4v_1insn_patch_end;
 extern struct sun4v_1insn_patch_entry __fast_win_ctrl_1insn_patch,
 	__fast_win_ctrl_1insn_patch_end;
+extern struct sun4v_1insn_patch_entry __sun_m7_1insn_patch,
+	__sun_m7_1insn_patch_end;
 
 struct sun4v_2insn_patch_entry {
 	unsigned int	addr;
