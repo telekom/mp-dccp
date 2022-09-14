@@ -32,6 +32,7 @@
 #include <net/addrconf.h>
 #include <net/net_namespace.h>
 #include <net/netns/mpdccp.h>
+#include <asm/unaligned.h>
 
 #include "../ccids/ccid2.h"
 #include "../dccp.h"
@@ -103,16 +104,49 @@ static struct mpdccp_pm_ns *fm_get_ns(const struct net *net)
  * existing connections. We assume that every operation produces a 
  * consistent state upon completion, i.e. if an address is not
  * in the list, it is not used in any connection. */
-static void mpdccp_announce_remove_path(int addr_id, struct mpdccp_cb *mpcb)
+static void mpdccp_send_remove_path(u8 addr_id, struct mpdccp_cb *mpcb)
 {
-	struct sock *sk = mpdccp_select_ann_sock(mpcb);
+	struct sock *sk = mpdccp_select_ann_sock(mpcb, addr_id);
 	if (sk){
-		mpcb->delpath = addr_id;
-		mpdccp_pr_debug("Sending delete path\n");
-#if IS_ENABLED(CONFIG_DCCP_KEEPALIVE)
+		mpcb->delpath_id = addr_id;
 		dccp_send_keepalive(sk);
-#endif
 	}
+}
+
+static void mpdccp_send_add_path(struct mpdccp_local_addr *loc_addr, u16 port, struct mpdccp_cb *mpcb)
+{
+	struct sock *sk = mpdccp_select_ann_sock(mpcb, 0);
+	if (sk){
+		mpcb->addpath_id = loc_addr->id;
+		mpcb->addpath_family = loc_addr->family;
+		memcpy(mpcb->addpath_addr.all, loc_addr->addr.all, 4);
+		mpcb->addpath_port = port;
+		dccp_send_keepalive(sk);
+	}
+}
+
+static int pm_get_addr_hmac(struct mpdccp_cb *mpcb,
+							u8 id, sa_family_t family,
+							union inet_addr *addr, u16 port,
+							bool send, u8 *hmac)
+{
+	u8 msg[19];		//1:id + 16:ipv6 + 2:port
+	int len = 1;
+	msg[0] = id;
+
+	if(family == AF_INET){
+		put_unaligned_be32(addr->ip, &msg[1]);
+		put_unaligned_be16(port, &msg[5]);
+		len = 7;
+	} else if(family == AF_INET6){
+		memcpy(&msg[1], addr->ip6, 16);
+		put_unaligned_be16(port, &msg[17]);
+		len = 19;
+	}
+	if((send && mpcb->role == MPDCCP_CLIENT) || (!send && mpcb->role != MPDCCP_CLIENT))
+		return mpdccp_hmac_sha256(mpcb->dkeyA, mpcb->dkeylen, msg, len, hmac);
+	else
+		return mpdccp_hmac_sha256(mpcb->dkeyB, mpcb->dkeylen, msg, len, hmac);
 }
 
 /* Use ip routing functions to figure out default source address and store address in mpcb*/
@@ -362,6 +396,7 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 	union inet_addr *addr 		= &event->addr;
     int if_idx 					= event->if_idx;
 	int locaddr_len, loc_id;
+	u16 port;
 
 	struct list_head *plocal_addr_list = &pm_ns->plocal_addr_list;
 
@@ -451,6 +486,7 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 			else
 				local_v4_address.sin_port		= htons (mpcb->server_port);
 
+			port = local_v4_address.sin_port;
 			local = (struct sockaddr *) &local_v4_address;
 			locaddr_len = sizeof (struct sockaddr_in);
 		} else {
@@ -459,6 +495,7 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 			else
 				local_v6_address.sin6_port		= htons (mpcb->server_port);
 
+			port = local_v6_address.sin6_port;
 			local = (struct sockaddr *) &local_v6_address;
 			locaddr_len = sizeof (struct sockaddr_in6);
 		}
@@ -472,7 +509,11 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 						mpcb->remaddr_len);
 			break;
 		case MPDCCP_SERVER:
-			/* do nothing */
+			/* send mp_addaddress */
+			if (!(mpcb->fallback_sp && (mpcb->cnt_subflows > 0))){
+				//add_init_server_conn(mpcb, backlog);
+				mpdccp_send_add_path(local_addr, port, mpcb);
+			}
 			break;
 		default:
 			break;
@@ -569,8 +610,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 
 					addr_id = mpdccp_my_sock(sk)->local_addr_id;
 					mpdccp_close_subflow (mpcb, sk, 0);
-					mpdccp_announce_remove_path(addr_id, mpcb);
-
+					mpdccp_send_remove_path(addr_id, mpcb);
 				}
 			}
 		}
@@ -714,8 +754,7 @@ static void add_pm_event(struct net *net, const struct mpdccp_local_addr_event *
 
 	/* Create work-queue */
 	if (!delayed_work_pending(&pm_ns->address_worker))
-		queue_delayed_work(mpdccp_wq, &pm_ns->address_worker,
-				   msecs_to_jiffies(500));
+		queue_delayed_work(mpdccp_wq, &pm_ns->address_worker, msecs_to_jiffies(10));
 }
 
 static void addr4_event_handler(const struct in_ifaddr *ifa, unsigned long event,
@@ -1363,6 +1402,7 @@ static struct mpdccp_pm_ops mpdccp_pm_default = {
 	.add_remote_addr = pm_add_remote_addr,
 	.get_remote_id = pm_get_remote_id,
 	.free_remote_addr = pm_free_remote_addr_list,
+	.pm_hmac = pm_get_addr_hmac,
 	.handle_rcv_prio = pm_handle_rcv_prio,
 	.name 			= "default",
 	.owner 			= THIS_MODULE,

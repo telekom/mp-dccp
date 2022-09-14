@@ -262,6 +262,11 @@ struct mpdccp_cb {
 	int			    backlog;
 	u8			announce_prio[3];				// id, prio, flag for send
 
+	u8              delpath_id;
+	u8			    addpath_id;
+	sa_family_t		addpath_family;
+	union inet_addr	addpath_addr;
+	u16			addpath_port;
 	int			up_reported;
 	u8 			master_addr_id;
 	int  		cnt_remote_addrs;
@@ -368,8 +373,7 @@ int mpdccp_add_client_conn (struct mpdccp_cb *, struct sockaddr *local, int llen
 int mpdccp_reconnect_client (struct sock*, int destroy, struct sockaddr*, int addrlen, int ifidx);
 int mpdccp_add_listen_sock (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx);
 int mpdccp_close_subflow (struct mpdccp_cb*, struct sock*, int destroy);
-void mpdccp_handle_rem_addr (u32 del_path);
-struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb);
+struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb, u8 id);
 
 struct mpdccp_cb *mpdccp_alloc_mpcb(void);
 

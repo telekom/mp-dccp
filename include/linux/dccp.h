@@ -208,6 +208,9 @@ struct dccp_options_received {
 	u32	dccpor_elapsed_time;
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 	u64 dccpor_oall_seq:48;		/* MPDCCP overall sequence number */
+	u8 dccpor_addaddr[MPDCCP_ADDADDR_SIZE];
+	u8 dccpor_addaddr_len;
+	u8 dccpor_removeaddr[4];
 	
 	u32 dccpor_join_ip_local;     /* MPDCCP mp_join received local ip */
 	u32 dccpor_join_ip_remote;     /* MPDCCP mp_join received remote ip */
