@@ -208,6 +208,10 @@ struct dccp_options_received {
 	u32	dccpor_elapsed_time;
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 	u64 dccpor_oall_seq:48;		/* MPDCCP overall sequence number */
+
+	u8 dccpor_rtt_type;         /* MP_RTT type */
+	u32 dccpor_rtt_value;
+	u32 dccpor_rtt_age;
 	u8 dccpor_mp_suppkeys;			/* MPDCCP supported key types */
 	u32 dccpor_mp_token;			/* MPDCCP path token */
 	u32 dccpor_mp_nonce;			/* MPDCCP path nonce */
@@ -215,7 +219,7 @@ struct dccp_options_received {
 	struct mpdccp_key dccpor_mp_keys[MPDCCP_MAX_KEYS];	/* MPDCCP keys */
 	int saw_mpkey;
 	int saw_mpjoin;
-	#endif
+#endif
 };
 
 struct ccid;
