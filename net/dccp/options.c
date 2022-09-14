@@ -27,6 +27,7 @@
 #include "feat.h"
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 #  include "mpdccp.h"
+#  include "mpdccp_pm.h"
 #  include <net/mpdccp.h>
 #endif
 
@@ -50,76 +51,6 @@ u64 dccp_decode_value_var(const u8 *bf, const u8 len)
 	return value;
 }
 
-// static void mpdccp_send_reset_rem_id(const struct mpdccp_cb *mpcb, u8 rem_id)
-// {
-// 	// struct sock *sk_it, *tmpsk;
-
-// 	// mpdccp_for_each_sk_safe(mpcb, sk_it, tmpsk) {
-// 	// 	if (sk_it->sk_user_data->rem_id == rem_id) {
-// 	// 		mpdccp_reinject_data(sk_it, 0);
-// 	// 		mpdccp_send_reset(sk_it);
-// 	// 	}
-// 	// }
-// }
-
-// static void mpdccp_handle_add_addr(const unsigned char *ptr, struct sock *sk, sa_family_t family)
-// {
-// 	struct mp_add_addr 	*mpadd = (struct mp_add_addr *)ptr;
-// 	struct my_sock 		*my_sk;
-//     struct mpdccp_cb 	*mpcb;
-// 	union inet_addr 	addr;
-// 	__be16 				port = 0;
-
-// 	if(!sk || !sk->sk_user_data)
-//         return;
-
-//     my_sk = sk->sk_user_data;
-// 	mpcb = my_sk->mpcb;
-
-// 	if (family == AF_INET) {
-// 		port  = mpadd->u.v4.port;
-// 		addr.in = mpadd->u.v4.addr;
-// #if IS_ENABLED(CONFIG_IPV6)
-// 	} else if (family == AF_INET6) {
-// 		port  = mpadd->u.v6.port;
-// 		addr.in6 = mpadd->u.v6.addr;
-// #endif /* CONFIG_IPV6 */
-// 	} else {
-// 		return;
-// 	}
-
-// 	if (mpcb->pm_ops->add_raddr)
-// 		mpcb->pm_ops->add_raddr(mpcb, &addr, family, port, mpadd->addr_id);
-// }
-
-// static void mpdccp_handle_del_addr(const unsigned char *ptr, struct sock *sk, short len)
-// {
-// 	struct mp_delete_addr *mpdel = (struct mp_delete_addr *)ptr;
-// 	int i;
-// 	u8 rem_id;
-// 	struct my_sock 		*my_sk;
-//     struct mpdccp_cb 	*mpcb;
-
-//     if(!sk || !sk->sk_user_data)
-//         return;
-
-//     my_sk = sk->sk_user_data;
-// 	mpcb = my_sk->mpcb;
-
-// 	/* Compared to MPTCP, our address IDs have 16 bits. This may change in
-// 	 * a later version, in this case change this back to i++ */
-// 	 for (i = 0; i <= len - MPDCCP_LEN_DEL_ADDR; i+=2) {
-// 		 rem_id = (&mpdel->addrs_id)[i];
-
-// 		rem_id = mpdel->addrs_id;
-
-// 		if (mpcb->pm_ops->rem_raddr)
-// 			mpcb->pm_ops->rem_raddr(mpcb, rem_id);
-// 		mpdccp_send_reset_rem_id(mpcb, rem_id);
-
-// 	 }
-// }
-
 /**
  * dccp_parse_options  -  Parse DCCP options present in @skb
  * @sk: client|server|listening dccp socket (when @dreq != NULL)
@@ -142,10 +73,6 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 	__be32 opt_val;
 	int rc;
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
-	u64 oall_seq = 0;	//MPDCCP overall seqno
-	u32 delay = 0;		//MPDCCP delay report
-	u32 path_id = 0;    //MPDCCP path_id
-	u32 del_path = 0;    //MPDCCP path_id
 	u8 mp_opt = 0;
 #endif
 	int mandatory = 0;
@@ -307,48 +234,10 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 			mp_opt = *value++;
 			len--;
 			switch(mp_opt) {
-			case DCCPO_MP_SEQ:
-				//TODO reordering, use 48 bit > 8 -> 6
-				if(len != 6){ //if not 48 bit
-					goto out_invalid_option;
-				}
-				oall_seq = dccp_decode_value_var(value, len);
-				dccp_pr_debug("%s rx opt: MP_SEQ = %llu", dccp_role(sk), oall_seq);
 
-				opt_recv->dccpor_oall_seq = oall_seq;
-				break;
-			case DCCPO_MP_DELAY:
-				//TODO reordering
-				if(len != 4){ //if not 32 bit
-					goto out_invalid_option;
-				}
-				delay = dccp_decode_value_var(value, len);
-				dccp_pr_debug("%s rx opt: MP_DELAY = %u, sk %p dreq %p", dccp_role(sk), delay, sk, dreq);
-
-				opt_recv->dccpor_delay = delay;
-				break;
-			case DCCPO_MP_PATH_ID:
-				//TODO reordering
-				if(len != 4){ //if not 32 bit
-					goto out_invalid_option;
-				}
-				path_id = dccp_decode_value_var(value, len);
-				dccp_pr_debug("path_id = %u sk %p dreq %p", path_id, sk, dreq);
-				if(dreq->link_info == NULL)
-					dccp_pr_debug("link_info null");
-				dreq->id_rcv = path_id;
-				//dreq->link_info->id_rcv = path_id;
-				break;
-			case DCCPO_MP_DELPATH:
-				//TODO reordering
-				if(len != 4){ //if not 32 bit
-					goto out_invalid_option;
-				}
-				del_path = dccp_decode_value_var(value, len);
-				dccp_pr_debug("del_path = %u sk  %p skb %p", del_path, sk, skb);
-				opt_recv->dccpor_delpath_rcv = del_path;
-				//mpdccp_handle_rem_addr (del_path);
-				break;
+			case DCCPO_MP_CONFIRM:
+			case DCCPO_MP_JOIN:
+			case DCCPO_MP_FAST_CLOSE:
 			case DCCPO_MP_KEY:
 				if (len < 2) {
 					goto out_invalid_option;
@@ -379,7 +268,8 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 							goto out_invalid_option;
 						}
 
-						dccp_pr_debug("%s rx opt: DCCPO_MP_KEY(%d) = %llx, type %d, len %d, sk %p dreq %p remlen %d", dccp_role(sk), i, be64_to_cpu(*(u64*)value), key_type, key_len, sk, dreq, len);
+						dccp_pr_debug("%s rx opt: DCCPO_MP_KEY(%d) = %llx, type %d, len %d, sk %p dreq %p remlen %d",
+								dccp_role(sk), i, be64_to_cpu(*(u64*)value), key_type, key_len, sk, dreq, len);
 						memcpy(opt_recv->dccpor_mp_keys[i].value, value, key_len);
 						opt_recv->dccpor_mp_keys[i].size = key_len;
 						opt_recv->dccpor_mp_keys[i].type = key_type;
@@ -412,7 +302,8 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 							goto out_invalid_option;
 						}
 
-						dccp_pr_debug("%s rx opt: DCCPO_MP_KEY(%d) = %llx, type %d, len %d, sk %p dreq %p remlen %d", dccp_role(sk), i, be64_to_cpu(*(u64*)value), key_type, key_len, sk, dreq, len);
+						dccp_pr_debug("%s rx opt: DCCPO_MP_KEY(%d) = %llx, type %d, len %d, sk %p dreq %p remlen %d",
+								dccp_role(sk), i, be64_to_cpu(*(u64*)value), key_type, key_len, sk, dreq, len);
 						memcpy(opt_recv->dccpor_mp_keys[i].value, value, key_len);
 						opt_recv->dccpor_mp_keys[i].size = key_len;
 						opt_recv->dccpor_mp_keys[i].type = key_type;
@@ -426,17 +317,16 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 					}
 				}
 				break;
-			case DCCPO_MP_JOIN:
-				if (len != 8) {
+
+			case DCCPO_MP_SEQ:
+				//TODO reordering, use 48 bit > 8 -> 6
+				if(len != 6){ //if not 48 bit
 					goto out_invalid_option;
 				}
-				opt_recv->saw_mpjoin = 1;
-				opt_recv->dccpor_mp_token = get_unaligned_be32(value);
-				value += 4;
-				opt_recv->dccpor_mp_nonce = get_unaligned_be32(value);
-				dccp_pr_debug("%s rx opt: DCCPO_MP_JOIN = token %x nonce %x, sk %p dreq %p",
-								dccp_role(sk),opt_recv->dccpor_mp_token, opt_recv->dccpor_mp_nonce, sk, dreq);
+				opt_recv->dccpor_oall_seq = dccp_decode_value_var(value, len);
+				dccp_pr_debug("%s rx opt: MP_SEQ = %llu", dccp_role(sk), (u64)opt_recv->dccpor_oall_seq);
 				break;
+
 			case DCCPO_MP_HMAC:
 				if (len != MPDCCP_HMAC_SIZE) {
 					goto out_invalid_option;
@@ -448,33 +338,19 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 					dccp_send_ack(sk);
 				}
 				break;
+
+			case DCCPO_MP_RTT:
+			case DCCPO_MP_ADDADDR:
+			case DCCPO_MP_REMOVEADDR:
+			case DCCPO_MP_PRIO:
+			case DCCPO_MP_CLOSE:
+
 			default:
 				DCCP_CRIT("DCCP(%p): mp option %d(len=%d) not "
 					  "implemented, ignoring", sk, mp_opt, len);
 				break;
 			}
-// 		case DCCPO_ADD_ADDR:
-// 			/* This option can be of variable length depending on 
-// 			 * IPv4/6 and if a port is given. */
-// 			if(len == MPDCCP_LEN_ADD_ADDR4 || len == MPDCCP_LEN_ADD_ADDR4_PORT) {
-// 				mpdccp_handle_add_addr(value, sk, AF_INET);
-// #if IS_ENABLED(CONFIG_IPV6)
-// 			} else if(len == MPDCCP_LEN_ADD_ADDR6 || len == MPDCCP_LEN_ADD_ADDR6_PORT) {
-// 				/* Read IPv6 Address (128 bit). This is a little tricky, 
-// 				 * as __be128 does not exist */
-// 				mpdccp_handle_add_addr(value, sk, AF_INET6);
-// #endif /* CONFIG_IPV6 */
-// 			} else {
-// 				goto out_invalid_option;
-// 			}
-// 			break;
-// 		case DCCPO_DEL_ADDR:
-// 			if(len != MPDCCP_LEN_DEL_ADDR)
-// 				goto out_invalid_option;
 
-// 			mpdccp_handle_del_addr(value, sk, len);
-
-// 			break;
 #endif
 		case DCCPO_MIN_RX_CCID_SPECIFIC ... DCCPO_MAX_RX_CCID_SPECIFIC:
 			if (ccid_hc_rx_parse_options(dp->dccps_hc_rx_ccid, sk,
@@ -570,69 +446,6 @@ int dccp_insert_option(struct sk_buff *skb, const unsigned char option,
 }
 
 EXPORT_SYMBOL_GPL(dccp_insert_option);
-
-#if IS_ENABLED(CONFIG_IP_MPDCCP)
-static int dccp_insert_option_multipath(struct sk_buff *skb, const unsigned char mp_option,
-		       const void *value, const unsigned char len)
-{
-	unsigned char *to;
-
-	if (DCCP_SKB_CB(skb)->dccpd_opt_len + len + 3 > DCCP_MAX_OPT_LEN)
-		return -1;
-
-	DCCP_SKB_CB(skb)->dccpd_opt_len += len + 3;
-
-	to    = skb_push(skb, len + 3);
-	*to++ = DCCPO_MULTIPATH;
-	*to++ = len + 3;
-	*to++ = mp_option;
-
-	memcpy(to, value, len);
-	return 0;
-}
-
-/* Insert overall sequence number option */
-static int dccp_insert_option_mp_seq(struct sk_buff *skb, u64 *mp_oall_seq, bool do_incr_oallseq)
-{	
-	__be64 be_oall_seq;
-
-	if (do_incr_oallseq){
-		be_oall_seq = cpu_to_be64((*mp_oall_seq << 16));
-		dccp_inc_seqno(mp_oall_seq); // increment overall sequence number
-		//printk(KERN_INFO "insrt skb %p mp_seq %lu", skb, *mp_oall_seq);
-	}
-	else {
-		be_oall_seq = cpu_to_be64((DCCP_SKB_CB(skb)->dccpd_mpseq)<<16);
-		//printk(KERN_INFO "insrt_red skb %p mp_seq %lu", skb, DCCP_SKB_CB(skb)->dccpd_mpseq);
-	}
-	return dccp_insert_option_multipath(skb, DCCPO_MP_SEQ, &be_oall_seq, 6);
-}
-
-/* Insert delay option */
-static int dccp_insert_option_mp_delay(struct sk_buff *skb, u32 mp_delay)
-{	
-	__be32 be_mp_delay;
-	be_mp_delay = cpu_to_be32(mp_delay); // convert to big endian
-
-	return dccp_insert_option_multipath(skb, DCCPO_MP_DELAY, &be_mp_delay, sizeof(be_mp_delay));
-}
-
-static int dccp_insert_option_mp_path_id(struct sk_buff *skb, u32 mp_path_id)
-{	
-	__be32 be_mp_path_id;
-	be_mp_path_id = cpu_to_be32(mp_path_id); // convert to big endian
-
-	return dccp_insert_option_multipath(skb, DCCPO_MP_PATH_ID, &be_mp_path_id, sizeof(be_mp_path_id));
-}
-
-static int dccp_insert_option_mp_delpath(struct sk_buff *skb, u32 mp_delpath)
-{	
-	__be32 be_mp_delpath;
-	be_mp_delpath = cpu_to_be32(mp_delpath); // convert to big endian
-
-	return dccp_insert_option_multipath(skb, DCCPO_MP_DELPATH, &be_mp_delpath, sizeof(be_mp_delpath));
-}
-#endif
 
 static int dccp_insert_option_ndp(struct sock *sk, struct sk_buff *skb)
 {
@@ -872,6 +685,40 @@ static void dccp_insert_option_padding(struct sk_buff *skb)
 }
 
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
+static int dccp_insert_option_multipath(struct sk_buff *skb, const unsigned char mp_option,
+		       const void *value, const unsigned char len)
+{
+	unsigned char *to;
+
+	if (DCCP_SKB_CB(skb)->dccpd_opt_len + len + 3 > DCCP_MAX_OPT_LEN)
+		return -1;
+
+	DCCP_SKB_CB(skb)->dccpd_opt_len += len + 3;
+
+	to    = skb_push(skb, len + 3);
+	*to++ = DCCPO_MULTIPATH;
+	*to++ = len + 3;
+	*to++ = mp_option;
+
+	memcpy(to, value, len);
+	return 0;
+}
+
+/*static int dccp_insert_option_mp_confirm(struct sk_buff *skb)
+{
+	return 0;
+}
+
+static int dccp_insert_option_mp_join(struct sk_buff *skb)
+{
+	return 0;
+}
+
+static int dccp_insert_option_mp_fast_close(struct sk_buff *skb)
+{
+	return 0;
+}*/
+
 static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_cb *mpcb, struct dccp_request_sock *dreq)
 {
 	u8 buf[MPDCCP_MAX_KEYS*(MPDCCP_MAX_KEY_SIZE + 1)];
@@ -930,18 +777,54 @@ static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_cb *mpcb
 	}
 	return ret;
 }
-#endif
 
-#if IS_ENABLED(CONFIG_IP_MPDCCP)
-static int dccp_insert_option_mp_join(struct sk_buff *skb, u32 token, u32 nonce)
-{
-	u8 buf[8];
+/* Insert overall sequence number option */
+static int dccp_insert_option_mp_seq(struct sk_buff *skb, u64 *mp_oall_seq, bool do_incr_oallseq)
+{	
+	__be64 be_oall_seq;
 
-	put_unaligned_be32(token, &buf[0]);
-	put_unaligned_be32(nonce, &buf[4]);
-
-	return dccp_insert_option_multipath(skb, DCCPO_MP_JOIN, &buf, sizeof(buf));
+	if (do_incr_oallseq){
+		be_oall_seq = cpu_to_be64((*mp_oall_seq << 16));
+		dccp_inc_seqno(mp_oall_seq); // increment overall sequence number
+		//printk(KERN_INFO "insrt skb %p mp_seq %lu", skb, *mp_oall_seq);
+	}
+	else {
+		be_oall_seq = cpu_to_be64((DCCP_SKB_CB(skb)->dccpd_mpseq)<<16);
+		//printk(KERN_INFO "insrt_red skb %p mp_seq %lu", skb, DCCP_SKB_CB(skb)->dccpd_mpseq);
+	}
+	return dccp_insert_option_multipath(skb, DCCPO_MP_SEQ, &be_oall_seq, 6);
 }
+
+static int dccp_insert_option_mp_hmac(struct sk_buff *skb, u8 *hmac)
+{
+	return dccp_insert_option_multipath(skb, DCCPO_MP_HMAC, hmac, MPDCCP_HMAC_SIZE);
+}
+
+/*static int dccp_insert_option_mp_rtt(struct sk_buff *skb)
+{
+	return 0;
+}
+
+static int dccp_insert_option_mp_addaddr(struct sk_buff *skb)
+{
+	return 0;
+}
+
+static int dccp_insert_option_mp_removeaddr(struct sk_buff *skb)
+{
+	return 0;
+}
+
+static int dccp_insert_option_mp_prio(struct sk_buff *skb)
+{
+	return 0;
+}
+
+static int dccp_insert_option_mp_close(struct sk_buff *skb)
+{
+	return 0;
+}*/
+
 #endif
 
 
@@ -949,11 +832,6 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 {
 	struct dccp_sock *dp = dccp_sk(sk);
 	struct ccid2_hc_tx_sock *hc = NULL;
-#if IS_ENABLED(CONFIG_IP_MPDCCP)
-	struct tcp_info info;
-	u32 mp_path_id;
-	u32 mp_delpath;
-#endif
 	hc = ccid2_hc_tx_sk(sk);
 
 	DCCP_SKB_CB(skb)->dccpd_opt_len = 0;
@@ -989,15 +867,13 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 	    dccp_insert_option_timestamp_echo(dp, NULL, skb))
 		return -1;
 
-	/* Insert overall sequence number as DCCP option */
-	//dccp_insert_option_mp_seq(skb);
-
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 	/* Role dependent option required status. MPDCCP Server does not have 
 	 * to add delay values since MPDCCP Client knows delays due to its 
 	 * congestion control */
 	if (is_mpdccp(sk)) {
-		struct mpdccp_cb *mpcb = MPDCCP_CB(sk);
+		struct mpdccp_cb *mpcb = get_mpcb(sk);
+
 		/* Skip if fallback to sp DCCP */
 		if (mpcb && mpcb->fallback_sp)
 			goto out;
@@ -1006,24 +882,9 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 		switch(DCCP_SKB_CB(skb)->dccpd_type){
 			case DCCP_PKT_DATA:
 			case DCCP_PKT_DATAACK:
-				//printk(KERN_INFO "insert mpseq, sk %p skb %p", sk, skb);
 				dccp_insert_option_mp_seq(skb, &mpdccp_my_sock(sk)->mpcb->mp_oall_seqno, mpdccp_my_sock(sk)->mpcb->do_incr_oallseq);
-				dccp_insert_option_mp_delay(skb, get_delay_valn(sk, &info));
-				dccp_pr_debug("delay = %u  on socket (0x%p)", get_delay_valn(sk, &info), sk); 
-				//dccp_pr_debug("delay = %u on socket (0x%p)", get_delay_val(hc), sk);
-				if(mpcb && mpcb->delpath){
-					mp_delpath = mpcb->delpath;
-					dccp_pr_debug("del_path %u", mp_delpath);
-					//printk(KERN_INFO "delpath sk %u, %p", mp_delpath, sk);
-					dccp_insert_option_mp_delpath(skb, mp_delpath);
-					mpdccp_my_sock(sk)->mpcb->delpath = 0;			
-				}
 				break;
 			case DCCP_PKT_REQUEST:
-				mp_path_id = mpdccp_my_sock(sk)->link_info->id;
-				dccp_pr_debug("path_id %u", mp_path_id);
-				dccp_insert_option_mp_path_id(skb, mp_path_id);
-
 				if (dccp_sk(sk)->is_kex_sk) {
 					dccp_pr_debug("(%s) REQ insert opt MP_KEY (supp)", dccp_role(sk));
 					/* Insert supported keys */
@@ -1049,7 +910,7 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 					if (!dccp_sk(sk)->auth_done){
 						/* Insert HMAC */
 						dccp_pr_debug("(%s) ACK insert opt MP_HMAC %llx", dccp_role(sk),be64_to_cpu(*((u64*)dccp_sk(sk)->mpdccp_loc_hmac)));
-						dccp_insert_option_multipath(skb, DCCPO_MP_HMAC, dccp_sk(sk)->mpdccp_loc_hmac, MPDCCP_HMAC_SIZE);
+						dccp_insert_option_mp_hmac(skb, dccp_sk(sk)->mpdccp_loc_hmac);
 					}
 				}
 			default:
@@ -1091,7 +952,7 @@ int dccp_insert_options_rsk_mp(const struct sock *sk, struct dccp_request_sock *
 	struct dccp_options_received *opt_recv = &dp->dccps_options_received;
 
 	if (opt_recv->saw_mpjoin) {
-		mpcb = MPDCCP_CB(dreq->meta_sk);
+		mpcb = get_mpcb(dreq->meta_sk);
 		if (!mpcb) {
 			dccp_pr_debug("(%s) invalid MPCB", dccp_role(sk));
 			return -1;
@@ -1101,7 +962,7 @@ int dccp_insert_options_rsk_mp(const struct sock *sk, struct dccp_request_sock *
 		dccp_insert_option_mp_join(skb, mpcb->mpdccp_loc_token, dreq->mpdccp_loc_nonce);
 		/* Insert HMAC */
 		dccp_pr_debug("(%s) RES insert opt MP_HMAC %llx", dccp_role(sk), be64_to_cpu(*((u64 *)dreq->mpdccp_loc_hmac)));
-		dccp_insert_option_multipath(skb, DCCPO_MP_HMAC, dreq->mpdccp_loc_hmac, MPDCCP_HMAC_SIZE);
+		dccp_insert_option_mp_hmac(skb, dreq->mpdccp_loc_hmac);
 	} else if (opt_recv->saw_mpkey) {
 		dccp_pr_debug("(%s) RES insert opt MP_KEY %llx", dccp_role(sk), be64_to_cpu(*((__be64 *)dreq->mpdccp_loc_key.value)));
 		/* Insert local key */
