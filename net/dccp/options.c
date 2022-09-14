@@ -377,6 +377,21 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 			case DCCPO_MP_ADDADDR:
 			case DCCPO_MP_REMOVEADDR:
 			case DCCPO_MP_PRIO:
+				if (len == 2) {
+					u8 id = dccp_decode_value_var(value, 1);
+					u8 prio = dccp_decode_value_var(value+1, 1);
+					dccp_pr_debug("%s rx opt: DCCPO_MP_PRIO = value: %d id: %d", dccp_role(sk), prio, id);
+
+					if(prio < 16 && is_mpdccp(sk)){
+						struct mpdccp_cb *mpcb = get_mpcb(sk);
+
+						if (mpcb->pm_ops->handle_rcv_prio)
+							mpcb->pm_ops->handle_rcv_prio(mpcb, prio, id);
+					}
+				} else
+					goto out_invalid_option;
+				break;
+
 			case DCCPO_MP_CLOSE:
 
 			default:
@@ -859,13 +874,14 @@ static int dccp_insert_option_mp_hmac(struct sk_buff *skb, u8 *hmac)
 static int dccp_insert_option_mp_removeaddr(struct sk_buff *skb)
 {
 	return 0;
-}
+}*/
 
-static int dccp_insert_option_mp_prio(struct sk_buff *skb)
+static int dccp_insert_option_mp_prio(struct sk_buff *skb, u8 *buf, struct mpdccp_cb *mpcb, u8 id)
 {
-	return 0;
+	return dccp_insert_option_multipath(skb, DCCPO_MP_PRIO, buf, 2);
 }
 
+/*
 static int dccp_insert_option_mp_close(struct sk_buff *skb)
 {
 	return 0;
@@ -929,6 +945,7 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 		switch(DCCP_SKB_CB(skb)->dccpd_type){
 			case DCCP_PKT_DATA:
 			case DCCP_PKT_DATAACK:
+			case DCCP_PKT_DATA:
 				dccp_insert_option_mp_seq(skb, &mpdccp_my_sock(sk)->mpcb->mp_oall_seqno, mpdccp_my_sock(sk)->mpcb->do_incr_oallseq);
 				if(!(mpdccp_my_sock(sk)->mpcb->mp_oall_seqno % 2)){						//send with every second dataack	
 					struct tcp_info info;
@@ -938,6 +955,16 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 					dccp_insert_option_mp_rtt(skb, rtt_type, rtt_value, rtt_age);
 					dccp_pr_debug("delay = %u age %u on socket (0x%p) loc_id: %u rem_id: %u", rtt_value, rtt_age, sk, mp_addr_id, mpdccp_my_sock(sk)->remote_addr_id);
 				}				
+				if(mpcb){
+
+					if(mpcb->announce_prio[2]){
+						dccp_pr_debug("(%s) REQ insert opt MP_PRIO, addr_id: %u prio: %u",
+								dccp_role(sk), mpcb->announce_prio[0], mpcb->announce_prio[1]);
+
+						dccp_insert_option_mp_prio(skb, mpcb->announce_prio, mpcb, mp_addr_id);
+						mpcb->announce_prio[2] = 0;
+					}
+				}
 				break;
 			case DCCP_PKT_REQUEST:
 				if (dccp_sk(sk)->is_kex_sk) {
