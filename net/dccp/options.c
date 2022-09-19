@@ -1038,7 +1038,6 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 
 		/* Insert delay value (sub-flow specific) as DCCP option */
 		switch(DCCP_SKB_CB(skb)->dccpd_type){
-			case DCCP_PKT_DATA:
 			case DCCP_PKT_DATAACK:
 			case DCCP_PKT_DATA:
 				dccp_insert_option_mp_seq(skb, &mpdccp_my_sock(sk)->mpcb->mp_oall_seqno, mpdccp_my_sock(sk)->mpcb->do_incr_oallseq);

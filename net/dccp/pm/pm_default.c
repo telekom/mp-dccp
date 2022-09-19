@@ -1269,7 +1269,7 @@ add_init_client_conn (
 				mpdccp_pr_debug ("error in mpdccp_add_client_conn() for master subflow: %d", ret);
 				goto out;
 			} else {
-				num++
+				num++;
 				if (mpcb && mpcb->fallback_sp) {
 					mpdccp_pr_debug ("fallback to single path DCCP, don't create more subflows");
 					goto out;
