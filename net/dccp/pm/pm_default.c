@@ -609,6 +609,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 						mpdccp_pr_debug("Deleting subflow socket %p with address %pI6.\n", sk, &sk->__sk_common.skc_v6_rcv_saddr);
 
 					addr_id = mpdccp_my_sock(sk)->local_addr_id;
+					mpdccp_my_sock(sk)->delpath_sent = true;
 					mpdccp_close_subflow (mpcb, sk, 0);
 					mpdccp_send_remove_path(addr_id, mpcb);
 				}

@@ -329,6 +329,7 @@ struct my_sock
 	
 	/* Path manager related data */
 	int     if_idx; /* Interface ID, used for event handling */
+	bool delpath_sent;
 	
 	/* Scheduler related data */
 	/* Limit in Bytes. Dont forget to adjust when increasing the

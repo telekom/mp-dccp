@@ -901,6 +901,14 @@ int mpdccp_reconnect_client (  struct sock *sk,
     int              found, ret;
 
     if (!sk || !my_sk) return -EINVAL;
+    
+    if (mpdccp_my_sock(sk)->delpath_sent){
+        found = my_sock_pre_destruct (sk);
+        my_sock_final_destruct (sk, mpcb, found);
+        unset_mpdccp(sk);
+        return 0;
+    }
+    
     if (!destroy)
        found = my_sock_pre_destruct (sk);
     mpdccp_pr_debug("try to reconnect sk address %pI4. if %d \n", &sk->__sk_common.skc_rcv_saddr, if_idx);
@@ -910,6 +918,7 @@ int mpdccp_reconnect_client (  struct sock *sk,
     if (ret) {
        mpdccp_pr_debug("reconnecting to sk address %pI4 (if %d) failed: %d\n",
                        &sk->__sk_common.skc_rcv_saddr, if_idx, ret);
+        unset_mpdccp(sk);
        if (!destroy)
                my_sock_final_destruct (sk, mpcb, found);
        return ret;
