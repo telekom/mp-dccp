@@ -1228,6 +1228,47 @@ out:
     return;
 }
 
+int mpdccp_set_prio(struct sock *sk, int prio)
+{
+   struct mpdccp_link_info      *link;
+
+   /* copy and get link */
+   link = mpdccp_ctrl_getcpylink (sk);
+   if (!link) return -EINVAL;
+   /* change prio */
+   mpdccp_link_change_mpdccp_prio (link, prio);
+   /* release link */
+   mpdccp_link_put (link);
+   return 0;
+}
+EXPORT_SYMBOL(mpdccp_set_prio);
+
+int mpdccp_get_prio(struct sock *sk)
+{
+	struct mpdccp_link_info *link;
+	int prio;
+
+	link = mpdccp_ctrl_getlink (sk);
+	if (!link)
+		return -EINVAL;
+	prio = link->mpdccp_prio;
+	mpdccp_link_put (link);
+	return prio;
+}
+EXPORT_SYMBOL(mpdccp_get_prio);
+
+void mpdccp_init_announce_prio(struct sock *sk)
+{
+    struct my_sock   *my_sk = mpdccp_my_sock(sk);
+    struct mpdccp_cb *mpcb = my_sk->mpcb;
+
+    mpcb->announce_prio[0] = get_id(sk);
+    mpcb->announce_prio[1] = mpdccp_get_prio(sk);
+    mpcb->announce_prio[2] = 1;
+    dccp_send_keepalive(sk);
+}
+EXPORT_SYMBOL(mpdccp_init_announce_prio);
+
 int mpdccp_hash_key(const u8 *key, u8 keylen, u32 *token)
 {
         SHASH_DESC_ON_STACK(desc, tfm_hash);

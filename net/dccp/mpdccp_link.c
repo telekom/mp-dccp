@@ -688,6 +688,7 @@ mpdccp_link_add (
 		strcpy (link->ndev_name, MPDCCP_LINK_TO_DEV(link)->name);
 	}
 	link->id = link_get_next_counter (net);
+	link->mpdccp_prio = 3;
 	ret = mpdccp_link_sysfs_add (link);
 	if (ret < 0) {
 		mpdccp_pr_error ("mpdccp_link_add(): error adding sysfs entry\n");

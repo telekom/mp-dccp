@@ -258,6 +258,8 @@ struct mpdccp_cb {
 	int                     remaddr_len;	// length of mpdccp_remote_addr;
 	u16			    server_port;	// Server only 
 	int			    backlog;
+	u8			announce_prio[3];				// id, prio, flag for send
+
 	int			up_reported;
 	u8 			master_addr_id;
 	int  		cnt_remote_addrs;
@@ -389,6 +391,10 @@ int my_sock_init (struct sock *sk, struct mpdccp_cb *mpcb, int if_idx, enum mpdc
 void my_sock_destruct (struct sock *sk);
 /* the real xmit */
 int mpdccp_xmit_to_sk (struct sock *sk, struct sk_buff *skb);
+
+void mpdccp_init_announce_prio(struct sock *sk);
+int mpdccp_get_prio(struct sock *sk);
+int mpdccp_set_prio(struct sock *sk, int prio);
 
 /* Functions for authentication */
 int mpdccp_hash_key(const u8 *in, u8 inlen, u32 *token);
