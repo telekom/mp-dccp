@@ -130,7 +130,7 @@ struct sock *mpdccp_return_single_flow(struct mpdccp_cb *mpcb)
 	}
 	
 	sk = my_sk->my_sk_sock;
-	if(!sk || !mpdccp_sk_can_send(sk) || !mpdccp_packet_fits_in_cwnd(sk)) {
+	if(!sk || !mpdccp_sk_can_send(sk) || (!mpdccp_packet_fits_in_cwnd(sk) && !dccp_ack_pending(sk))) {
 		rcu_read_unlock();
 		dccp_pr_debug("No free pipe available.\n");
 		return NULL;
@@ -264,6 +264,7 @@ void mpdccp_init_scheduler(struct mpdccp_cb *mpcb)
 	if (!mpcb) return;
 	rcu_read_lock();
 	sched = sched_default;
+	mpcb->do_incr_oallseq = true;
 	if (try_module_get(sched->owner)) {
 		mpcb->sched_ops = sched;
 		if (sched->init_conn)

@@ -390,10 +390,11 @@ struct dccp_skb_cb {
 	__u8  dccpd_type:4;
 	__u8  dccpd_ccval:4;
 	__u8  dccpd_reset_code,
-	      dccpd_reset_data[3];
+	      dccpd_reset_data[3];     
 	__u16 dccpd_opt_len;
 	__u64 dccpd_seq;
 	__u64 dccpd_ack_seq;
+	__u64 dccpd_mpseq;
 };
 
 #define DCCP_SKB_CB(__skb) ((struct dccp_skb_cb *)&((__skb)->cb[0]))
