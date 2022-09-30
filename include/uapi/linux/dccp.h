@@ -185,12 +185,9 @@ enum {
 	DCCPO_MP_HMAC = 5,					/* HMA Code for authentication */
 	DCCPO_MP_RTT = 6,						/* Transmit RTT values */
 	DCCPO_MP_ADDADDR = 7,				/* (unused): Option for adding an address from behind a firewall */
-	DCCPO_MP_DELPATH = 8,				/* (unused): Option for deleting an address from behind a firewall */
+	DCCPO_MP_REMOVEADDR = 8,				/* (unused): Option for deleting an address from behind a firewall */
 	DCCPO_MP_PRIO = 9,					/* path priorization */
-	DCCPO_MP_DELAY = 10,				/* MPDCCP delay value transmission */
-	DCCPO_MP_PATH_INFO = 11,
-	DCCPO_MP_PATH_ID = 12,
-	DCCPO_MP_PATH_TYPE = 13,
+	DCCPO_MP_CLOSE = 10,				/* Close MPDCCP flow */
 };
 
 /* DCCP CCIDS */

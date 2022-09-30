@@ -174,11 +174,9 @@ struct dccp_request_sock {
 	struct list_head	 dreq_featneg;
 	__u32			 dreq_timestamp_echo;
 	__u32			 dreq_timestamp_time;
-#if IS_ENABLED(CONFIG_IP_MPDCCP)
-	struct mpdccp_link_info  *link_info;
-#endif
 	int 			id_rcv;
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
+	struct mpdccp_link_info  *link_info;
 	struct mpdccp_key	mpdccp_loc_key;
 	struct mpdccp_key	mpdccp_rem_key;
 	u32			mpdccp_loc_token;
@@ -219,9 +217,9 @@ struct dccp_options_received {
 	u32 dccpor_mp_nonce;			/* MPDCCP path nonce */
 	u8 dccpor_mp_hmac[MPDCCP_HMAC_SIZE];	/* MPDCCP HMAC */
 	struct mpdccp_key dccpor_mp_keys[MPDCCP_MAX_KEYS];	/* MPDCCP keys */
-#endif
 	int saw_mpkey;
 	int saw_mpjoin;
+#endif
 };
 
 struct ccid;

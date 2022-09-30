@@ -43,7 +43,7 @@ struct mpdccp_meta_sk {
 			== MPDCCP_META_SK_MAGIC))
 
 #define MPDCCP_CB(sk) \
-	return mpdccp_is_meta(sk) ? ((struct mpdccp_meta_sk*)(sk)->sk_user_data)->mpcb : NULL;
+	mpdccp_is_meta(sk) ? ((struct mpdccp_meta_sk*)(sk)->sk_user_data)->mpcb : NULL;
 
 
 

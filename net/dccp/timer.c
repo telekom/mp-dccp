@@ -189,15 +189,19 @@ static void dccp_keepalive_timer(unsigned long data)
 	struct dccp_sock *dp = dccp_sk(sk);
 	u32 elapsed;
 
-	if (sock_owned_by_user(sk))
-		dccp_pr_debug("sock owned by user");
 	bh_lock_sock(sk);
+	if (sock_owned_by_user(sk)){
+		/* Try again later. */
+		inet_csk_reset_keepalive_timer (sk, HZ/20);
+		goto out;
+	}
 	dccp_pr_debug("enter dccp_keepalive_timer sk %p", sk);
 	//pr_err("dccp should not use a keepalive timer !\n");
 	elapsed = dccp_keepalive_snd_elapsed(dp);
 	if (elapsed > dccp_keepalive_snd_when(dp))
 		dccp_send_keepalive(sk);
 	inet_csk_reset_keepalive_timer(sk, dccp_keepalive_snd_when(dp));
+out:
 	bh_unlock_sock(sk);
 #endif
 	sock_put(sk);
@@ -279,19 +283,25 @@ static void dccp_rcv_timer(unsigned long data)
 	struct sock *sk = (struct sock *)data;
 	u32 elapsed;
 	struct dccp_sock *dp = dccp_sk(sk);
-	dccp_pr_debug("enteer rcv timer sk %p", sk);
+	dccp_pr_debug("enter rcv timer sk %p", sk);
+	if (sk->sk_state == DCCP_CLOSED || sk->sk_state == DCCP_CLOSING) {
+		dccp_pr_debug ("socket %p already closed/closing\n", sk);
+		return;
+	}
 	if (sock_owned_by_user(sk))
 		dccp_pr_debug("sock owned by user");
 	
 	bh_lock_sock(sk);
-	elapsed = dccp_keepalive_rcv_elapsed(dp);
-	if (elapsed > dccp_keepalive_rcv_when(dp))
-	{
-		dccp_pr_debug("no data received sk %p elapsed %u", sk, elapsed);
-		bh_unlock_sock(sk);
-		sock_put(sk);
-		dccp_close(sk, 0);
-		return;
+	if (sk->sk_state == DCCP_OPEN || sk->sk_state == DCCP_PARTOPEN) {
+		elapsed = dccp_keepalive_rcv_elapsed(dp);
+		if (elapsed > dccp_keepalive_rcv_when(dp))
+		{
+			dccp_pr_debug("no data received sk %p elapsed %u", sk, elapsed);
+			bh_unlock_sock(sk);
+			sock_put(sk);
+			dccp_close(sk, 0);
+			return;
+		}
 	}
 	sk_reset_timer(sk, &dccp_sk(sk)->dccps_rcv_timer, jiffies + dccp_keepalive_rcv_when(dp));
 	bh_unlock_sock(sk);

@@ -15,12 +15,10 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 2 of the License, or
  * (at your option) any later version.
-
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
-
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
@@ -143,6 +141,8 @@ unset_mpdccp(struct sock *sk) {
     list_for_each_entry_rcu(mpcb, &list, connection_list)
 
 
+#define chk_id(x,y) (x != y) ? x : 0
+
 /**
  * mpdccp_list_first_or_null_rcu - get the first element from a list
  * @ptr:        the list head to take the element from.
@@ -231,6 +231,12 @@ struct mpdccp_cb {
 	spinlock_t              plisten_list_lock;
 	/* Pointer to list of request sockets (client side) */
 	struct list_head __rcu  prequest_list;
+	/* Pointer to list of remote addresses (initial and learned) */
+	struct list_head __rcu  premote_list;
+
+	/* kref for freeing */
+	struct kref             kref;
+	int			to_be_closed;
 	
 	int     multipath_active;
 	
@@ -252,15 +258,17 @@ struct mpdccp_cb {
 	int                     remaddr_len;	// length of mpdccp_remote_addr;
 	u16			    server_port;	// Server only 
 	int			    backlog;
-	int                     delpath;
 	int			up_reported;
-	
+	u8 			master_addr_id;
+	int  		cnt_remote_addrs;
+
 	/* Scheduler related data */
 	struct mpdccp_sched_ops *sched_ops;
 	int			    has_own_sched;
 	struct sk_buff          *next_skb;      // for schedulers sending the skb on >1 flow
 	int    cnt_subflows;                    // Total number of flows we can use
 	int    cnt_listensocks;
+	bool 	do_incr_oallseq;
 	
 	/* Reordering related data */
 	struct mpdccp_reorder_ops *reorder_ops; 
@@ -306,6 +314,10 @@ struct my_sock
 	int			link_iscpy;
 	int			up_reported;
 	
+	/* Address ID related data */
+	u8 local_addr_id;
+	u8 remote_addr_id;
+	
 	/* Path manager related data */
 	int     if_idx; /* Interface ID, used for event handling */
 	
@@ -349,6 +361,7 @@ int mpdccp_report_alldown (struct sock*);
 
 
 int mpdccp_add_client_conn (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx, struct sockaddr *rem, int rlen);
+int mpdccp_reconnect_client (struct sock*, int destroy, struct sockaddr*, int addrlen, int ifidx);
 int mpdccp_add_listen_sock (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx);
 int mpdccp_close_subflow (struct mpdccp_cb*, struct sock*, int destroy);
 void mpdccp_handle_rem_addr (u32 del_path);
@@ -398,6 +411,9 @@ static inline struct sock *dccp_sk_inv(const struct dccp_sock *dp)
 	return (struct sock *)dp;
 }
 
+static inline u8 get_id(struct sock *sk){
+    return chk_id(mpdccp_my_sock(sk)->local_addr_id, mpdccp_my_sock(sk)->mpcb->master_addr_id);
+}
 
 
 #endif /* _MPDCCP_H */
