@@ -35,6 +35,7 @@
 
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 # include <net/mpdccp.h>
+# include <net/mpdccp_link.h>
 #endif
 
 #include "dccp.h"
@@ -247,6 +248,21 @@ done:
 
 static void dccp_v6_reqsk_destructor(struct request_sock *req)
 {
+	struct dccp_request_sock *dreq;
+	dreq = dccp_rsk(req);
+
+	/* Release meta socket reference when request id destroyed */
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	if (dreq->link_info) {
+		mpdccp_link_put (dreq->link_info);
+		dreq->link_info = NULL;
+	}
+	if (dreq->meta_sk) {
+		dccp_pr_debug("releasing meta socket %p from request\n", dreq->meta_sk);
+		sock_put(dreq->meta_sk);
+		dreq->meta_sk = NULL;
+	}
+#endif
 	dccp_feat_list_purge(&dccp_rsk(req)->dreq_featneg);
 	kfree(inet_rsk(req)->ipv6_opt);
 	kfree_skb(inet_rsk(req)->pktopts);

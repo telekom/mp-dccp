@@ -34,6 +34,7 @@
 #include <linux/in.h>
 #include <linux/inet.h>
 #include <linux/kthread.h>
+#include <linux/string.h>
 #include <uapi/linux/net.h>
 
 #include <net/inet_common.h>
@@ -185,11 +186,17 @@ do_mpdccp_write_xmit (
 
 	rcu_read_lock ();
 	sk = mpcb->sched_ops->get_subflow(mpcb);
+	DCCP_SKB_CB(skb)->dccpd_mpseq = mpcb->mp_oall_seqno;
 	rcu_read_unlock();
 	if (!sk) {
 		return -EAGAIN;
 	}
 	ret = mpdccp_xmit_to_sk (sk, skb);
+	rcu_read_lock ();
+	if (!strcasecmp (mpcb->sched_ops->name, "redundant")){
+		dccp_inc_seqno(&mpcb->mp_oall_seqno);
+	}
+	rcu_read_unlock();
 	return ret;
 }
 
@@ -973,8 +980,10 @@ static int _mpdccp_close_meta(struct sock *meta_sk)
 	struct list_head *pos, *temp;
 	struct my_sock *mysk;
 
+	if (!mpcb) return -EINVAL;
 	mpdccp_pr_debug ("enter for sk %p\n", meta_sk);
 	/* close all subflows */
+	mpcb->to_be_closed = 1;
 	list_for_each_safe(pos, temp, &((mpcb)->psubflow_list)) {
 		mysk = list_entry(pos, struct my_sock, sk_list);
 		if (mysk) {

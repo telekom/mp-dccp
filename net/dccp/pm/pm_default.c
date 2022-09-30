@@ -115,6 +115,27 @@ static void mpdccp_announce_remove_path(int addr_id, struct mpdccp_cb *mpcb)
 	}
 }
 
+/* Use ip routing functions to figure out default source address and store address in mpcb*/
+static void mpdccp_get_mpcb_local_address(struct mpdccp_cb *mpcb, struct sockaddr_in *nexthop){
+	struct sockaddr_in sin;
+	struct sock *sk = mpcb->meta_sk;
+
+	/* check if socket was bound to local ip address,
+		otherwise use route.h function for local routing default route */
+	if(sk && sk->__sk_common.skc_rcv_saddr){
+		sin.sin_addr.s_addr = mpcb->meta_sk->__sk_common.skc_rcv_saddr;
+	} else {
+		struct flowi4 *fl4;
+		struct inet_sock *inet = inet_sk(sk);
+		fl4 = &inet->cork.fl.u.ip4;
+		ip_route_connect(fl4, nexthop->sin_addr.s_addr, inet->inet_saddr, RT_CONN_FLAGS(sk), 
+				sk->sk_bound_dev_if, IPPROTO_DCCP, inet->inet_sport, nexthop->sin_port, sk);
+		sin.sin_addr.s_addr = fl4->saddr;
+	}
+	memcpy(&mpcb->mpdccp_local_addr, &sin, sizeof(struct sockaddr_in));
+	mpcb->localaddr_len = sizeof(struct sockaddr_in);
+	mpcb->has_localaddr = 1;
+}
 
 static int pm_get_remote_id(struct mpdccp_cb *mpcb, union inet_addr *addr, sa_family_t family)
 {
@@ -729,23 +750,18 @@ static int mpdccp_pm_dccp_event(struct notifier_block *this,
 	if_idx = sk_closed->__sk_common.skc_bound_dev_if;
 	if (event == DCCP_EVENT_CLOSE){
 		mpdccp_for_each_conn(pconnection_list, mpcb) {
+			if (mpcb->to_be_closed) continue;
 			mpdccp_for_each_sk(mpcb, sk) {
+#if 0
 				/* Handle close events for both the subflow and meta sockets */
 				if (mpcb->meta_sk == sk_closed) {
 					mpdccp_close_subflow(mpcb, sk, 0);
 					mpdccp_pr_debug("close dccp sk %p", sk_closed);
 				}
-				else if(sk == sk_closed) {
-					mpdccp_close_subflow(mpcb, sk, 0);
-					mpdccp_pr_debug("close dccp sk %p", sk_closed);
-					//attempt reconnect
-					if (mpcb->meta_sk->sk_state == DCCP_OPEN && mpcb->role == MPDCCP_CLIENT){
-						mpdccp_pr_debug("try to reconnect sk address %pI4. if %d \n", &sk->__sk_common.skc_rcv_saddr, if_idx);
-							mpdccp_add_client_conn(mpcb, local, locaddr_len, if_idx, 
-							(struct sockaddr*)&mpcb->mpdccp_remote_addr,
-							mpcb->remaddr_len);
-					}
-
+				else
+#endif
+				if(sk == sk_closed) {
+					mpdccp_reconnect_client (sk, 0, local, locaddr_len, if_idx);
 					break;
 				}
 			}
@@ -1101,6 +1117,7 @@ add_init_client_conn (
 {
 	struct mpdccp_local_addr 	*local;
 	struct sockaddr 		*local_address;
+	struct sockaddr_in		*meta_v4_address;
 	struct sockaddr_in 		local_v4_address;
 	struct sockaddr_in6 		local_v6_address;
 	union inet_addr rema;
@@ -1128,12 +1145,42 @@ add_init_client_conn (
 		port = ad6->sin6_port;
 	}
 	pm_add_remote_addr(mpcb, remote_address->sa_family, 0, &rema, port);
+
+	if(mpcb->has_localaddr == 0)
+		mpdccp_get_mpcb_local_address(mpcb, (struct sockaddr_in *)remote_address);
+
+	meta_v4_address = (struct sockaddr_in *)&mpcb->mpdccp_local_addr;
+	mpdccp_pr_debug ("MPDCCP bound to saddr %pI4", &meta_v4_address->sin_addr.s_addr);
 	
-	/* Create subflows on all local interfaces */
 	//rcu_read_lock_bh();
+	/*first create subflow on default path*/
+	list_for_each_entry_rcu(local, &pm_ns->plocal_addr_list, address_list) {
+		if (local->family == AF_INET && local->addr.in.s_addr == meta_v4_address->sin_addr.s_addr) {
+			local_v4_address.sin_family		= AF_INET;
+			local_v4_address.sin_addr.s_addr 	= local->addr.in.s_addr;
+			local_v4_address.sin_port		= 0;
+			local_address = (struct sockaddr *) &local_v4_address;
+			ret = mpdccp_add_client_conn (mpcb, local_address, sizeof(struct sockaddr_in),
+				local->if_idx, remote_address, socklen);
+			if ((ret < 0) && (ret != -EINPROGRESS) ) {
+				mpdccp_pr_debug ("error in mpdccp_add_client_conn() for master subflow: %d", ret);
+				goto out;
+			} else {
+				num++
+				if (mpcb && mpcb->fallback_sp) {
+					mpdccp_pr_debug ("fallback to single path DCCP, don't create more subflows");
+					goto out;
+				}
+				break;
+			}
+		}
+	}
+
+	/* Create subflows with all other local addresses */
 	list_for_each_entry_rcu(local, &pm_ns->plocal_addr_list, address_list) {
 		/* Set target IPv4/v6 address correctly */
 		if (local->family == AF_INET) {
+			if(local->addr.in.s_addr == meta_v4_address->sin_addr.s_addr) continue;
 			local_v4_address.sin_family		= AF_INET;
 			local_v4_address.sin_addr.s_addr 	= local->addr.in.s_addr;
 			local_v4_address.sin_port		= 0;
@@ -1156,10 +1203,6 @@ add_init_client_conn (
 					"subflow %d: %d\n", num, ret);
 		} else {
 			num++;
-			if (mpcb && mpcb->fallback_sp) {
-				mpdccp_pr_debug ("fallback to single path DCCP, don't create more subflows\n");
-				goto out;
-			}
 		}
 		/* lock again to continue scanning the list */
 		//rcu_read_lock_bh();

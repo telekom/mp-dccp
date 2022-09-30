@@ -566,6 +566,10 @@ static void dccp_v4_reqsk_destructor(struct request_sock *req)
 
 	/* Release meta socket reference when request id destroyed */
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
+	if (dreq->link_info) {
+		mpdccp_link_put (dreq->link_info);
+		dreq->link_info = NULL;
+	}
 	if (dreq->meta_sk) {
 		dccp_pr_debug("releasing meta socket %p from request\n", dreq->meta_sk);
 		sock_put(dreq->meta_sk);
@@ -818,8 +822,8 @@ static int dccp_v4_rcv(struct sk_buff *skb)
 	iph = ip_hdr(skb);
 	/* Step 1: If header checksum is incorrect, drop packet and return */
 	if (dccp_v4_csum_finish(skb, iph->saddr, iph->daddr)) {
-		DCCP_WARN("dropped packet with invalid checksum\n");
-		goto discard_it;
+		//DCCP_WARN("dropped packet with invalid checksum\n");
+		//goto discard_it;
 	}
 
 	dh = dccp_hdr(skb);
