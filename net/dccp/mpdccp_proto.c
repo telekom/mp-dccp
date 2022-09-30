@@ -34,6 +34,7 @@
 #include <linux/in.h>
 #include <linux/inet.h>
 #include <linux/kthread.h>
+#include <linux/string.h>
 #include <uapi/linux/net.h>
 
 #include <net/inet_common.h>
@@ -185,11 +186,17 @@ do_mpdccp_write_xmit (
 
 	rcu_read_lock ();
 	sk = mpcb->sched_ops->get_subflow(mpcb);
+	DCCP_SKB_CB(skb)->dccpd_mpseq = mpcb->mp_oall_seqno;
 	rcu_read_unlock();
 	if (!sk) {
 		return -EAGAIN;
 	}
 	ret = mpdccp_xmit_to_sk (sk, skb);
+	rcu_read_lock ();
+	if (!strcasecmp (mpcb->sched_ops->name, "redundant")){
+		dccp_inc_seqno(&mpcb->mp_oall_seqno);
+	}
+	rcu_read_unlock();
 	return ret;
 }
 
@@ -639,6 +646,9 @@ static int _mpdccp_rcv_respond_partopen_state_process(struct sock *sk, int type)
 			WARN_ON(sk->sk_send_head == NULL);
 			kfree_skb(sk->sk_send_head);
 			sk->sk_send_head = NULL;
+
+			if(mpdccp_get_prio(sk) != 3)				// dont announce if prio = 3 (default value)
+				mpdccp_init_announce_prio(sk);			// announce prio values for all subflows after creation
 		}
 
 		/* Authentication complete, send an additional ACK if required */
@@ -944,14 +954,17 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 		if(mpcb->pm_ops->get_local_id && mpcb->pm_ops->get_remote_id){
 			addr.ip = ip_hdr(skb)->daddr;
 			loc_id = mpcb->pm_ops->get_local_id(mpcb->meta_sk, AF_INET, &addr, 0);
-			if(loc_id < 0){
+			addr.ip = ip_hdr(skb)->saddr;
+			rem_id = mpcb->pm_ops->get_remote_id(mpcb, &addr, AF_INET);
+
+			if(loc_id < 0 || rem_id < 0){
 				mpdccp_pr_debug("cant create subflow with unknown address id");
 				return -1;
 			}
 		}
 		/* Now add the subflow to the mpcb */
 
-		ret = create_subflow(newsk, meta_sk, skb, req, 0, (u8)loc_id, 0);//_mpdccp_listen(newsk, 1);
+		ret = create_subflow(newsk, meta_sk, skb, req, 0, (u8)loc_id, (u8)rem_id);
 		if (ret) {
 			mpdccp_pr_debug("error mpdccp_create_master_sub %d", ret);
 			return -1;
@@ -973,8 +986,10 @@ static int _mpdccp_close_meta(struct sock *meta_sk)
 	struct list_head *pos, *temp;
 	struct my_sock *mysk;
 
+	if (!mpcb) return -EINVAL;
 	mpdccp_pr_debug ("enter for sk %p\n", meta_sk);
 	/* close all subflows */
+	mpcb->to_be_closed = 1;
 	list_for_each_safe(pos, temp, &((mpcb)->psubflow_list)) {
 		mysk = list_entry(pos, struct my_sock, sk_list);
 		if (mysk) {

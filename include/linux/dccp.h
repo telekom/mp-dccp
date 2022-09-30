@@ -211,6 +211,16 @@ struct dccp_options_received {
 	u8 dccpor_addaddr[MPDCCP_ADDADDR_SIZE];
 	u8 dccpor_addaddr_len;
 	u8 dccpor_removeaddr[4];
+	
+	u32 dccpor_join_ip_local;     /* MPDCCP mp_join received local ip */
+	u32 dccpor_join_ip_remote;     /* MPDCCP mp_join received remote ip */
+	u8 dccpor_join_id;          /* MPDCCP mp_join received address id */
+	u16 dccpor_join_port;
+
+
+	u8 dccpor_rtt_type;         /* MP_RTT type */
+	u32 dccpor_rtt_value;
+	u32 dccpor_rtt_age;
 	u8 dccpor_mp_suppkeys;			/* MPDCCP supported key types */
 	u32 dccpor_mp_token;			/* MPDCCP path token */
 	u32 dccpor_mp_nonce;			/* MPDCCP path nonce */
@@ -218,7 +228,7 @@ struct dccp_options_received {
 	struct mpdccp_key dccpor_mp_keys[MPDCCP_MAX_KEYS];	/* MPDCCP keys */
 	int saw_mpkey;
 	int saw_mpjoin;
-	#endif
+#endif
 };
 
 struct ccid;

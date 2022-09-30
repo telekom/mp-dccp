@@ -15,12 +15,10 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 2 of the License, or
  * (at your option) any later version.
-
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
-
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
@@ -236,6 +234,9 @@ struct mpdccp_cb {
 	/* Pointer to list of remote addresses (initial and learned) */
 	struct list_head __rcu  premote_list;
 
+	/* kref for freeing */
+	struct kref             kref;
+	int			to_be_closed;
 	
 	int     multipath_active;
 	
@@ -257,6 +258,8 @@ struct mpdccp_cb {
 	int                     remaddr_len;	// length of mpdccp_remote_addr;
 	u16			    server_port;	// Server only 
 	int			    backlog;
+	u8			announce_prio[3];				// id, prio, flag for send
+
 	u8              delpath_id;
 	u8			    addpath_id;
 	sa_family_t		addpath_family;
@@ -272,6 +275,7 @@ struct mpdccp_cb {
 	struct sk_buff          *next_skb;      // for schedulers sending the skb on >1 flow
 	int    cnt_subflows;                    // Total number of flows we can use
 	int    cnt_listensocks;
+	bool 	do_incr_oallseq;
 	
 	/* Reordering related data */
 	struct mpdccp_reorder_ops *reorder_ops; 
@@ -364,6 +368,7 @@ int mpdccp_report_alldown (struct sock*);
 
 
 int mpdccp_add_client_conn (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx, struct sockaddr *rem, int rlen);
+int mpdccp_reconnect_client (struct sock*, int destroy, struct sockaddr*, int addrlen, int ifidx);
 int mpdccp_add_listen_sock (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx);
 int mpdccp_close_subflow (struct mpdccp_cb*, struct sock*, int destroy);
 struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb, u8 id);
@@ -390,6 +395,10 @@ int my_sock_init (struct sock *sk, struct mpdccp_cb *mpcb, int if_idx, enum mpdc
 void my_sock_destruct (struct sock *sk);
 /* the real xmit */
 int mpdccp_xmit_to_sk (struct sock *sk, struct sk_buff *skb);
+
+void mpdccp_init_announce_prio(struct sock *sk);
+int mpdccp_get_prio(struct sock *sk);
+int mpdccp_set_prio(struct sock *sk, int prio);
 
 /* Functions for authentication */
 int mpdccp_hash_key(const u8 *in, u8 inlen, u32 *token);

@@ -298,6 +298,27 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 
 			case DCCPO_MP_CONFIRM:
 			case DCCPO_MP_JOIN:
+				if (len != 9) {
+					goto out_invalid_option;
+				}
+				opt_recv->saw_mpjoin = 1;
+				opt_recv->dccpor_join_ip_local = be32_to_cpu(ip_hdr(skb)->daddr);
+				opt_recv->dccpor_join_ip_remote = be32_to_cpu(ip_hdr(skb)->saddr);
+				opt_recv->dccpor_join_port = dccp_hdr(skb)->dccph_sport;
+				opt_recv->dccpor_join_id = dccp_decode_value_var(value, 1);
+				value += 1;
+				opt_recv->dccpor_mp_token = get_unaligned_be32(value);
+				value += 4;
+				opt_recv->dccpor_mp_nonce = get_unaligned_be32(value);
+
+				dccp_pr_debug("%s rx opt: DCCPO_MP_JOIN = addrID %u on %pI4:%u from " \
+								"%pI4:%u, token %x nonce %x, sk %p dreq %p",
+								dccp_role(sk), opt_recv->dccpor_join_id,
+								&ip_hdr(skb)->daddr, htons(dccp_hdr(skb)->dccph_dport),
+								&ip_hdr(skb)->saddr, htons(dccp_hdr(skb)->dccph_sport),
+								opt_recv->dccpor_mp_token,
+								opt_recv->dccpor_mp_nonce, sk, dreq);
+				break;
 			case DCCPO_MP_FAST_CLOSE:
 			case DCCPO_MP_KEY:
 				if (len < 2) {
@@ -403,8 +424,21 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 				if(is_mpdccp(sk))
 					mpdccp_do_hmac_chk(sk, opt_recv);
 				break;
-
 			case DCCPO_MP_RTT:
+				if (len != 9) { //if not 9 byte
+					goto out_invalid_option;
+				}
+
+				opt_recv->dccpor_rtt_type = dccp_decode_value_var(value, 1);
+				value += 1;
+				opt_recv->dccpor_rtt_value = get_unaligned_be32(value);
+				value += 4;
+				opt_recv->dccpor_rtt_age = get_unaligned_be32(value);
+				dccp_pr_debug("rx opt: DCCPO_MP_RTT = type %u, value %d, age %d, sk %p dreq %p", opt_recv->dccpor_rtt_type,
+									opt_recv->dccpor_rtt_value, opt_recv->dccpor_rtt_age, sk, dreq);
+                  
+				break;
+
 			case DCCPO_MP_ADDADDR:
 				if(len == 5 || len == 7 || len == 17 || len == 19){
 					opt_recv->dccpor_addaddr_len = len+3;
@@ -421,6 +455,21 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 				break;
 
 			case DCCPO_MP_PRIO:
+				if (len == 2) {
+					u8 id = dccp_decode_value_var(value, 1);
+					u8 prio = dccp_decode_value_var(value+1, 1);
+					dccp_pr_debug("%s rx opt: DCCPO_MP_PRIO = value: %d id: %d", dccp_role(sk), prio, id);
+
+					if(prio < 16 && is_mpdccp(sk)){
+						struct mpdccp_cb *mpcb = get_mpcb(sk);
+
+						if (mpcb->pm_ops->handle_rcv_prio)
+							mpcb->pm_ops->handle_rcv_prio(mpcb, prio, id);
+					}
+				} else
+					goto out_invalid_option;
+				break;
+
 			case DCCPO_MP_CLOSE:
 
 			default:
@@ -785,13 +834,18 @@ static int dccp_insert_option_multipath(struct sk_buff *skb, const unsigned char
 /*static int dccp_insert_option_mp_confirm(struct sk_buff *skb)
 {
 	return 0;
-}
+}*/
 
-static int dccp_insert_option_mp_join(struct sk_buff *skb)
+static int dccp_insert_option_mp_join(struct sk_buff *skb, u8 addr_id, u32 token, u32 nonce)
 {
-	return 0;
+	u8 buf[9];
+	buf[0] = addr_id;
+	put_unaligned_be32(token, &buf[1]);
+	put_unaligned_be32(nonce, &buf[5]);
+	return dccp_insert_option_multipath(skb, DCCPO_MP_JOIN, &buf, sizeof(buf));
 }
 
+/*
 static int dccp_insert_option_mp_fast_close(struct sk_buff *skb)
 {
 	return 0;
@@ -856,12 +910,29 @@ static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_cb *mpcb
 	return ret;
 }
 
-/* Insert overall sequence number option */
-static int dccp_insert_option_mp_seq(struct sk_buff *skb, u64 *mp_oall_seq)
+static int dccp_insert_option_mp_rtt(struct sk_buff *skb, u8 mp_rtt_type, u32 mp_rtt_value, u32 mp_rtt_age)
 {
+    u8 buf[9];
+	buf[0] = mp_rtt_type;
+	put_unaligned_be32(mp_rtt_value, &buf[1]);
+	put_unaligned_be32(mp_rtt_age, &buf[5]);
+	return dccp_insert_option_multipath(skb, DCCPO_MP_RTT, &buf, 9);
+}
+
+/* Insert overall sequence number option */
+static int dccp_insert_option_mp_seq(struct sk_buff *skb, u64 *mp_oall_seq, bool do_incr_oallseq)
+{	
 	__be64 be_oall_seq;
-	be_oall_seq = cpu_to_be64((*mp_oall_seq << 16)); // convert to big endian // << 16
-	dccp_inc_seqno(mp_oall_seq); // increment overall sequence number
+
+	if (do_incr_oallseq){
+		be_oall_seq = cpu_to_be64((*mp_oall_seq << 16));
+		dccp_inc_seqno(mp_oall_seq); // increment overall sequence number
+		//printk(KERN_INFO "insrt skb %p mp_seq %lu", skb, *mp_oall_seq);
+	}
+	else {
+		be_oall_seq = cpu_to_be64((DCCP_SKB_CB(skb)->dccpd_mpseq)<<16);
+		//printk(KERN_INFO "insrt_red skb %p mp_seq %lu", skb, DCCP_SKB_CB(skb)->dccpd_mpseq);
+	}
 	return dccp_insert_option_multipath(skb, DCCPO_MP_SEQ, &be_oall_seq, 6);
 }
 
@@ -870,9 +941,6 @@ static int dccp_insert_option_mp_hmac(struct sk_buff *skb, u8 *hmac)
 	return dccp_insert_option_multipath(skb, DCCPO_MP_HMAC, hmac, MPDCCP_HMAC_SIZE);
 }
 
-/*static int dccp_insert_option_mp_rtt(struct sk_buff *skb)
-{
-}*/
 
 static int dccp_insert_option_mp_addaddr(struct sk_buff *skb, struct mpdccp_cb *mpcb)
 {
@@ -900,12 +968,13 @@ static int dccp_insert_option_mp_removeaddr(struct sk_buff *skb, u8 id)
 {
 	return dccp_insert_option_multipath(skb, DCCPO_MP_REMOVEADDR, &id, 1);
 }
-/*
-static int dccp_insert_option_mp_prio(struct sk_buff *skb)
+
+static int dccp_insert_option_mp_prio(struct sk_buff *skb, u8 *buf, struct mpdccp_cb *mpcb, u8 id)
 {
-	return 0;
+	return dccp_insert_option_multipath(skb, DCCPO_MP_PRIO, buf, 2);
 }
 
+/*
 static int dccp_insert_option_mp_close(struct sk_buff *skb)
 {
 	return 0;
@@ -954,8 +1023,8 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 		return -1;
 
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
-	/* Role dependent option required status. MPDCCP Server does not have 
-	 * to add delay values since MPDCCP Client knows delays due to its 
+	/* Role dependent option required status. MPDCCP Server does not have
+	 * to add delay values since MPDCCP Client knows delays due to its
 	 * congestion control */
 	if (is_mpdccp(sk)) {
 		struct mpdccp_cb *mpcb = get_mpcb(sk);
@@ -969,9 +1038,24 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 		switch(DCCP_SKB_CB(skb)->dccpd_type){
 			case DCCP_PKT_DATA:
 			case DCCP_PKT_DATAACK:
-			case DCCP_PKT_DATA:
-				dccp_insert_option_mp_seq(skb, &mpdccp_my_sock(sk)->mpcb->mp_oall_seqno);
+				dccp_insert_option_mp_seq(skb, &mpdccp_my_sock(sk)->mpcb->mp_oall_seqno, mpdccp_my_sock(sk)->mpcb->do_incr_oallseq);
+				if(!(mpdccp_my_sock(sk)->mpcb->mp_oall_seqno % 2)){						//send with every second dataack	
+					struct tcp_info info;
+					u8 rtt_type;
+					u32 rtt_value = get_delay_valn(sk, &info, &rtt_type);
+					u32 rtt_age = jiffies_to_msecs(info.tcpi_last_ack_recv);
+					dccp_insert_option_mp_rtt(skb, rtt_type, rtt_value, rtt_age);
+					dccp_pr_debug("delay = %u age %u on socket (0x%p) loc_id: %u rem_id: %u", rtt_value, rtt_age, sk, mp_addr_id, mpdccp_my_sock(sk)->remote_addr_id);
+				}				
 				if(mpcb){
+
+					if(mpcb->announce_prio[2]){
+						dccp_pr_debug("(%s) REQ insert opt MP_PRIO, addr_id: %u prio: %u",
+								dccp_role(sk), mpcb->announce_prio[0], mpcb->announce_prio[1]);
+
+						dccp_insert_option_mp_prio(skb, mpcb->announce_prio, mpcb, mp_addr_id);
+						mpcb->announce_prio[2] = 0;
+					}
 					if(mpcb->delpath_id && mpcb->pm_ops){
 						u8 del_id = chk_id(mpcb->delpath_id, mpcb->master_addr_id);
 						/* dont send over path that is about to be removed */
@@ -998,7 +1082,6 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 						mpcb->addpath_id = 0;
 						mpcb->addpath_port = 0;
 					}
-
 				}
 				break;
 			case DCCP_PKT_REQUEST:
@@ -1008,11 +1091,9 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 					dccp_insert_option_mp_key(skb, mpcb, NULL);
 				} else {
 					/* Insert token and nonce */
-					dccp_pr_debug("(%s) REQ insert opt MP_JOIN tk:%x nc:%x",
-									dccp_role(sk),
-									mpcb->mpdccp_rem_token,
-									dccp_sk(sk)->mpdccp_loc_nonce);
-					dccp_insert_option_mp_join(skb, mpcb->mpdccp_rem_token, dccp_sk(sk)->mpdccp_loc_nonce);
+					dccp_pr_debug("(%s) REQ insert opt MP_JOIN id:%u tk:%x nc:%x",
+							dccp_role(sk), mp_addr_id, mpcb->mpdccp_rem_token, dccp_sk(sk)->mpdccp_loc_nonce);
+					dccp_insert_option_mp_join(skb, mp_addr_id, mpcb->mpdccp_rem_token, dccp_sk(sk)->mpdccp_loc_nonce);
 				}
 				break;
 			case DCCP_PKT_ACK:
@@ -1069,17 +1150,32 @@ int dccp_insert_options_rsk_mp(const struct sock *sk, struct dccp_request_sock *
 	struct dccp_options_received *opt_recv = &dp->dccps_options_received;
 
 	if (opt_recv->saw_mpjoin) {
-		mpcb = get_mpcb(dreq->meta_sk);
+		union inet_addr addr;
+		struct mpdccp_cb *mpcb = get_mpcb(dreq->meta_sk);
+		u8 loc_id = 0;
+
 		if (!mpcb) {
 			dccp_pr_debug("(%s) invalid MPCB", dccp_role(sk));
 			return -1;
 		}
-		/* Insert token and nonce */
-		dccp_pr_debug("(%s) RES insert opt MP_JOIN tk:%x nc:%x", dccp_role(sk), mpcb->mpdccp_loc_token, dreq->mpdccp_loc_nonce);
-		dccp_insert_option_mp_join(skb, mpcb->mpdccp_loc_token, dreq->mpdccp_loc_nonce);
+
+		if(mpcb->pm_ops->get_local_id){
+			/* Get local addr_id for response */
+			addr.ip = cpu_to_be32(opt_recv->dccpor_join_ip_local);
+			loc_id = mpcb->pm_ops->get_local_id(mpcb->meta_sk, AF_INET, &addr, 0);
+		}
+		if(mpcb->pm_ops->add_remote_addr){
+			/* Store remote addr and id */
+			addr.ip = cpu_to_be32(opt_recv->dccpor_join_ip_remote);
+			mpcb->pm_ops->add_remote_addr(mpcb, AF_INET, opt_recv->dccpor_join_id, &addr, opt_recv->dccpor_join_port);
+		}
+
 		/* Insert HMAC */
 		dccp_pr_debug("(%s) RES insert opt MP_HMAC %llx", dccp_role(sk), be64_to_cpu(*((u64 *)dreq->mpdccp_loc_hmac)));
 		dccp_insert_option_mp_hmac(skb, dreq->mpdccp_loc_hmac);
+		/* Insert token and nonce */
+		dccp_pr_debug("(%s) RES insert opt MP_JOIN id:%u tk:%x nc:%x", dccp_role(sk), chk_id(loc_id, mpcb->master_addr_id), mpcb->mpdccp_loc_token, dreq->mpdccp_loc_nonce);
+		dccp_insert_option_mp_join(skb, chk_id(loc_id, mpcb->master_addr_id), mpcb->mpdccp_loc_token, dreq->mpdccp_loc_nonce);
 	} else if (opt_recv->saw_mpkey) {
 		dccp_pr_debug("(%s) RES insert opt MP_KEY %llx", dccp_role(sk), be64_to_cpu(*((__be64 *)dreq->mpdccp_loc_key.value)));
 		/* Insert local key */
