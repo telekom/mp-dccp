@@ -691,6 +691,7 @@ mpdccp_link_add (
 		link->is_released = 1;
 	}
 	link->id = link_get_next_counter (net);
+	link->mpdccp_prio = 3;
 	ret = mpdccp_link_sysfs_add (link);
 	if (ret < 0) {
 		mpdccp_pr_error ("mpdccp_link_add(): error adding sysfs entry\n");

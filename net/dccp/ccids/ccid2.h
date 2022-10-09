@@ -70,7 +70,8 @@ struct ccid2_hc_tx_sock {
 				tx_mdev,
 				tx_mdev_max,
 				tx_rttvar,
-				tx_rto;
+				tx_rto,
+				tx_last_ack_recv;
 	u64			tx_rtt_seq:48;
 	struct timer_list	tx_rtotimer;
 	struct sock		*sk;

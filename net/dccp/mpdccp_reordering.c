@@ -328,7 +328,7 @@ struct rcv_buff *mpdccp_init_rcv_buff(struct sock *sk, struct sk_buff *skb, stru
 	dsk = dccp_sk(sk);
 	rb->oall_seqno = (u64)dsk->dccps_options_received.dccpor_oall_seq;
 	//mpdccp_pr_debug("seqno %lu sk %p", (unsigned long)rb->oall_seqno, sk);
-	rb->latency = (u32)dsk->dccps_options_received.dccpor_delay;
+	rb->latency = (u32)dsk->dccps_options_received.dccpor_rtt_value;	/* need to divide by two for one way delay*/
 	//mpdccp_pr_debug("delay %lu sk %p", (unsigned long)rb->latency, sk);
 	return rb;
 }

@@ -142,6 +142,8 @@ unset_mpdccp(struct sock *sk) {
     list_for_each_entry_rcu(mpcb, &list, connection_list)
 
 
+#define chk_id(x,y) (x != y) ? x : 0
+
 /**
  * mpdccp_list_first_or_null_rcu - get the first element from a list
  * @ptr:        the list head to take the element from.
@@ -230,6 +232,9 @@ struct mpdccp_cb {
 	spinlock_t              plisten_list_lock;
 	/* Pointer to list of request sockets (client side) */
 	struct list_head __rcu  prequest_list;
+	/* Pointer to list of remote addresses (initial and learned) */
+	struct list_head __rcu  premote_list;
+
 	/* kref for freeing */
 	struct kref             kref;
 	int			to_be_closed;
@@ -254,9 +259,17 @@ struct mpdccp_cb {
 	int                     remaddr_len;	// length of mpdccp_remote_addr;
 	u16			    server_port;	// Server only 
 	int			    backlog;
-	int                     delpath;
+	u8			announce_prio[3];				// id, prio, flag for send
+
+	u8              delpath_id;
+	u8			    addpath_id;
+	sa_family_t		addpath_family;
+	union inet_addr	addpath_addr;
+	u16			addpath_port;
 	int			up_reported;
-	
+	u8 			master_addr_id;
+	int  		cnt_remote_addrs;
+
 	/* Scheduler related data */
 	struct mpdccp_sched_ops *sched_ops;
 	int			    has_own_sched;
@@ -309,8 +322,13 @@ struct my_sock
 	int			link_iscpy;
 	int			up_reported;
 	
+	/* Address ID related data */
+	u8 local_addr_id;
+	u8 remote_addr_id;
+	
 	/* Path manager related data */
 	int     if_idx; /* Interface ID, used for event handling */
+	bool delpath_sent;
 	
 	/* Scheduler related data */
 	/* Limit in Bytes. Dont forget to adjust when increasing the
@@ -355,8 +373,7 @@ int mpdccp_add_client_conn (struct mpdccp_cb *, struct sockaddr *local, int llen
 int mpdccp_reconnect_client (struct sock*, int destroy, struct sockaddr*, int addrlen, int ifidx);
 int mpdccp_add_listen_sock (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx);
 int mpdccp_close_subflow (struct mpdccp_cb*, struct sock*, int destroy);
-void mpdccp_handle_rem_addr (u32 del_path);
-struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb);
+struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb, u8 id);
 
 struct mpdccp_cb *mpdccp_alloc_mpcb(void);
 
@@ -381,6 +398,10 @@ void my_sock_destruct (struct sock *sk);
 /* the real xmit */
 int mpdccp_xmit_to_sk (struct sock *sk, struct sk_buff *skb);
 
+void mpdccp_init_announce_prio(struct sock *sk);
+int mpdccp_get_prio(struct sock *sk);
+int mpdccp_set_prio(struct sock *sk, int prio);
+
 /* Functions for authentication */
 int mpdccp_hash_key(const u8 *in, u8 inlen, u32 *token);
 int mpdccp_hmac_sha256(const u8 *key, u8 keylen, const u8 *msg, u8 msglen, u8 *output);
@@ -402,6 +423,9 @@ static inline struct sock *dccp_sk_inv(const struct dccp_sock *dp)
 	return (struct sock *)dp;
 }
 
+static inline u8 get_id(struct sock *sk){
+    return chk_id(mpdccp_my_sock(sk)->local_addr_id, mpdccp_my_sock(sk)->mpcb->master_addr_id);
+}
 
 
 #endif /* _MPDCCP_H */

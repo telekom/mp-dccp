@@ -645,6 +645,9 @@ static int _mpdccp_rcv_respond_partopen_state_process(struct sock *sk, int type)
 			WARN_ON(sk->sk_send_head == NULL);
 			kfree_skb(sk->sk_send_head);
 			sk->sk_send_head = NULL;
+
+			if(mpdccp_get_prio(sk) != 3)				// dont announce if prio = 3 (default value)
+				mpdccp_init_announce_prio(sk);			// announce prio values for all subflows after creation
 		}
 
 		/* Authentication complete, send an additional ACK if required */
@@ -671,7 +674,9 @@ create_subflow(
 	struct sock *meta_sk,
 	struct sk_buff *skb,
 	struct request_sock *req,
-	int clone)
+	int clone,
+	u8 loc_addr_id,
+	u8 rem_addr_id)
 {
 	int ret;
 	struct sock *newsk;
@@ -679,7 +684,7 @@ create_subflow(
 	struct mpdccp_link_info *link_info = NULL;
 	struct dccp_request_sock *dreq = dccp_rsk(req);
 
-	mpdccp_pr_debug("enter sk %p meta %p req %p clone %d\n", sk, meta_sk, req, clone);
+	mpdccp_pr_debug("enter sk %p meta %p req %p clone %d loc_id %u rem_id %u\n", sk, meta_sk, req, clone, loc_addr_id, rem_addr_id);
 	if (clone) {
 		bool own;
 		/* Use the dccp request flow to create a clone of the meta socket */
@@ -726,6 +731,8 @@ create_subflow(
 	mpdccp_my_sock(newsk)->link_info = link_info;
 	mpdccp_my_sock(newsk)->link_cnt = mpdccp_link_cnt(link_info);
 	mpdccp_my_sock(newsk)->link_iscpy = 0;
+    mpdccp_my_sock(newsk)->local_addr_id = loc_addr_id;
+    mpdccp_my_sock(newsk)->remote_addr_id = rem_addr_id;
 
 	spin_lock(&mpcb->psubflow_list_lock);
 	list_add_tail_rcu(&mpdccp_my_sock(newsk)->sk_list, &mpcb->psubflow_list);
@@ -764,6 +771,7 @@ _mpdccp_create_master(
 	struct sockaddr_in sin;
 	struct inet_sock *inet = inet_sk(child);
 	struct dccp_request_sock *dreq = dccp_rsk(req);
+	union inet_addr addr;
 
 	mpdccp_pr_debug("enter for sk %p child %p dreq %p\n", sk, child, dreq);
 
@@ -789,9 +797,20 @@ _mpdccp_create_master(
 	mpcb->cur_key_idx = 0;
 	mpcb->mpdccp_rem_key = dreq->mpdccp_rem_key;
 	mpcb->role = MPDCCP_SERVER;
+	mpcb->master_addr_id = 0;
+
+	addr.ip = inet->inet_saddr;
+	if(mpcb->pm_ops->get_local_id)
+		mpcb->master_addr_id = mpcb->pm_ops->get_local_id(meta_sk, AF_INET, &addr, 0);
+
+	mpdccp_pr_debug("master subflow id: %u\n", mpcb->master_addr_id);
+
+	addr.ip = inet->inet_daddr;
+	if(mpcb->pm_ops->add_remote_addr)
+		mpcb->pm_ops->add_remote_addr(mpcb, AF_INET, 0, &addr, inet->inet_dport);
 
 	/* Create subflow and meta sockets */
-	ret = create_subflow(sk, meta_sk, skb, req, 1);
+	ret = create_subflow(sk, meta_sk, skb, req, 1, mpcb->master_addr_id, 0);
 	if (ret < 0) {
 		mpdccp_pr_debug("error creating subflow %d\n", ret);
 		goto err_sub;
@@ -899,6 +918,8 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 		/* This is a new subflow socket */
 		u8 hash_mac[20];
 		u8 msg[8];
+		int loc_id = 0, rem_id = 0;
+		union inet_addr addr;
 
 		struct sock *meta_sk = dreq->meta_sk;
 		if (!meta_sk) {
@@ -929,8 +950,20 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 		}
 		mpdccp_pr_debug("HMAC validation OK");
 
+		if(mpcb->pm_ops->get_local_id && mpcb->pm_ops->get_remote_id){
+			addr.ip = ip_hdr(skb)->daddr;
+			loc_id = mpcb->pm_ops->get_local_id(mpcb->meta_sk, AF_INET, &addr, 0);
+			addr.ip = ip_hdr(skb)->saddr;
+			rem_id = mpcb->pm_ops->get_remote_id(mpcb, &addr, AF_INET);
+
+			if(loc_id < 0 || rem_id < 0){
+				mpdccp_pr_debug("cant create subflow with unknown address id");
+				return -1;
+			}
+		}
 		/* Now add the subflow to the mpcb */
-		ret = create_subflow(newsk, meta_sk, skb, req, 0);//_mpdccp_listen(newsk, 1);
+
+		ret = create_subflow(newsk, meta_sk, skb, req, 0, (u8)loc_id, (u8)rem_id);
 		if (ret) {
 			mpdccp_pr_debug("error mpdccp_create_master_sub %d", ret);
 			return -1;

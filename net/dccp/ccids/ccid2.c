@@ -367,6 +367,7 @@ static void ccid2_rtt_estimator(struct sock *sk, const long mrtt)
 	long m = mrtt ? : 1;
 
 	hc->tx_mrtt = mrtt;
+	hc->tx_last_ack_recv = ccid2_jiffies32;
 
 	if (hc->tx_srtt == 0) {
 		/* First measurement m */
@@ -788,7 +789,7 @@ static void ccid2_hc_tx_get_info(struct sock *sk, struct tcp_info *info)
 	info->tcpi_segs_out = ccid2_hc_tx_sk(sk)->tx_pipe;
 	info->tcpi_snd_cwnd = ccid2_hc_tx_sk(sk)->tx_cwnd;
 	info->tcpi_last_data_sent = ccid2_hc_tx_sk(sk)->tx_lsndtime;
-
+	info->tcpi_last_ack_recv = (ccid2_hc_tx_sk(sk)->tx_last_ack_recv > 0) ? ccid2_jiffies32 - ccid2_hc_tx_sk(sk)->tx_last_ack_recv : 0;
 }
 
 struct ccid_operations ccid2_ops = {

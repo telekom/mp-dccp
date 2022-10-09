@@ -269,27 +269,26 @@ static inline int ccid_hc_tx_getsockopt(struct ccid *ccid, struct sock *sk,
  * Obtain SRTT value form CCID2 TX sock.
  * NOTE: value is divided by 8 to match MRTT
  */
-static inline u32 srtt_as_delayn(struct sock *sk, struct tcp_info *info){
-    //dccp_pr_debug("srtt value : %u", info->tcpi_rtt);
+static inline u32 srtt_as_delayn(struct sock *sk, struct tcp_info *info, u8 *type){
     if(dccp_sk(sk)->dccps_hc_tx_ccid != NULL) { 
+		*type = 3;
     	ccid_hc_tx_get_info(dccp_sk(sk)->dccps_hc_tx_ccid, sk, info);
-    	return jiffies_to_msecs(info->tcpi_rtt >> 8); }
+    	return jiffies_to_msecs(info->tcpi_rtt >> 3); }		// divide by 2^3 (8)
     else { return 0; }
 }
 
 /**
  * Obtain MRTT value form CCID2 TX sock.
  */
-static inline u32 mrtt_as_delayn(struct sock *sk, struct tcp_info *info){
-    //dccp_pr_debug("mrtt value : %u", info->tcpi_rttvar);
-
+static inline u32 mrtt_as_delayn(struct sock *sk, struct tcp_info *info, u8 *type){
     if(dccp_sk(sk)->dccps_hc_tx_ccid != NULL) { 
+		*type = 0;
     	ccid_hc_tx_get_info(dccp_sk(sk)->dccps_hc_tx_ccid, sk, info);
     	return jiffies_to_msecs(info->tcpi_rttvar); }
     else{ return 0; }
 }
 
-extern u32 (*get_delay_valn)(struct sock *sk, struct tcp_info *info);
+extern u32 (*get_delay_valn)(struct sock *sk, struct tcp_info *info, u8 *type);
 
 static inline void set_srtt_as_delayn(void){
     get_delay_valn = srtt_as_delayn;

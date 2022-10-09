@@ -273,11 +273,13 @@ struct mpdccp_cb *mpdccp_alloc_mpcb(void)
     INIT_LIST_HEAD(&mpcb->psubflow_list);
     INIT_LIST_HEAD(&mpcb->plisten_list);
     INIT_LIST_HEAD(&mpcb->prequest_list);
+    INIT_LIST_HEAD(&mpcb->premote_list);
     spin_lock_init(&mpcb->psubflow_list_lock);
     spin_lock_init(&mpcb->plisten_list_lock);
 
     mpcb->to_be_closed = 0;
     mpcb->cnt_subflows      = 0;
+    mpcb->cnt_remote_addrs  = 0;
     mpcb->multipath_active  = 1;     //socket option; always active for now
     mpcb->dsn_local  = 0;
     mpcb->dsn_remote = 0;
@@ -293,6 +295,7 @@ struct mpdccp_cb *mpdccp_alloc_mpcb(void)
     mpcb->mpdccp_rem_key.type  = DCCPK_INVALID;
     mpcb->mpdccp_rem_key.size  = 0;
     mpcb->cur_key_idx = 0;
+    mpcb->master_addr_id = 0;
 
     kref_init (&mpcb->kref);
 
@@ -325,7 +328,10 @@ int mpdccp_destroy_mpcb(struct mpdccp_cb *mpcb)
 	INIT_LIST_HEAD(&mpcb->connection_list);
 	spin_unlock(&pconnection_list_lock);
 	mpcb->to_be_closed = 1;
-	
+
+	if(mpcb->pm_ops->free_remote_addr)
+		mpcb->pm_ops->free_remote_addr(mpcb);
+
 	/* close all subflows */
 	list_for_each_safe(pos, temp, &((mpcb)->psubflow_list)) {
 		mysk = list_entry(pos, struct my_sock, sk_list);
@@ -774,8 +780,25 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 		goto out;
 	}
 	if (local_address->sa_family == AF_INET) {
+        int loc_id = 0;
+        union inet_addr addr;
 		struct sockaddr_in 	*local_v4_address = (struct sockaddr_in*)local_address;
 		link_info = mpdccp_link_find_ip4 (&init_net, &local_v4_address->sin_addr, NULL);
+
+        addr.in = local_v4_address->sin_addr;
+        if(mpcb->pm_ops->get_local_id)
+            loc_id = mpcb->pm_ops->get_local_id(mpcb->meta_sk, AF_INET, &addr, 0);
+
+        if(loc_id < 0){
+            dccp_pr_debug("cant create subflow with unknown address id");
+		    sock_release(sock);
+		    goto out;
+        }
+        if(mpcb->master_addr_id == 0){
+            mpcb->master_addr_id = loc_id;
+            dccp_pr_debug("master_addr_id set %u", mpcb->master_addr_id);
+        }
+        mpdccp_my_sock(sk)->local_addr_id = loc_id;
 	} else if (local_address->sa_family == AF_INET6) {
 		struct sockaddr_in6 	*local_v6_address = (struct sockaddr_in6*)local_address;
 		link_info = mpdccp_link_find_ip6 (&init_net, &local_v6_address->sin6_addr, NULL);
@@ -785,6 +808,7 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	mpdccp_my_sock(sk)->link_info = link_info;
 	mpdccp_my_sock(sk)->link_cnt = mpdccp_link_cnt(link_info);
 	mpdccp_my_sock(sk)->link_iscpy = 0;
+	mpdccp_my_sock(sk)->remote_addr_id = 0;
 
 	/* Add socket to the request list */
 	spin_lock(&mpcb->psubflow_list_lock);
@@ -878,6 +902,14 @@ int mpdccp_reconnect_client (  struct sock *sk,
     int              found, ret;
 
     if (!sk || !my_sk) return -EINVAL;
+    
+    if (mpdccp_my_sock(sk)->delpath_sent){
+        found = my_sock_pre_destruct (sk);
+        my_sock_final_destruct (sk, mpcb, found);
+        unset_mpdccp(sk);
+        return 0;
+    }
+    
     if (!destroy)
        found = my_sock_pre_destruct (sk);
     mpdccp_pr_debug("try to reconnect sk address %pI4. if %d \n", &sk->__sk_common.skc_rcv_saddr, if_idx);
@@ -887,6 +919,7 @@ int mpdccp_reconnect_client (  struct sock *sk,
     if (ret) {
        mpdccp_pr_debug("reconnecting to sk address %pI4 (if %d) failed: %d\n",
                        &sk->__sk_common.skc_rcv_saddr, if_idx, ret);
+        unset_mpdccp(sk);
        if (!destroy)
                my_sock_final_destruct (sk, mpcb, found);
        return ret;
@@ -1008,16 +1041,15 @@ EXPORT_SYMBOL (mpdccp_handle_rem_addr);
 
 /*select sk to announce data*/
 
-struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb)
+struct sock *mpdccp_select_ann_sock(struct mpdccp_cb *mpcb, u8 id)
 {
 
     struct sock *sk, *avsk = NULL;
-    /*returns the first avilable socket - can be improved to 
+    /*returns the first avilable socket that is not id - can be improved to 
      *the latest used or lowest rtt as in mptcp mptcp_select_ack_sock */
 
     mpdccp_for_each_sk(mpcb, sk) {
-
-        if (!mpdccp_sk_can_send(sk))
+        if (!mpdccp_sk_can_send(sk) || mpdccp_my_sock(sk)->local_addr_id == id)
             continue;
         avsk = sk;
         goto avfound;
@@ -1204,6 +1236,47 @@ void mp_state_change(struct sock *sk)
 out:
     return;
 }
+
+int mpdccp_set_prio(struct sock *sk, int prio)
+{
+   struct mpdccp_link_info      *link;
+
+   /* copy and get link */
+   link = mpdccp_ctrl_getcpylink (sk);
+   if (!link) return -EINVAL;
+   /* change prio */
+   mpdccp_link_change_mpdccp_prio (link, prio);
+   /* release link */
+   mpdccp_link_put (link);
+   return 0;
+}
+EXPORT_SYMBOL(mpdccp_set_prio);
+
+int mpdccp_get_prio(struct sock *sk)
+{
+	struct mpdccp_link_info *link;
+	int prio;
+
+	link = mpdccp_ctrl_getlink (sk);
+	if (!link)
+		return -EINVAL;
+	prio = link->mpdccp_prio;
+	mpdccp_link_put (link);
+	return prio;
+}
+EXPORT_SYMBOL(mpdccp_get_prio);
+
+void mpdccp_init_announce_prio(struct sock *sk)
+{
+    struct my_sock   *my_sk = mpdccp_my_sock(sk);
+    struct mpdccp_cb *mpcb = my_sk->mpcb;
+
+    mpcb->announce_prio[0] = get_id(sk);
+    mpcb->announce_prio[1] = mpdccp_get_prio(sk);
+    mpcb->announce_prio[2] = 1;
+    dccp_send_keepalive(sk);
+}
+EXPORT_SYMBOL(mpdccp_init_announce_prio);
 
 int mpdccp_hash_key(const u8 *key, u8 keylen, u32 *token)
 {
