@@ -329,26 +329,37 @@ static void pm_free_id(const struct sock *meta_sk, u8 id) {
 	spin_unlock(&pm_ns->plocal_lock);
 }
 
-static void pm_handle_rcv_prio(struct mpdccp_cb *mpcb, u8 prio, u8 id)
+/*  handle received mp_prio option - clone link and set prio */
+static void pm_handle_rcv_prio(struct sock *sk, u8 prio, u64 seq)
 {
-	struct sock *sk;
-	rcu_read_lock();
-	mpdccp_for_each_sk(mpcb, sk) {
-		if(mpdccp_my_sock(sk)->remote_addr_id == id){
-			struct mpdccp_link_info *link;
-			link = mpdccp_ctrl_getcpylink(sk);
-			if (!link){
-				rcu_read_unlock();
-				return;
-			}
+	struct mpdccp_link_info *link;
 
-			mpdccp_pr_debug("assigning prio %u - old prio %u to addr id %u sk (%p) is_copy: %i",
-				    prio, link->mpdccp_prio, id, sk, mpdccp_my_sock(sk)->link_iscpy);
-			mpdccp_my_sock(sk)->link_iscpy = 1;
-			mpdccp_set_prio(sk, prio);
-			mpdccp_link_put(link);
-		}
+	rcu_read_lock();
+	link = mpdccp_ctrl_getlink(sk);
+
+	if(!link || prio == link->mpdccp_prio || 
+			seq < mpdccp_my_sock(sk)->last_prio_seq || !mpdccp_accept_prio){
+		if(!mpdccp_accept_prio)
+			mpdccp_pr_debug("mpdccp configured to ignore incoming mp_prio options");
+		if(seq < mpdccp_my_sock(sk)->last_prio_seq)
+			mpdccp_pr_debug("outdated mp_prio option detected");
+
+		mpdccp_link_put(link);
+		rcu_read_unlock();
+		return;
 	}
+
+	mpdccp_pr_debug("assigning prio %u - old prio %u to sk (%p)",
+			prio, link->mpdccp_prio, sk);
+	mpdccp_my_sock(sk)->prio_rcvrd = true;
+
+	if(link->is_devlink)		// create copy and change prio of new copy
+		mpdccp_link_cpy_set_prio(sk, prio); 
+	else						// change prio of this (virtual) link
+		mpdccp_link_change_mpdccp_prio(link, prio);
+
+	mpdccp_my_sock(sk)->last_prio_seq = seq;
+	mpdccp_link_put(link);
 	rcu_read_unlock();
 }
 
@@ -366,12 +377,11 @@ static int pm_handle_link_event(struct notifier_block *this,
 		rcu_read_lock();
 		mpdccp_for_each_conn(pconnection_list, mpcb) {
 			mpdccp_for_each_sk(mpcb, sk) {
-				if(!mpdccp_my_sock(sk)->link_iscpy && 
-					    mpdccp_my_sock(sk)->link_info->id == link->id){
+				if(!mpdccp_my_sock(sk)->prio_rcvrd && 
+					    mpdccp_my_sock(sk)->link_info->id == link->id)
 					mpdccp_init_announce_prio(sk);
-					rcu_read_unlock();
-					return NOTIFY_DONE;
-				}
+				else
+					mpdccp_my_sock(sk)->prio_rcvrd = false;
 			}
 		}
 		rcu_read_unlock();
@@ -1430,7 +1440,7 @@ static struct mpdccp_pm_ops mpdccp_pm_default = {
 
 	.rcv_removeaddr_opt	= pm_handle_rm_addr,
 	.get_hmac = pm_get_addr_hmac,
-	.handle_rcv_prio = pm_handle_rcv_prio,
+	.rcv_prio_opt = pm_handle_rcv_prio,
 	.name 			= "default",
 	.owner 			= THIS_MODULE,
 };

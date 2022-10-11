@@ -44,7 +44,7 @@
 struct  ctl_table_header *mpdccp_sysctl;
 /* Controls whether the client sends SRTT or MRTT */
 int sysctl_mpdccp_delay_config __read_mostly    = 0;
-
+int sysctl_mpdccp_accept_prio __read_mostly    = 0;
 
 
 static int proc_mpdccp_path_manager(struct ctl_table *ctl, int write,
@@ -227,6 +227,21 @@ static int proc_mpdccp_delay_config(struct ctl_table *table, int write,
 	return ret;
 }
 
+static int proc_mpdccp_accept_prio(struct ctl_table *table, int write,
+                void __user *buffer, size_t *lenp,
+                loff_t *ppos)
+{
+	int ret = proc_dointvec(table, write, buffer, lenp, ppos);
+
+	if(ret == 0){
+		if(sysctl_mpdccp_accept_prio > 0)
+			mpdccp_set_accept_prio();
+		else
+			mpdccp_set_ignore_prio();
+	}
+	return ret;
+}
+
 struct ctl_table mpdccp_table[] = {
 	{
 		.procname = "mpdccp_path_manager",
@@ -252,6 +267,13 @@ struct ctl_table mpdccp_table[] = {
 		.maxlen = sizeof(int),
 		.mode = 0644,
 		.proc_handler = proc_mpdccp_delay_config,
+	},
+	{
+		.procname = "mpdccp_accept_prio",
+		.data = &sysctl_mpdccp_accept_prio,
+		.maxlen = sizeof(int),
+		.mode = 0644,
+		.proc_handler = proc_mpdccp_accept_prio,
 	},
 	{
 		.procname = "mpdccp_debug",

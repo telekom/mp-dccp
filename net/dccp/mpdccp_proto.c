@@ -649,8 +649,18 @@ static int _mpdccp_rcv_respond_partopen_state_process(struct sock *sk, int type)
 		/* Authentication complete, send an additional ACK if required */
 		dccp_sk(sk)->auth_done = 1;
 		if (dccp_sk(sk)->dccps_role == DCCP_ROLE_SERVER) {
+			struct mpdccp_link_info *link = mpdccp_ctrl_getlink (sk);
+
 			mpdccp_pr_debug("send ACK");
 			dccp_send_ack(sk);
+
+			/* we have a virtual link (created by a script or mpdccplink add_link) */
+			if(link && !link->is_devlink && link->mpdccp_prio != 3)
+				mpdccp_init_announce_prio(sk);			// (server) announce prio only for non dev links
+			else if(link && link->is_devlink)
+				mpdccp_link_cpy_set_prio(sk, 3);
+			
+			mpdccp_link_put (link);
 		}
 	}
 
