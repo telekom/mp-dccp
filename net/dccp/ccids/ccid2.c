@@ -381,6 +381,15 @@ static void ccid2_rtt_estimator(struct sock *sk, const long mrtt)
 	hc->tx_mrtt = mrtt;
 	hc->tx_last_ack_recv = ccid2_jiffies32;
 
+	if(m > 0 && hc->tx_min_rtt >= m){
+		hc->tx_min_rtt = m;
+		hc->tx_min_rtt_stamp = ccid2_jiffies32;
+	}
+	if(m > 0 && hc->tx_max_rtt <= m){
+		hc->tx_max_rtt = m;
+		hc->tx_max_rtt_stamp = ccid2_jiffies32;
+	}
+
 	if (hc->tx_srtt == 0) {
 		/* First measurement m */
 		hc->tx_srtt = m << 3;
@@ -743,6 +752,11 @@ static int ccid2_hc_tx_init(struct ccid *ccid, struct sock *sk)
 
 	/* RFC 4341, 5: initialise ssthresh to arbitrarily high (max) value */
 	hc->tx_ssthresh = ~0U;
+	hc->tx_min_rtt = ~0U;
+	hc->tx_max_rtt = 0;
+
+	hc->tx_min_rtt_stamp = ccid2_jiffies32;
+	hc->tx_max_rtt_stamp = ccid2_jiffies32;
 
 	/* Use larger initial windows (RFC 4341, section 5). */
 	hc->tx_cwnd = rfc3390_bytes_to_packets(dp->dccps_mss_cache);
@@ -801,7 +815,16 @@ static void ccid2_hc_tx_get_info(struct sock *sk, struct tcp_info *info)
 	info->tcpi_segs_out = ccid2_hc_tx_sk(sk)->tx_pipe;
 	info->tcpi_snd_cwnd = ccid2_hc_tx_sk(sk)->tx_cwnd;
 	info->tcpi_last_data_sent = ccid2_hc_tx_sk(sk)->tx_lsndtime;
+	//calculate time since last rtt calculation.
 	info->tcpi_last_ack_recv = (ccid2_hc_tx_sk(sk)->tx_last_ack_recv > 0) ? ccid2_jiffies32 - ccid2_hc_tx_sk(sk)->tx_last_ack_recv : 0;
+	
+	info->tcpi_min_rtt = ccid2_hc_tx_sk(sk)->tx_min_rtt;
+	//calculate time since tx_min_rtt_stamp was set and store it in some unused var.
+	info->tcpi_last_ack_sent = (ccid2_hc_tx_sk(sk)->tx_min_rtt_stamp > 0) ? ccid2_jiffies32 - ccid2_hc_tx_sk(sk)->tx_min_rtt_stamp : 0;
+	
+	info->tcpi_snd_mss = ccid2_hc_tx_sk(sk)->tx_max_rtt;
+	//calculate time since tx_min_rtt_stamp was set and store it in some unused var.
+	info->tcpi_rcv_mss = (ccid2_hc_tx_sk(sk)->tx_max_rtt_stamp > 0) ? ccid2_jiffies32 - ccid2_hc_tx_sk(sk)->tx_max_rtt_stamp : 0;
 }
 
 struct ccid_operations ccid2_ops = {
