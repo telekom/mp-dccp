@@ -26,7 +26,7 @@ static struct ccid_operations *ccids[] = {
 #endif
 };
 
-u32 (*get_delay_valn)(struct sock *sk, struct tcp_info *info, u8 *type) = srtt_as_delayn;
+u32 (*get_delay_valn)(struct sock *sk, struct tcp_info *info, u8 *type) = mrtt_as_delayn;
 EXPORT_SYMBOL_GPL(get_delay_valn);
 
 static struct ccid_operations *ccid_by_number(const u8 id)

@@ -1028,6 +1028,7 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 	 * congestion control */
 	if (is_mpdccp(sk)) {
 		struct mpdccp_cb *mpcb = get_mpcb(sk);
+		struct my_sock  *my_sk = mpdccp_my_sock(sk);
 		u8 mp_addr_id = get_id(sk);
 
 		/* Skip if fallback to sp DCCP */
@@ -1044,9 +1045,13 @@ int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 					u8 rtt_type;
 					u32 rtt_value = get_delay_valn(sk, &info, &rtt_type);
 					u32 rtt_age = jiffies_to_msecs(info.tcpi_last_ack_recv);
-					dccp_insert_option_mp_rtt(skb, rtt_type, rtt_value, rtt_age);
-					dccp_pr_debug("delay = %u age %u on socket (0x%p) loc_id: %u rem_id: %u", rtt_value, rtt_age, sk, mp_addr_id, mpdccp_my_sock(sk)->remote_addr_id);
-				}				
+
+					if(rtt_value){
+						dccp_insert_option_mp_rtt(skb, rtt_type, rtt_value, rtt_age);
+						dccp_pr_debug("RTT: %u type: %u age: %u on socket (0x%p) loc_id: %u rem_id: %u", 
+								rtt_value, rtt_type, rtt_age, sk, mp_addr_id, my_sk->remote_addr_id);
+					}
+				}
 				if(mpcb){
 
 					if(mpcb->announce_prio[2]){

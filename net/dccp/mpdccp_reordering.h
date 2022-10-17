@@ -74,8 +74,10 @@ extern int ro_dbug_state;
 
 /* Reordering delay types */
 enum {
-    MPDCCP_REORDERING_DELAY_SRTT,
-    MPDCCP_REORDERING_DELAY_MRTT,
+	MPDCCP_REORDERING_DELAY_MRTT,		// raw_rtt	= 0
+	MPDCCP_REORDERING_DELAY_MIN_RTT,	// min_rtt	= 1
+	MPDCCP_REORDERING_DELAY_MAX_RTT,	// max_rtt	= 2
+	MPDCCP_REORDERING_DELAY_SRTT,		// srtt		= 3
     MPDCCP_REORDERING_DELAY_KRTT     
 };
 
