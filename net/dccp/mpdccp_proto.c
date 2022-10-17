@@ -381,8 +381,6 @@ _mpdccp_connect (
 	return 0;
 }
 
-
-
 static
 int
 _mpdccp_destroy_sock (
@@ -397,10 +395,6 @@ _mpdccp_destroy_sock (
 	module_put (THIS_MODULE);
 	return 0;
 }
-
-
-
-
 
 static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 {
@@ -486,6 +480,7 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 
 	return 0;
 }
+
 static int _mpdccp_rcv_request_sent_state_process(struct sock *sk, const struct sk_buff *skb)
 {
 	struct mpdccp_cb *mpcb;
@@ -668,7 +663,6 @@ static int _mpdccp_rcv_respond_partopen_state_process(struct sock *sk, int type)
 	return 0;
 }
 
-
 static int
 create_subflow(
 	struct sock *sk,
@@ -801,14 +795,14 @@ _mpdccp_create_master(
 	mpcb->master_addr_id = 0;
 
 	addr.ip = inet->inet_saddr;
-	if(mpcb->pm_ops->get_local_id)
-		mpcb->master_addr_id = mpcb->pm_ops->get_local_id(meta_sk, AF_INET, &addr, 0);
+	if(mpcb->pm_ops->claim_local_addr)
+		mpcb->master_addr_id = mpcb->pm_ops->claim_local_addr(mpcb, AF_INET, &addr);
 
 	mpdccp_pr_debug("master subflow id: %u\n", mpcb->master_addr_id);
 
 	addr.ip = inet->inet_daddr;
-	if(mpcb->pm_ops->add_remote_addr)
-		mpcb->pm_ops->add_remote_addr(mpcb, AF_INET, 0, &addr, inet->inet_dport);
+	if(mpcb->pm_ops->add_addr)
+		mpcb->pm_ops->add_addr(mpcb, AF_INET, 0, &addr, inet->inet_dport, true);
 
 	/* Create subflow and meta sockets */
 	ret = create_subflow(sk, meta_sk, skb, req, 1, mpcb->master_addr_id, 0);
@@ -951,11 +945,11 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 		}
 		mpdccp_pr_debug("HMAC validation OK");
 
-		if(mpcb->pm_ops->get_local_id && mpcb->pm_ops->get_remote_id){
+		if(mpcb->pm_ops->get_id_from_ip){
 			addr.ip = ip_hdr(skb)->daddr;
-			loc_id = mpcb->pm_ops->get_local_id(mpcb->meta_sk, AF_INET, &addr, 0);
+			loc_id = mpcb->pm_ops->get_id_from_ip(mpcb, &addr, AF_INET, false);
 			addr.ip = ip_hdr(skb)->saddr;
-			rem_id = mpcb->pm_ops->get_remote_id(mpcb, &addr, AF_INET);
+			rem_id = mpcb->pm_ops->get_id_from_ip(mpcb, &addr, AF_INET, true);
 
 			if(loc_id < 0 || rem_id < 0){
 				mpdccp_pr_debug("cant create subflow with unknown address id");
@@ -1002,6 +996,10 @@ static int _mpdccp_close_meta(struct sock *meta_sk)
 			}
 		}
 	}
+
+	if(mpcb->pm_ops->del_addr)
+		mpcb->pm_ops->del_addr(mpcb, 0, 0, true);
+
 	return ret;
 }
 

@@ -272,7 +272,7 @@ struct mpdccp_cb *mpdccp_alloc_mpcb(void)
     INIT_LIST_HEAD(&mpcb->psubflow_list);
     INIT_LIST_HEAD(&mpcb->plisten_list);
     INIT_LIST_HEAD(&mpcb->prequest_list);
-    INIT_LIST_HEAD(&mpcb->premote_list);
+    INIT_LIST_HEAD(&mpcb->paddress_list);
     spin_lock_init(&mpcb->psubflow_list_lock);
     spin_lock_init(&mpcb->plisten_list_lock);
 
@@ -328,8 +328,8 @@ int mpdccp_destroy_mpcb(struct mpdccp_cb *mpcb)
 	spin_unlock(&pconnection_list_lock);
 	mpcb->to_be_closed = 1;
 
-	if(mpcb->pm_ops->free_remote_addr)
-		mpcb->pm_ops->free_remote_addr(mpcb);
+	if(mpcb->pm_ops->del_addr)
+		mpcb->pm_ops->del_addr(mpcb, 0, 0, 1);
 
 	/* close all subflows */
 	list_for_each_safe(pos, temp, &((mpcb)->psubflow_list)) {
@@ -785,10 +785,10 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 		link_info = mpdccp_link_find_ip4 (&init_net, &local_v4_address->sin_addr, NULL);
 
         addr.in = local_v4_address->sin_addr;
-        if(mpcb->pm_ops->get_local_id)
-            loc_id = mpcb->pm_ops->get_local_id(mpcb->meta_sk, AF_INET, &addr, 0);
+        if(mpcb->pm_ops->claim_local_addr)
+            loc_id = mpcb->pm_ops->claim_local_addr(mpcb, AF_INET, &addr);
 
-        if(loc_id < 0){
+        if(loc_id < 1){
             dccp_pr_debug("cant create subflow with unknown address id");
 		    sock_release(sock);
 		    goto out;
@@ -807,7 +807,6 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	mpdccp_my_sock(sk)->link_info = link_info;
 	mpdccp_my_sock(sk)->link_cnt = mpdccp_link_cnt(link_info);
 	mpdccp_my_sock(sk)->link_iscpy = 0;
-	mpdccp_my_sock(sk)->remote_addr_id = 0;
 
 	/* Add socket to the request list */
 	spin_lock(&mpcb->psubflow_list_lock);
@@ -901,14 +900,14 @@ int mpdccp_reconnect_client (  struct sock *sk,
     int              found, ret;
 
     if (!sk || !my_sk) return -EINVAL;
-    
+
     if (mpdccp_my_sock(sk)->delpath_sent){
         found = my_sock_pre_destruct (sk);
         my_sock_final_destruct (sk, mpcb, found);
         unset_mpdccp(sk);
         return 0;
     }
-    
+
     if (!destroy)
        found = my_sock_pre_destruct (sk);
     mpdccp_pr_debug("try to reconnect sk address %pI4. if %d \n", &sk->__sk_common.skc_rcv_saddr, if_idx);
@@ -918,13 +917,13 @@ int mpdccp_reconnect_client (  struct sock *sk,
     if (ret) {
        mpdccp_pr_debug("reconnecting to sk address %pI4 (if %d) failed: %d\n",
                        &sk->__sk_common.skc_rcv_saddr, if_idx, ret);
-        unset_mpdccp(sk);
+       unset_mpdccp(sk);
        if (!destroy)
                my_sock_final_destruct (sk, mpcb, found);
        return ret;
     }
     if (destroy)
-       return mpdccp_close_subflow(mpcb, sk, 0);
+       return mpdccp_close_subflow(mpcb, sk, 1);
     return 0;
 }
 EXPORT_SYMBOL (mpdccp_reconnect_client);
@@ -1022,21 +1021,6 @@ int mpdccp_close_subflow (struct mpdccp_cb *mpcb, struct sock *sk, int destroy)
 }
 EXPORT_SYMBOL (mpdccp_close_subflow);
 
-void mpdccp_handle_rem_addr(u32 del_path)
-{
-    struct sock *sk;
-    struct mpdccp_cb *mpcb;
-    mpdccp_pr_debug("enter handle_rem_addr");
-        mpdccp_for_each_conn(pconnection_list, mpcb) {
-            mpdccp_for_each_sk(mpcb, sk) {
-                if(dccp_sk(sk)->id_rcv == del_path){
-                mpdccp_close_subflow(mpcb, sk, 0);
-                mpdccp_pr_debug("delete path %u sk %p", del_path, sk);
-                }
-            }
-        }
-}
-EXPORT_SYMBOL (mpdccp_handle_rem_addr);
 
 /*select sk to announce data*/
 
