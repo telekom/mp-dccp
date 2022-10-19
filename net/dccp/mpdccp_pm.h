@@ -52,8 +52,8 @@ struct mpdccp_pm_ns {
 	struct list_head	events;
 	struct delayed_work	address_worker;
 
-	u8 loc4_bits;
-	
+	u64 loc4_bits;
+
 	struct net		*net;
 };
 
@@ -68,14 +68,13 @@ struct mpdccp_pm_ops {
 	
 	int			(*add_init_server_conn) (struct mpdccp_cb*, int);
 	int			(*add_init_client_conn) (struct mpdccp_cb*, struct sockaddr*, int);
-	int			(*get_local_id)         (const struct sock*, sa_family_t, union inet_addr*, int);
-	void		(*rm_remote_addr)       (u8);
-	void		(*add_remote_addr)      (struct mpdccp_cb*, sa_family_t, u8, union inet_addr*, u16);
-	int			(*get_remote_id)		(struct mpdccp_cb*, union inet_addr*, sa_family_t);
-	void		(*free_remote_addr)     (struct mpdccp_cb*);
+	int			(*claim_local_addr)     (struct mpdccp_cb*, sa_family_t, union inet_addr*);
+	void		(*del_addr)       		(struct mpdccp_cb*, u8, bool, bool);
+	void		(*add_addr)             (struct mpdccp_cb*, sa_family_t, u8, union inet_addr*, u16, bool);
+	int			(*get_id_from_ip)       (struct mpdccp_cb*, union inet_addr*, sa_family_t, bool);
+	int 		(*get_hmac)				(struct mpdccp_cb*, u8, sa_family_t, union inet_addr*, u16, bool, u8*);
+	void		(*rcv_removeaddr_opt)   (struct mpdccp_cb*, u8);
 	void 		(*handle_rcv_prio)		(struct mpdccp_cb*, u8, u8);
-	int 		(*pm_hmac)				(struct mpdccp_cb*, u8, sa_family_t, union inet_addr*, u16, bool, u8*);
-	
 	char			name[MPDCCP_PM_NAME_MAX];
 	struct module		*owner;
 };
