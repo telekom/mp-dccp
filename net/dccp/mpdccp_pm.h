@@ -74,7 +74,8 @@ struct mpdccp_pm_ops {
 	int			(*get_id_from_ip)       (struct mpdccp_cb*, union inet_addr*, sa_family_t, bool);
 	int 		(*get_hmac)				(struct mpdccp_cb*, u8, sa_family_t, union inet_addr*, u16, bool, u8*);
 	void		(*rcv_removeaddr_opt)   (struct mpdccp_cb*, u8);
-	void 		(*handle_rcv_prio)		(struct mpdccp_cb*, u8, u8);
+	void 		(*rcv_prio_opt)			(struct sock*, u8, u64);
+
 	char			name[MPDCCP_PM_NAME_MAX];
 	struct module		*owner;
 };

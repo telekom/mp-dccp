@@ -90,6 +90,7 @@ static const char *mpdccp_state_name(const int state)
 #endif
 
 extern bool mpdccp_debug;
+extern bool mpdccp_accept_prio;
 #ifdef CONFIG_IP_MPDCCP_DEBUG
 #define MPDCCP_PRINTK(enable, fmt, args...)   do { if (enable)                  \
                             printk_ratelimited(fmt, ##args);                    \
@@ -259,7 +260,6 @@ struct mpdccp_cb {
 	int                     remaddr_len;	// length of mpdccp_remote_addr;
 	u16			    server_port;	// Server only 
 	int			    backlog;
-	u8			announce_prio[3];				// id, prio, flag for send
 
 	int			up_reported;
 	u8 			master_addr_id;
@@ -325,6 +325,12 @@ struct my_sock
 	int     if_idx; /* Interface ID, used for event handling */
 
 /* following data is used for sending options*/
+
+	/* send mp_prio option with next packet:*/
+	u8  announce_prio;
+	bool prio_rcvrd;
+	/* prio was changed with this sequence number */
+	u64 last_prio_seq;
 
 	u8 delpath_id;
 	bool delpath_sent;
@@ -405,7 +411,7 @@ int mpdccp_xmit_to_sk (struct sock *sk, struct sk_buff *skb);
 
 void mpdccp_init_announce_prio(struct sock *sk);
 int mpdccp_get_prio(struct sock *sk);
-int mpdccp_set_prio(struct sock *sk, int prio);
+int mpdccp_link_cpy_set_prio(struct sock *sk, int prio);
 
 /* Functions for authentication */
 int mpdccp_hash_key(const u8 *in, u8 inlen, u32 *token);
@@ -434,6 +440,8 @@ static inline u8 get_id(struct sock *sk)
     return chk_id(mpdccp_my_sock(sk)->local_addr_id, mpdccp_my_sock(sk)->mpcb->master_addr_id);
 }
 
+static inline void mpdccp_set_accept_prio(void){mpdccp_accept_prio = true;}
+static inline void mpdccp_set_ignore_prio(void){mpdccp_accept_prio = false;}
 
 #endif /* _MPDCCP_H */
 

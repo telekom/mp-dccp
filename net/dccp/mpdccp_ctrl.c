@@ -438,9 +438,9 @@ int my_sock_pre_destruct (struct sock *sk)
 
     /* release link_info struct */
     if (my_sk->link_info) {
-	const char *name = MPDCCP_LINK_NAME (my_sk->link_info);
-	mpdccp_pr_debug ("remove subflow %p (%s: %d)\n", sk,
-			name ? name : "<copied link>", my_sk->link_info->id);
+        const char *name = MPDCCP_LINK_NAME (my_sk->link_info);
+        mpdccp_pr_debug ("remove subflow %p (%s: %d)\n", sk,
+                name ? name : "<copied link>", my_sk->link_info->id);
         mpdccp_link_put (my_sk->link_info);
         my_sk->link_info = NULL;
     }
@@ -646,6 +646,7 @@ mpdccp_ctrl_maycpylink (struct sock *sk)
     rcu_read_lock ();
     oldlink = xchg ((__force struct mpdccp_link_info **)&my_sk->link_info, link);
     my_sk->link_iscpy = 1;
+    strncpy (link->ndev_name, oldlink->ndev_name, IFNAMSIZ+1);
     rcu_read_unlock ();
     mpdccp_link_put (oldlink);
     return 0;
@@ -1220,7 +1221,7 @@ out:
     return;
 }
 
-int mpdccp_set_prio(struct sock *sk, int prio)
+int mpdccp_link_cpy_set_prio(struct sock *sk, int prio)
 {
    struct mpdccp_link_info      *link;
 
@@ -1229,11 +1230,11 @@ int mpdccp_set_prio(struct sock *sk, int prio)
    if (!link) return -EINVAL;
    /* change prio */
    mpdccp_link_change_mpdccp_prio (link, prio);
+   mpdccp_link_change_name(link, sk);
    /* release link */
    mpdccp_link_put (link);
    return 0;
 }
-EXPORT_SYMBOL(mpdccp_set_prio);
 
 int mpdccp_get_prio(struct sock *sk)
 {
@@ -1247,19 +1248,12 @@ int mpdccp_get_prio(struct sock *sk)
 	mpdccp_link_put (link);
 	return prio;
 }
-EXPORT_SYMBOL(mpdccp_get_prio);
 
 void mpdccp_init_announce_prio(struct sock *sk)
 {
-    struct my_sock   *my_sk = mpdccp_my_sock(sk);
-    struct mpdccp_cb *mpcb = my_sk->mpcb;
-
-    mpcb->announce_prio[0] = get_id(sk);
-    mpcb->announce_prio[1] = mpdccp_get_prio(sk);
-    mpcb->announce_prio[2] = 1;
+    mpdccp_my_sock(sk)->announce_prio = mpdccp_get_prio(sk) + 1;        //adding +1 so we can check also for sending zero
     dccp_send_keepalive(sk);
 }
-EXPORT_SYMBOL(mpdccp_init_announce_prio);
 
 int mpdccp_hash_key(const u8 *key, u8 keylen, u32 *token)
 {

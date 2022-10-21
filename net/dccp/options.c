@@ -463,16 +463,16 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 				break;
 
 			case DCCPO_MP_PRIO:
-				if (len == 2) {
-					u8 id = dccp_decode_value_var(value, 1);
-					u8 prio = dccp_decode_value_var(value+1, 1);
-					dccp_pr_debug("%s rx opt: DCCPO_MP_PRIO = value: %d id: %d", dccp_role(sk), prio, id);
+				if (len == 1) {
+					u8 prio = dccp_decode_value_var(value, 1);
+					dccp_pr_debug("%s rx opt: DCCPO_MP_PRIO = value: %d, seq %llu",
+							dccp_role(sk), prio, (u64)opt_recv->dccpor_oall_seq);
 
 					if(prio < 16 && is_mpdccp(sk)){
 						struct mpdccp_cb *mpcb = get_mpcb(sk);
 
-						if (mpcb->pm_ops->handle_rcv_prio)
-							mpcb->pm_ops->handle_rcv_prio(mpcb, prio, id);
+						if (mpcb->pm_ops->rcv_prio_opt)
+							mpcb->pm_ops->rcv_prio_opt(sk, prio, opt_recv->dccpor_oall_seq);
 					}
 				} else
 					goto out_invalid_option;
@@ -959,9 +959,9 @@ static int dccp_insert_option_mp_removeaddr(struct sk_buff *skb, u8 id)
 	return dccp_insert_option_multipath(skb, DCCPO_MP_REMOVEADDR, &id, 1);
 }
 
-static int dccp_insert_option_mp_prio(struct sk_buff *skb, u8 *buf, struct mpdccp_cb *mpcb, u8 id)
+static int dccp_insert_option_mp_prio(struct sk_buff *skb, u8 prio, struct mpdccp_cb *mpcb, struct sock *sk)
 {
-	return dccp_insert_option_multipath(skb, DCCPO_MP_PRIO, buf, 2);
+	return dccp_insert_option_multipath(skb, DCCPO_MP_PRIO, &prio, 1);
 }
 
 /*
@@ -970,7 +970,6 @@ static int dccp_insert_option_mp_close(struct sk_buff *skb)
 	return 0;
 }*/
 
-#endif
 
 void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 {
@@ -1001,14 +1000,6 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 		}
 		break;
 	case DCCP_PKT_DATA:
-		if(mpcb->announce_prio[2]){
-			dccp_pr_debug("(%s) REQ insert opt MP_PRIO, addr_id: %u prio: %u",
-					dccp_role(sk), mpcb->announce_prio[0], mpcb->announce_prio[1]);
-
-			dccp_insert_option_mp_prio(skb, mpcb->announce_prio, mpcb, mp_addr_id);
-			mpcb->announce_prio[2] = 0;
-		}
-
 		if(my_sk->delpath_id && mpcb->pm_ops->get_hmac){
 			u8 del_id = chk_id(my_sk->delpath_id, mpcb->master_addr_id);
 			/* dont send over path that is about to be removed */
@@ -1034,7 +1025,14 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 			dccp_insert_option_mp_addaddr(skb, my_sk->addpath);
 			memset(my_sk->addpath, 0, MPDCCP_ADDADDR_SIZE);
 		}
-		
+
+		if(my_sk->announce_prio){
+			dccp_pr_debug("(%s) DATA insert opt MP_PRIO, prio: %u, sk: %p",
+					dccp_role(sk), my_sk->announce_prio - 1, sk);
+
+			dccp_insert_option_mp_prio(skb, my_sk->announce_prio - 1, mpcb, sk);
+			my_sk->announce_prio = 0;
+		}
 		dccp_insert_option_mp_seq(skb, &mpcb->mp_oall_seqno, mpcb->do_incr_oallseq);
 		break;
 	case DCCP_PKT_REQUEST:
@@ -1073,6 +1071,7 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 		break;
 	}
 }
+#endif
 
 int dccp_insert_options(struct sock *sk, struct sk_buff *skb)
 {

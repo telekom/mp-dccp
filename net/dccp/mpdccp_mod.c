@@ -54,8 +54,12 @@
 bool mpdccp_debug;
 module_param(mpdccp_debug, bool, 0644);
 MODULE_PARM_DESC(mpdccp_debug, "Enable debug messages");
-
 EXPORT_SYMBOL(mpdccp_debug);
+
+bool mpdccp_accept_prio;
+module_param(mpdccp_accept_prio, bool, 0644);
+MODULE_PARM_DESC(mpdccp_accept_prio, "Accept priority from incoming mp_prio options");
+EXPORT_SYMBOL(mpdccp_accept_prio);
 
 int mpdccp_sysctl_init (void);
 int mpdccp_ctrl_init (void);
