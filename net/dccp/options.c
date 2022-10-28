@@ -328,6 +328,22 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 				break;
 
 			case DCCPO_MP_FAST_CLOSE:
+				dccp_pr_debug("%s rx opt: DCCPO_MP_FAST_CLOSE = key %llx, len %u, sk %p",
+						dccp_role(sk), be64_to_cpu(*(u64*)value), len, sk);
+				if(is_mpdccp(sk) && len > 7){
+					struct mpdccp_cb *mpcb = get_mpcb(sk);
+					struct mpdccp_key *loc_key = &mpcb->mpdccp_loc_keys[mpcb->cur_key_idx];
+					dccp_pr_debug("key: %llx", be64_to_cpu(*((__be64 *)loc_key->value)));
+
+					if(len != loc_key->size) break;
+					if(memcmp(value, loc_key->value, len)) {
+						DCCP_CRIT("MP_CLOSE keys dont match");
+						return -1;
+					}
+				} else
+					goto out_invalid_option;
+				break;
+
 			case DCCPO_MP_KEY:
 				if (len < 2) {
 					goto out_invalid_option;
@@ -479,6 +495,23 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 				break;
 
 			case DCCPO_MP_CLOSE:
+				dccp_pr_debug("%s rx opt: DCCPO_MP_CLOSE = key %llx, len %u, sk %p",
+						dccp_role(sk), be64_to_cpu(*(u64*)value), len, sk);
+				if(is_mpdccp(sk) && len > 7){
+					struct mpdccp_cb *mpcb = get_mpcb(sk);
+					struct mpdccp_key *loc_key = &mpcb->mpdccp_loc_keys[mpcb->cur_key_idx];
+
+					mpdccp_my_sock(sk)->saw_mp_close = 1;
+					dccp_pr_debug("key: %llx", be64_to_cpu(*((__be64 *)loc_key->value)));
+
+					if(len != loc_key->size) break;
+					if(memcmp(value, loc_key->value, len)) {
+						DCCP_CRIT("MP_CLOSE keys dont match");
+						return -1;
+					}
+				} else
+					goto out_invalid_option;
+				break;
 
 			default:
 				DCCP_CRIT("DCCP(%p): mp option %d(len=%d) not "
@@ -853,11 +886,10 @@ static int dccp_insert_option_mp_join(struct sk_buff *skb, u8 addr_id, u32 token
 	return dccp_insert_option_multipath(skb, DCCPO_MP_JOIN, &buf, sizeof(buf));
 }
 
-/*
-static int dccp_insert_option_mp_fast_close(struct sk_buff *skb)
+static int dccp_insert_option_mp_fast_close(struct sk_buff *skb, struct mpdccp_key *key)
 {
-	return 0;
-}*/
+	return dccp_insert_option_multipath(skb, DCCPO_MP_FAST_CLOSE, &key->value, key->size);
+}
 
 static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_cb *mpcb, struct dccp_request_sock *dreq)
 {
@@ -964,12 +996,10 @@ static int dccp_insert_option_mp_prio(struct sk_buff *skb, u8 prio, struct mpdcc
 	return dccp_insert_option_multipath(skb, DCCPO_MP_PRIO, &prio, 1);
 }
 
-/*
-static int dccp_insert_option_mp_close(struct sk_buff *skb)
+static int dccp_insert_option_mp_close(struct sk_buff *skb, struct mpdccp_key *key)
 {
-	return 0;
-}*/
-
+	return dccp_insert_option_multipath(skb, DCCPO_MP_CLOSE, &key->value, key->size);
+}
 
 void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 {
@@ -1065,6 +1095,24 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 				dccp_pr_debug("(%s) ACK insert opt MP_HMAC %llx", dccp_role(sk),be64_to_cpu(*((u64*)dccp_sk(sk)->mpdccp_loc_hmac)));
 				dccp_insert_option_mp_hmac(skb, dccp_sk(sk)->mpdccp_loc_hmac);
 			}
+		}
+		break;
+	case DCCP_PKT_CLOSE:
+		if(mpcb->to_be_closed || mpdccp_my_sock(sk)->saw_mp_close){
+			dccp_pr_debug("(%s) CLOSE insert opt MP_CLOSE", dccp_role(sk));
+			dccp_insert_option_mp_close(skb, &mpcb->mpdccp_rem_key);
+		}
+		break;
+	case DCCP_PKT_CLOSEREQ:
+		if(mpcb->to_be_closed && mpdccp_my_sock(sk)->closing == 1){
+			dccp_pr_debug("(%s) CLOSEREQ insert opt MP_CLOSE", dccp_role(sk));
+			dccp_insert_option_mp_close(skb, &mpcb->mpdccp_rem_key);
+		}
+		break;
+	case DCCP_PKT_RESET:
+		if(mpcb->to_be_closed && !mpdccp_my_sock(sk)->saw_mp_close){
+			dccp_pr_debug("(%s) RESET insert opt MP_FAST_CLOSE", dccp_role(sk));
+			dccp_insert_option_mp_fast_close(skb, &mpcb->mpdccp_rem_key);
 		}
 		break;
 	default:

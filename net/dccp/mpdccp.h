@@ -364,6 +364,7 @@ struct my_sock
 
 	/* Close in progress flag */
 	int	closing;
+	int saw_mp_close;
 };
 
 
