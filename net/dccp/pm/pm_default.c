@@ -44,6 +44,9 @@
 static struct kmem_cache *mpdccp_pm_addr_cache __read_mostly;
 static struct mpdccp_pm_ops mpdccp_pm_default;
 
+//retransmit unconfirmed options after this many millisecs
+#define MPDCCP_CONFIRM_RETRANSMIT_TIMEOUT msecs_to_jiffies(1000)
+#define MPDCCP_CONFIRM_RETRANSMIT_TRIES	5
 
 enum {
 	MPDCCP_EVENT_ADD = 1,
@@ -57,6 +60,19 @@ struct pm_local_addr_event {
 	u8	code;
 	int	if_idx;
 	union inet_addr addr;
+};
+
+struct mpdccp_confirm_opt {
+	u8 opt[MPDCCP_CONFIRM_SIZE];
+	u8 resent_cnt;
+	u32 t_init;
+	u32 t_timeout;
+};
+
+struct pm_retransmit_event {
+	struct list_head list;
+	struct sock *sk;
+	struct mpdccp_confirm_opt *cnf_opt;
 };
 
 /* Holds a single local interface address */
@@ -75,7 +91,10 @@ struct pm_local_addr {
 struct mpdccp_addr {
 	struct list_head address_list;
 
-	/* Address family, IPv4/v6 address, Interface ID */
+	struct mpdccp_confirm_opt cnf_addaddr;
+	struct mpdccp_confirm_opt cnf_remaddr;
+	struct mpdccp_confirm_opt cnf_prio;
+
 	bool remote;
 	sa_family_t family;
 	union inet_addr addr;
@@ -393,6 +412,185 @@ static struct notifier_block mpdccp_pm_link_notifier = {
 	.notifier_call = pm_handle_link_event,
 };
 
+
+/* this function handles the retransmission queue */
+static void pm_retransmit_worker(struct work_struct *work)
+{
+	const struct delayed_work *delayed_work = container_of(work, struct delayed_work, work);
+	struct mpdccp_pm_ns *pm_ns = container_of(delayed_work, struct mpdccp_pm_ns, retransmit_worker);
+	struct pm_retransmit_event *event;
+	struct mpdccp_confirm_opt *my_opt;
+	const u32 now = pm_jiffies32;
+
+next_event:
+	event = list_first_entry_or_null(&pm_ns->retransmit, struct pm_retransmit_event, list);
+	if (!event)
+		return;
+
+	my_opt = event->cnf_opt;
+/* we loop through the list and check if retransmission timeout has surpassed */
+	if (now > my_opt->t_timeout){
+		u32 delay, age = now - my_opt->t_init;
+
+		/* initiate retransmission of option */
+		memcpy(&mpdccp_my_sock(event->sk)->reins_cache, &my_opt->opt[9], my_opt->opt[10]);
+		dccp_send_keepalive(event->sk);
+		my_opt->resent_cnt++;
+
+		mpdccp_pr_debug("Retransmitting (x%u) unconfirmed option after: %ums, type: %u",
+				my_opt->resent_cnt, jiffies_to_msecs(age), my_opt->opt[11]);
+
+		/* check if we still have retransmit tries. if yes, keep event in list and move to tail */
+		if (my_opt->resent_cnt < MPDCCP_CONFIRM_RETRANSMIT_TRIES){
+			/* calculate new timeout based of original timestamp(age) to remove */
+			delay = (my_opt->resent_cnt + 2) * MPDCCP_CONFIRM_RETRANSMIT_TIMEOUT - age;
+			my_opt->t_timeout = now + delay;
+
+			/* now calculate timeout for next event in list */
+			if (!list_is_singular(&pm_ns->retransmit))
+				list_move_tail(&event->list, &pm_ns->retransmit);
+		} else {
+			/* no retransmit tries left, del event */
+			list_del_rcu(&event->list);
+			kfree(event);
+		}
+		goto next_event;
+	} else
+		/* set new work queue timeout for remaining elements in list and exit */
+		queue_delayed_work(mpdccp_wq, &pm_ns->retransmit_worker, event->cnf_opt->t_timeout - now);
+}
+
+/*	this function queues a new retransmission event */
+static void pm_add_insert_rt_event(struct sock *sk, struct mpdccp_confirm_opt *my_opt){
+	struct mpdccp_cb *mpcb = get_mpcb(sk);
+	struct mpdccp_pm_ns *pm_ns = fm_get_ns(sock_net(mpcb->meta_sk));
+	struct pm_retransmit_event *event = kzalloc(sizeof(*event), GFP_KERNEL);
+
+	event->cnf_opt = my_opt;
+	event->sk = sk;
+	list_add_tail_rcu(&event->list, &pm_ns->retransmit);
+	mpdccp_pr_debug("Added retransmission event to queue");
+
+	/* Create work-queue */
+	if (!delayed_work_pending(&pm_ns->retransmit_worker))
+		queue_delayed_work(mpdccp_wq, &pm_ns->retransmit_worker, MPDCCP_CONFIRM_RETRANSMIT_TIMEOUT);
+}
+
+/*  remove option from reinsertion list. either because it was confirmed or because sk is closing
+	if my_opt is used, we only remove this specific option from list
+	if sk is used, we remove all options linked to sk from list
+	if we remove the first option on the list we also cancel the delayed work */
+static void pm_remove_rt_event(struct net *net, struct sock *sk, struct mpdccp_confirm_opt *my_opt){
+	struct mpdccp_pm_ns *pm_ns = fm_get_ns(net);
+	struct pm_retransmit_event *event;
+	bool first = true;
+
+next_event:
+
+	event = list_first_entry_or_null(&pm_ns->retransmit, struct pm_retransmit_event, list);
+	if(!event)
+		return;
+
+	if(event->cnf_opt == my_opt || event->sk == sk){
+		list_del_rcu(&event->list);
+		kfree(event);
+
+		if (first && delayed_work_pending(&pm_ns->retransmit_worker))
+			cancel_delayed_work(&pm_ns->retransmit_worker);
+
+		first = false;
+		mpdccp_pr_debug("Removed retransmission event");
+	}
+	goto next_event;
+}
+
+static void pm_del_retrans(struct net *net, struct sock *sk){
+	pm_remove_rt_event(net, sk, NULL);
+}
+
+/* returns pointer to right memory that stores info for option confirmation */
+static struct mpdccp_confirm_opt* get_cnf_mem(struct mpdccp_cb *mpcb, u8 id, u8 type)
+{
+	struct mpdccp_addr *mp_addr;
+
+	mpdccp_pr_debug("looking for address id: %u, opt_type %u", id, type);
+	list_for_each_entry_rcu(mp_addr, &mpcb->paddress_list, address_list) {
+		if (!mp_addr->remote && mp_addr->id == id) {
+			switch (type)
+			{
+				case DCCPO_MP_ADDADDR:
+					return &mp_addr->cnf_addaddr;
+				case DCCPO_MP_REMOVEADDR:
+					return &mp_addr->cnf_remaddr;
+				case DCCPO_MP_PRIO:
+					return &mp_addr->cnf_prio;
+			}
+		}
+	}
+	DCCP_CRIT("couldnt locate confirm memory for id %u", id);
+	return NULL;
+}
+
+/* Function is called when sending either mp_addaddr, mp_remoeaddr or mp_prio to store a copy */
+static void pm_store_confirm_opt(struct sock *sk, u8 *buf, u8 id, u8 type, u8 len)
+{
+	struct mpdccp_cb *mpcb = get_mpcb(sk);
+	u8 real_id = id ? id : mpcb->master_addr_id;		//if id = 0 we store master id
+	struct mpdccp_confirm_opt *new_opt = get_cnf_mem(mpcb, real_id, type);
+
+	if (new_opt) {
+		__be64 seq = cpu_to_be64((mpcb->mp_oall_seqno << 16));
+		rcu_read_lock();
+		new_opt->opt[0] = DCCPO_MULTIPATH;
+		new_opt->opt[1] = 9;
+		new_opt->opt[2] = DCCPO_MP_SEQ;
+		memcpy(&new_opt->opt[3], &seq, 6);
+		new_opt->opt[9] = DCCPO_MULTIPATH;
+		new_opt->opt[10] = len + 3;
+		new_opt->opt[11] = type;
+		memcpy(&new_opt->opt[12], buf, len);
+		
+		new_opt->t_init = pm_jiffies32;
+		new_opt->t_timeout = new_opt->t_init + MPDCCP_CONFIRM_RETRANSMIT_TIMEOUT;
+		new_opt->resent_cnt = 0;
+		rcu_read_unlock();
+
+		pm_add_insert_rt_event(sk, new_opt);
+	}
+}
+
+/*  handle received mp_confirm option */
+static int pm_rcv_confirm_opt(struct mpdccp_cb *mpcb, u8 *rcv_opt, u8 id)
+{
+	u8 len = rcv_opt[10];
+	u8 type = rcv_opt[11];
+	struct mpdccp_confirm_opt *snt_opt = get_cnf_mem(mpcb, id, type);
+
+	if(!snt_opt){
+		DCCP_CRIT("could not recover a matching sent option");
+		return 1;
+	}
+
+	rcu_read_lock();
+	if(snt_opt && len == snt_opt->opt[10] && !memcmp(rcv_opt, snt_opt->opt, len)) {
+		mpdccp_pr_debug("mp_confirm matches sent option. txpe: %u, len %u", type, len);
+
+		/* only mp_removeaddr requires action after received confirm */
+		if(type == DCCPO_MP_REMOVEADDR) {
+			pm_del_addr(mpcb, id, false, false);
+			pm_free_id(mpcb->meta_sk, id);
+		}
+		rcu_read_unlock();
+		/* option was confirmed, stop retransmitting the option */
+		pm_remove_rt_event(sock_net(mpcb->meta_sk), NULL, snt_opt);
+		return 0;
+	}
+
+	DCCP_CRIT("mp_confirm does not match any stored option");
+	rcu_read_unlock();
+	return 1;
+}
+
 /* Pathmanager namespace related functions */
 /* Find the first free index in the bitfield */
 static int mpdccp_find_free_index(u64 bitfield)
@@ -637,7 +835,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 					mpdccp_my_sock(sk)->delpath_sent = true;
 					mpdccp_close_subflow (mpcb, sk, 0);
 					mpdccp_send_remove_path(mpcb, addr_id);
-					pm_free_id(mpcb->meta_sk, addr_id);	//should be done only after confirm was received
+					pm_free_id(mpcb->meta_sk, addr_id);
 				}
 			}
 		}
@@ -1043,6 +1241,8 @@ static int mpdccp_init_net(struct net *net)
 	spin_lock_init(&pm_ns->plocal_lock);
 	INIT_LIST_HEAD(&pm_ns->events);
 	INIT_DELAYED_WORK(&pm_ns->address_worker, pm_local_address_worker);
+	INIT_LIST_HEAD(&pm_ns->retransmit);
+	INIT_DELAYED_WORK(&pm_ns->retransmit_worker, pm_retransmit_worker);
 	pm_ns->net = net;
 	net->mpdccp.path_managers[MPDCCP_PM_FULLMESH] = pm_ns;
 
@@ -1068,6 +1268,7 @@ static void mpdccp_exit_net(struct net *net)
 	pm_ns = net->mpdccp.path_managers[MPDCCP_PM_FULLMESH];
 	/* Stop the worker */
 	cancel_delayed_work_sync(&pm_ns->address_worker);
+	cancel_delayed_work_sync(&pm_ns->retransmit_worker);
 
 	/* Clean and free the list */
 	dccp_free_local_addr_list(pm_ns);
@@ -1441,6 +1642,11 @@ static struct mpdccp_pm_ops mpdccp_pm_default = {
 	.rcv_removeaddr_opt	= pm_handle_rm_addr,
 	.get_hmac = pm_get_addr_hmac,
 	.rcv_prio_opt = pm_handle_rcv_prio,
+
+	.rcv_confirm_opt = pm_rcv_confirm_opt,
+	.store_confirm_opt = pm_store_confirm_opt,
+	.del_retrans = pm_del_retrans,
+
 	.name 			= "default",
 	.owner 			= THIS_MODULE,
 };

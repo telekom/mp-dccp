@@ -340,7 +340,14 @@ struct my_sock
 	u8 addpath_hmac[MPDCCP_HMAC_SIZE];
 
 	u64 last_addpath_seq;
-	 
+
+	/* temporary memory for received options that require sending a confirm as response  */
+	u8 cnf_cache[MPDCCP_CONFIRM_SIZE];
+	u8 cnf_cache_len;
+
+	/* temporary memory for resending unconfirmed options, biggest possible option is MP_ADDADDR */
+	u8 reins_cache[MPDCCP_ADDADDR_SIZE];
+
 	/* Scheduler related data */
 	/* Limit in Bytes. Dont forget to adjust when increasing the
 	 * size of any scheduler's priv data struct*/

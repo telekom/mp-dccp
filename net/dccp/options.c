@@ -51,7 +51,8 @@ u64 dccp_decode_value_var(const u8 *bf, const u8 len)
 	return value;
 }
 
-void mpdccp_do_hmac_chk(struct sock *sk, struct dccp_options_received *opt_recv){
+static int mpdccp_do_hmac_chk(struct sock *sk, struct dccp_options_received *opt_recv)
+{
 	struct mpdccp_cb *mpcb = get_mpcb(sk);
 	struct my_sock  *my_sk = mpdccp_my_sock(sk);
 	u8 chk_hmac[MPDCCP_HMAC_SIZE];
@@ -86,17 +87,16 @@ void mpdccp_do_hmac_chk(struct sock *sk, struct dccp_options_received *opt_recv)
 					be64_to_cpu(*((u64 *)chk_hmac)));
 			if(memcmp(opt_recv->dccpor_mp_hmac, chk_hmac, MPDCCP_HMAC_SIZE)){
 				DCCP_CRIT("HMAC CHECK FAILED!");
-				return;
+				return 0;
 			}
 
 			if(opt_recv->dccpor_oall_seq < my_sk->last_addpath_seq){
 				dccp_pr_debug("option outdated, not acting on MP_ADDADDR");
-				return;
+				return 0;
 			}
 			my_sk->last_addpath_seq = opt_recv->dccpor_oall_seq;
-
 			mpcb->pm_ops->add_addr(mpcb, family, id, &addr, port, true);
-
+			return len;
 		}
 	}
 	
@@ -111,12 +111,13 @@ void mpdccp_do_hmac_chk(struct sock *sk, struct dccp_options_received *opt_recv)
 					be64_to_cpu(*((u64 *)chk_hmac)));
 			if(memcmp(opt_recv->dccpor_mp_hmac, chk_hmac, MPDCCP_HMAC_SIZE)){
 				DCCP_CRIT("HMAC CHECK FAILED!");
-				return;
+				return 0;
 			}
 			mpcb->pm_ops->rcv_removeaddr_opt(mpcb, id);
-
+			return 4;
 		}
 	}
+	return 0;
 }
 
 /**
@@ -304,6 +305,24 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 			switch(mp_opt) {
 
 			case DCCPO_MP_CONFIRM:
+				dccp_pr_debug("%s rx opt: DCCPO_MP_CONFIRM = %u len: %u", 
+						dccp_role(sk), (u8)dccp_decode_value_var(value+11, 1), len);
+				if(is_mpdccp(sk) && len > 3){
+					struct mpdccp_cb *mpcb = get_mpcb(sk);
+					u8 opt[MPDCCP_CONFIRM_SIZE];
+					u8 id;
+
+					memcpy(opt, value, len);
+					if(opt[11] == DCCPO_MP_PRIO)
+						id = mpdccp_my_sock(sk)->local_addr_id;
+					else
+						id = opt[12] ? opt[12] : mpcb->master_addr_id;
+
+					if (mpcb->pm_ops->rcv_confirm_opt)
+						mpcb->pm_ops->rcv_confirm_opt(mpcb, opt, id);
+				}
+				break;
+
 			case DCCPO_MP_JOIN:
 				if (len != 9) {
 					goto out_invalid_option;
@@ -445,8 +464,21 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 				if ((pkt_type == DCCP_PKT_ACK) && dccp_sk(sk)->auth_done)
 					dccp_send_ack(sk);
 
-				if(is_mpdccp(sk))
-					mpdccp_do_hmac_chk(sk, opt_recv);
+				if(!is_mpdccp(sk)) break;
+				len = mpdccp_do_hmac_chk(sk, opt_recv);
+				if(len){
+					struct my_sock  *my_sk = mpdccp_my_sock(sk);
+					u8 buf[MPDCCP_CONFIRM_SIZE];
+					len += 9;
+					memcpy(&buf, value-(len+3), len);
+
+					if(my_sk->cnf_cache_len + len < MPDCCP_CONFIRM_SIZE){
+						memcpy(&my_sk->cnf_cache[my_sk->cnf_cache_len], &buf, len);
+						my_sk->cnf_cache_len += len;
+						dccp_send_keepalive(sk);
+					}
+				}
+
 				break;
 
 			case DCCPO_MP_RTT:
@@ -473,7 +505,7 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 
 			case DCCPO_MP_REMOVEADDR:
 				if(len == 1){
-					memcpy(&opt_recv->dccpor_removeaddr[0], value-3, 4);
+					memcpy(&opt_recv->dccpor_removeaddr[0], value-3, len+3);
 				} else
 					goto out_invalid_option;
 				break;
@@ -486,9 +518,17 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 
 					if(prio < 16 && is_mpdccp(sk)){
 						struct mpdccp_cb *mpcb = get_mpcb(sk);
+						struct my_sock  *my_sk = mpdccp_my_sock(sk);
 
 						if (mpcb->pm_ops->rcv_prio_opt)
 							mpcb->pm_ops->rcv_prio_opt(sk, prio, opt_recv->dccpor_oall_seq);
+
+						len += 12;
+						if(my_sk->cnf_cache_len + len < MPDCCP_CONFIRM_SIZE){
+							memcpy(&my_sk->cnf_cache[my_sk->cnf_cache_len], value-12, len);
+							my_sk->cnf_cache_len += len;
+							dccp_send_keepalive(sk);
+						}
 					}
 				} else
 					goto out_invalid_option;
@@ -872,10 +912,10 @@ static int dccp_insert_option_multipath(struct sk_buff *skb, const unsigned char
 	return 0;
 }
 
-/*static int dccp_insert_option_mp_confirm(struct sk_buff *skb)
+static int dccp_insert_option_mp_confirm(struct sk_buff *skb, u8 *buf, u8 len)
 {
-	return 0;
-}*/
+	return dccp_insert_option_multipath(skb, DCCPO_MP_CONFIRM, buf, len);
+}
 
 static int dccp_insert_option_mp_join(struct sk_buff *skb, u8 addr_id, u32 token, u32 nonce)
 {
@@ -981,24 +1021,32 @@ static int dccp_insert_option_mp_rtt(struct sk_buff *skb, u8 mp_rtt_type, u32 mp
 	return dccp_insert_option_multipath(skb, DCCPO_MP_RTT, &buf, 9);
 }
 
-static int dccp_insert_option_mp_addaddr(struct sk_buff *skb, u8 *buf)
+static int dccp_insert_option_mp_addaddr(struct sk_buff *skb, u8 *buf, struct sock *sk)
 {
+	get_mpcb(sk)->pm_ops->store_confirm_opt(sk, &buf[1], buf[1], DCCPO_MP_ADDADDR, buf[0]);
 	return dccp_insert_option_multipath(skb, DCCPO_MP_ADDADDR, &buf[1], buf[0]);
 }
 
-static int dccp_insert_option_mp_removeaddr(struct sk_buff *skb, u8 id)
+static int dccp_insert_option_mp_removeaddr(struct sk_buff *skb, u8 id, struct sock *sk)
 {
+	get_mpcb(sk)->pm_ops->store_confirm_opt(sk, &id, id, DCCPO_MP_REMOVEADDR, 1);
 	return dccp_insert_option_multipath(skb, DCCPO_MP_REMOVEADDR, &id, 1);
 }
 
-static int dccp_insert_option_mp_prio(struct sk_buff *skb, u8 prio, struct mpdccp_cb *mpcb, struct sock *sk)
+static int dccp_insert_option_mp_prio(struct sk_buff *skb, u8 prio, struct sock *sk)
 {
+	get_mpcb(sk)->pm_ops->store_confirm_opt(sk, &prio, get_id(sk), DCCPO_MP_PRIO, 1);
 	return dccp_insert_option_multipath(skb, DCCPO_MP_PRIO, &prio, 1);
 }
 
 static int dccp_insert_option_mp_close(struct sk_buff *skb, struct mpdccp_key *key)
 {
 	return dccp_insert_option_multipath(skb, DCCPO_MP_CLOSE, &key->value, key->size);
+}
+
+static int dccp_reinsert_option_mp(struct sk_buff *skb, u8 *buf)
+{
+	return dccp_insert_option_multipath(skb, buf[2], &buf[3], buf[1] - 3);
 }
 
 void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
@@ -1040,29 +1088,43 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 				dccp_insert_option_mp_hmac(skb, delpath_hmac);
 
 				dccp_pr_debug("(%s) DATA insert opt MP_REMOVEADDR, id: %u", dccp_role(sk), del_id);
-				dccp_insert_option_mp_removeaddr(skb, del_id);
+				dccp_insert_option_mp_removeaddr(skb, del_id, sk);
 				my_sk->delpath_id = 0;
 			}
 		}
 
-		if(my_sk->addpath[0] && mpcb->pm_ops->get_hmac){
+		else if(my_sk->addpath[0] && mpcb->pm_ops->get_hmac){
 			dccp_pr_debug("(%s) DATA insert opt MP_HMAC %llx", dccp_role(sk),
 					be64_to_cpu(*((u64 *)my_sk->addpath_hmac)));
 			dccp_insert_option_mp_hmac(skb, my_sk->addpath_hmac);
 
 			dccp_pr_debug("(%s) DATA insert opt MP_ADDADDR, id: %u, len: %u",
 					dccp_role(sk), my_sk->addpath[1], my_sk->addpath[0]);
-			dccp_insert_option_mp_addaddr(skb, my_sk->addpath);
+			dccp_insert_option_mp_addaddr(skb, my_sk->addpath, sk);
 			memset(my_sk->addpath, 0, MPDCCP_ADDADDR_SIZE);
 		}
 
-		if(my_sk->announce_prio){
+		else if(my_sk->announce_prio){
 			dccp_pr_debug("(%s) DATA insert opt MP_PRIO, prio: %u, sk: %p",
 					dccp_role(sk), my_sk->announce_prio - 1, sk);
 
-			dccp_insert_option_mp_prio(skb, my_sk->announce_prio - 1, mpcb, sk);
+			dccp_insert_option_mp_prio(skb, my_sk->announce_prio - 1, sk);
 			my_sk->announce_prio = 0;
 		}
+
+		else if(my_sk->cnf_cache_len > 3){
+			dccp_pr_debug("(%s) DATA insert opt MP_CONFIRM, type: %u, len: %u",
+						dccp_role(sk), my_sk->cnf_cache[2], my_sk->cnf_cache_len);
+			dccp_insert_option_mp_confirm(skb, my_sk->cnf_cache, my_sk->cnf_cache_len);
+			my_sk->cnf_cache_len = 0;
+		}
+
+		else if(my_sk->reins_cache[0]){
+			dccp_pr_debug("(%s) REQ reinsert opt %u, addr_id: %u",
+					dccp_role(sk), my_sk->reins_cache[2], my_sk->reins_cache[3]);
+			dccp_reinsert_option_mp(skb, my_sk->reins_cache);
+		}
+
 		dccp_insert_option_mp_seq(skb, &mpcb->mp_oall_seqno, mpcb->do_incr_oallseq);
 		break;
 	case DCCP_PKT_REQUEST:
