@@ -288,6 +288,32 @@ static inline u32 mrtt_as_delayn(struct sock *sk, struct tcp_info *info, u8 *typ
     else{ return 0; }
 }
 
+/**
+ * Obtain Min RTT value form CCID2 TX sock.
+ */
+static inline u32 min_rtt_as_delayn(struct sock *sk, struct tcp_info *info, u8 *type){
+    if(dccp_sk(sk)->dccps_hc_tx_ccid != NULL) { 
+		*type = 1;
+    	ccid_hc_tx_get_info(dccp_sk(sk)->dccps_hc_tx_ccid, sk, info);
+		// overwrite age field to display correct timestamp
+		info->tcpi_last_ack_recv = info->tcpi_last_ack_sent;
+    	return jiffies_to_msecs(info->tcpi_min_rtt); }
+    else{ return 0; }
+}
+
+/**
+ * Obtain Max RTT value form CCID2 TX sock.
+ */
+static inline u32 max_rtt_as_delayn(struct sock *sk, struct tcp_info *info, u8 *type){
+    if(dccp_sk(sk)->dccps_hc_tx_ccid != NULL) { 
+		*type = 2;
+    	ccid_hc_tx_get_info(dccp_sk(sk)->dccps_hc_tx_ccid, sk, info);
+		// overwrite age field to display correct timestamp
+		info->tcpi_last_ack_recv = info->tcpi_rcv_mss;
+    	return jiffies_to_msecs(info->tcpi_snd_mss); }
+    else{ return 0; }
+}
+
 extern u32 (*get_delay_valn)(struct sock *sk, struct tcp_info *info, u8 *type);
 
 static inline void set_srtt_as_delayn(void){
@@ -296,5 +322,13 @@ static inline void set_srtt_as_delayn(void){
 
 static inline void set_mrtt_as_delayn(void){
     get_delay_valn = mrtt_as_delayn;
+}
+
+static inline void set_min_rtt_as_delayn(void){
+    get_delay_valn = min_rtt_as_delayn;
+}
+
+static inline void set_max_rtt_as_delayn(void){
+    get_delay_valn = max_rtt_as_delayn;
 }
 #endif /* _CCID_H */

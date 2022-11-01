@@ -36,6 +36,9 @@
 static struct kmem_cache *mpdccp_pm_addr_cache __read_mostly;
 static struct mpdccp_pm_ops mpdccp_pm_default;
 
+//retransmit unconfirmed options after this many millisecs
+#define MPDCCP_CONFIRM_RETRANSMIT_TIMEOUT msecs_to_jiffies(1000)
+#define MPDCCP_CONFIRM_RETRANSMIT_TRIES	5
 
 enum {
 	MPDCCP_EVENT_ADD = 1,
@@ -43,7 +46,7 @@ enum {
 	MPDCCP_EVENT_MOD,
 };
 
-struct mpdccp_local_addr_event {
+struct pm_local_addr_event {
 	struct list_head list;
 	unsigned short	family;
 	u8	code;
@@ -51,8 +54,21 @@ struct mpdccp_local_addr_event {
 	union inet_addr addr;
 };
 
+struct mpdccp_confirm_opt {
+	u8 opt[MPDCCP_CONFIRM_SIZE];
+	u8 resent_cnt;
+	u32 t_init;
+	u32 t_timeout;
+};
+
+struct pm_retransmit_event {
+	struct list_head list;
+	struct sock *sk;
+	struct mpdccp_confirm_opt *cnf_opt;
+};
+
 /* Holds a single local interface address */
-struct mpdccp_local_addr {
+struct pm_local_addr {
 	struct list_head address_list;
 
 	/* Address family, IPv4/v6 address, Interface ID */
@@ -60,16 +76,18 @@ struct mpdccp_local_addr {
 	union inet_addr addr;
 	int if_idx;
 	u8 id;
-//	u8 next_v4_index;
-//	u8 next_v6_index;
 
 	struct rcu_head rcu;
 };
 
-struct mpdccp_remote_addr {
+struct mpdccp_addr {
 	struct list_head address_list;
 
-	/* Address family, IPv4/v6 address, Interface ID */
+	struct mpdccp_confirm_opt cnf_addaddr;
+	struct mpdccp_confirm_opt cnf_remaddr;
+	struct mpdccp_confirm_opt cnf_prio;
+
+	bool remote;
 	sa_family_t family;
 	union inet_addr addr;
 	u16 port;
@@ -84,39 +102,7 @@ static struct mpdccp_pm_ns *fm_get_ns(const struct net *net)
 	return (struct mpdccp_pm_ns *)net->mpdccp.path_managers[MPDCCP_PM_FULLMESH];
 }
 
-
-
-/***********************************
-* Path manager work queue
-************************************/
-
-
-/* The following two functions mpdccp_add_addr and mpdccp_del_addr
- * add or delete an address to/from both the global address list and all
- * existing connections. We assume that every operation produces a 
- * consistent state upon completion, i.e. if an address is not
- * in the list, it is not used in any connection. */
-static void mpdccp_send_remove_path(u8 addr_id, struct mpdccp_cb *mpcb)
-{
-	struct sock *sk = mpdccp_select_ann_sock(mpcb, addr_id);
-	if (sk){
-		mpcb->delpath_id = addr_id;
-		dccp_send_keepalive(sk);
-	}
-}
-
-static void mpdccp_send_add_path(struct mpdccp_local_addr *loc_addr, u16 port, struct mpdccp_cb *mpcb)
-{
-	struct sock *sk = mpdccp_select_ann_sock(mpcb, 0);
-	if (sk){
-		mpcb->addpath_id = loc_addr->id;
-		mpcb->addpath_family = loc_addr->family;
-		memcpy(mpcb->addpath_addr.all, loc_addr->addr.all, 4);
-		mpcb->addpath_port = port;
-		dccp_send_keepalive(sk);
-	}
-}
-
+/* calculate hmac for mp_addaddr and mp_removeaddr */
 static int pm_get_addr_hmac(struct mpdccp_cb *mpcb,
 							u8 id, sa_family_t family,
 							union inet_addr *addr, u16 port,
@@ -141,8 +127,52 @@ static int pm_get_addr_hmac(struct mpdccp_cb *mpcb,
 		return mpdccp_hmac_sha256(mpcb->dkeyB, mpcb->dkeylen, msg, len, hmac);
 }
 
+/* triggers MP_REMOVEADDR option with next packet */
+static void mpdccp_send_remove_path(struct mpdccp_cb *mpcb, u8 addr_id)
+{
+	struct sock *sk = mpdccp_select_ann_sock(mpcb, addr_id);
+	if (sk){
+		mpdccp_my_sock(sk)->delpath_id = addr_id;
+		dccp_send_keepalive(sk);
+	}
+}
+
+/* triggers MP_ADDADDR option with next packet */
+static void mpdccp_send_add_path(struct pm_local_addr *loc_addr, u16 port, struct mpdccp_cb *mpcb)
+{
+	struct sock *sk = mpdccp_select_ann_sock(mpcb, 0);
+	int len = 1;
+	u8 *buf = mpdccp_my_sock(sk)->addpath;
+	/* since MP_ADDADDR is variable in size buf[0] will hold the length of the option 
+		buf[1] -> buf[n] will hold the contents of the option */
+
+	if (!sk) return;
+
+	buf[len] = loc_addr->id;
+	len++;
+	if(loc_addr->family == AF_INET){
+		put_unaligned_be32(loc_addr->addr.ip, &buf[len]);
+		len += 4;
+	} else if(loc_addr->family == AF_INET6){
+		memcpy(&buf[len], loc_addr->addr.ip6, 16);
+		len += 16;
+	}
+
+	if(port){
+		put_unaligned_be16(port, &buf[len]);
+		len += 2;
+	}
+	buf[0] = len - 1;
+
+	pm_get_addr_hmac(mpcb, loc_addr->id, loc_addr->family, &loc_addr->addr, 
+			port, 1, mpdccp_my_sock(sk)->addpath_hmac);
+
+	dccp_send_keepalive(sk);
+}
+
 /* Use ip routing functions to figure out default source address and store address in mpcb*/
-static void mpdccp_get_mpcb_local_address(struct mpdccp_cb *mpcb, struct sockaddr_in *nexthop){
+static void mpdccp_get_mpcb_local_address(struct mpdccp_cb *mpcb, struct sockaddr_in *nexthop)
+{
 	struct sockaddr_in sin;
 	struct sock *sk = mpcb->meta_sk;
 
@@ -154,7 +184,7 @@ static void mpdccp_get_mpcb_local_address(struct mpdccp_cb *mpcb, struct sockadd
 		struct flowi4 *fl4;
 		struct inet_sock *inet = inet_sk(sk);
 		fl4 = &inet->cork.fl.u.ip4;
-		ip_route_connect(fl4, nexthop->sin_addr.s_addr, inet->inet_saddr, RT_CONN_FLAGS(sk), 
+		ip_route_connect(fl4, nexthop->sin_addr.s_addr, inet->inet_saddr, RT_CONN_FLAGS(sk),
 				sk->sk_bound_dev_if, IPPROTO_DCCP, inet->inet_sport, nexthop->sin_port, sk);
 		sin.sin_addr.s_addr = fl4->saddr;
 	}
@@ -163,128 +193,184 @@ static void mpdccp_get_mpcb_local_address(struct mpdccp_cb *mpcb, struct sockadd
 	mpcb->has_localaddr = 1;
 }
 
-static int pm_get_remote_id(struct mpdccp_cb *mpcb, union inet_addr *addr, sa_family_t family)
+/* stores address to paddress_list if not already in list */
+static void pm_add_addr(struct mpdccp_cb *mpcb, sa_family_t family, u8 id, union inet_addr *addr, u16 port, bool is_remote)
 {
-	struct mpdccp_remote_addr *raddr;
-	struct list_head *pos, *temp;
-	rcu_read_lock();
-	list_for_each_safe(pos, temp, &mpcb->premote_list) {
-		raddr = list_entry(pos, struct mpdccp_remote_addr, address_list);
-		if(family == raddr->family){
-			if(family == AF_INET && addr->ip == raddr->addr.ip){
-				rcu_read_unlock();
-				return raddr->id;
-			}
-		}
-	}
-	rcu_read_unlock();
-	return -1;
-}
-
-/* Wipe the remote address list */
-static void pm_free_remote_addr_list(struct mpdccp_cb *mpcb)
-{
-	struct mpdccp_remote_addr *addr;
-	struct list_head *pos, *temp;
-	list_for_each_safe(pos, temp, &mpcb->premote_list) {
-		addr = list_entry(pos, struct mpdccp_remote_addr, address_list);
-		mpdccp_pr_debug("removing remote address %pI4", &addr->addr.ip);
-		list_del(pos);
-		kfree(addr);
-	}
-	mpcb->cnt_remote_addrs = 0;
-}
-
-/* handles newly learned remote address from MP_ADDADDR option */
-static void pm_add_remote_addr(struct mpdccp_cb *mpcb, sa_family_t family, u8 id, union inet_addr *addr, u16 port)
-{
-	struct mpdccp_remote_addr *remote_addr;
-	struct list_head *rlist = &mpcb->premote_list;
+	struct mpdccp_addr *mp_addr;
 
 	rcu_read_lock();
-	list_for_each_entry_rcu(remote_addr, rlist, address_list) {
-		if (family == remote_addr->family) {							//allows to have ipv6 and ipv4 with the same id in memory
-			if (id == remote_addr->id ||								//does the id exist?
+	list_for_each_entry_rcu(mp_addr, &mpcb->paddress_list, address_list) {
+		if (mp_addr->remote == is_remote && family == mp_addr->family) {		//allows to have ipv6 and ipv4 with the same id in memory
+			if (id == mp_addr->id ||								//does the id exist?
 				(family == AF_INET  &&
-				remote_addr->addr.in.s_addr == addr->in.s_addr) ||		//does the ipv4 exist?
+				mp_addr->addr.in.s_addr == addr->in.s_addr) ||		//does the ipv4 exist?
 				(family == AF_INET6 &&
-				ipv6_addr_equal(&remote_addr->addr.in6, &addr->in6)))	//does the ipv6 exist?
+				ipv6_addr_equal(&mp_addr->addr.in6, &addr->in6)))	//does the ipv6 exist?
 			{
-				mpdccp_pr_debug("could not add remote address %pI4, id: %u", &addr->in.s_addr, id);
-				return;													// already exists
+				mpdccp_pr_debug("already have an entry for %s address %pI4, id: %u", 
+							(is_remote ? "remote" : "local"), &addr->in.s_addr, id);
+				return;
 			}
 		}
 	}
 
-	/*not in list add new entry*/
-	remote_addr = kzalloc(sizeof(*remote_addr), GFP_KERNEL);
-	remote_addr->family = family;
-	remote_addr->id = id;
-	remote_addr->port = port;
+	/* not in list add new entry */
+	mp_addr = kzalloc(sizeof(*mp_addr), GFP_KERNEL);
+	mp_addr->remote = is_remote;
+	mp_addr->family = family;
+	mp_addr->id = id;
+	mp_addr->port = port;
 
 	if (family == AF_INET) {
-		remote_addr->addr.in.s_addr = addr->in.s_addr;
-		mpdccp_pr_debug("Stored new remote IP %pI4:%u with id: %u", &addr->in, htons((unsigned)port), id);
+		mp_addr->addr.in.s_addr = addr->in.s_addr;
+		mpdccp_pr_debug("Stored new %s IP %pI4:%u with id: %u", 
+				(is_remote ? "remote" : "local"), &addr->in, htons((unsigned)port), id);
 	} else {
-		remote_addr->addr.in6 = addr->in6;
-		mpdccp_pr_debug("Stored new remote IP %pI6:%u with id: %u", &addr->in6, htons((unsigned)port), id);
+		mp_addr->addr.in6 = addr->in6;
+		mpdccp_pr_debug("Stored new %s IP %pI6:%u with id: %u", 
+				(is_remote ? "remote" : "local"), &addr->in6, htons((unsigned)port), id);
 	}
 	
-	list_add_tail_rcu(&remote_addr->address_list, &mpcb->premote_list);
-	mpcb->cnt_remote_addrs++;
+	list_add_tail_rcu(&mp_addr->address_list, &mpcb->paddress_list);
+	if(is_remote) mpcb->cnt_remote_addrs++;
 	rcu_read_unlock();
 	return;
 }
 
-/* closes all subflows with remote id == id_to_rm learned from MP_REMOVEADDR */
-static void pm_handle_rm_addr(u8 id_to_rm)
+/* remove id from address list, flushing the entire list is also possible */
+static void pm_del_addr(struct mpdccp_cb *mpcb, u8 id, bool is_remote, bool flush)
 {
-	struct sock *sk;
-	struct mpdccp_cb *mpcb;
-	struct mpdccp_remote_addr *remote_addr;
+	struct mpdccp_addr *mp_addr;
+	if(!id) id = mpcb->master_addr_id;
+	mpdccp_pr_debug("trying to remove address id %u from addr memory", id);
+	list_for_each_entry_rcu(mp_addr, &mpcb->paddress_list, address_list) {
+		if( flush || (mp_addr->remote == is_remote && mp_addr->id == id)) {
+			mpdccp_pr_debug("removing %s address %pI4", 
+					(mp_addr->remote ? "remote" : "local"), &mp_addr->addr.ip);
+
+			list_del_rcu(&mp_addr->address_list);
+			kfree_rcu(mp_addr, rcu);
+			if(is_remote)
+				mpcb->cnt_remote_addrs--;
+		}
+	}
+}
+
+static int pm_get_id_from_ip(struct mpdccp_cb *mpcb, union inet_addr *addr, sa_family_t family, bool is_remote)
+{
+	struct mpdccp_addr *mp_addr;
+	list_for_each_entry_rcu(mp_addr, &mpcb->paddress_list, address_list) {
+		if(!mp_addr->remote == is_remote) continue;
+		if(family == mp_addr->family){
+			if((family == AF_INET && addr->ip == mp_addr->addr.ip) || 
+						(family == AF_INET6 && addr->ip6 == mp_addr->addr.ip6))
+				return mp_addr->id;
+		}
+	}
+	return -1;
+}
+
+/*function that copies address with given ip from pathmanager namespace to mpcb address list, returns id */
+static int pm_claim_local_addr(struct mpdccp_cb *mpcb, sa_family_t family, union inet_addr *addr)
+{
+	struct mpdccp_pm_ns *pm_ns = fm_get_ns(sock_net(mpcb->meta_sk));
+	struct pm_local_addr *local_addr;
+	bool found;
 
 	rcu_read_lock();
-	mpdccp_for_each_conn(pconnection_list, mpcb) {
-		list_for_each_entry_rcu(remote_addr, &mpcb->premote_list, address_list) {
-			if(remote_addr->id == id_to_rm){
-				list_del_rcu(&remote_addr->address_list);
-				kfree_rcu(remote_addr, rcu);
-				mpcb->cnt_remote_addrs--;
-				break;
-			}
-		}
-		mpdccp_for_each_sk(mpcb, sk) {
-			if(mpdccp_my_sock(sk)->remote_addr_id == id_to_rm){
-				/* when we receive MP_REMOVEADDR the subflow is already dead
-				mpdccp_close_subflow(mpcb, sk, 0);*/
-				dccp_close(sk, 0);
-				mpdccp_pr_debug("deleting path with id: %u sk %p", id_to_rm, sk);
-			}
+	list_for_each_entry_rcu(local_addr, &pm_ns->plocal_addr_list, address_list) {
+		if (local_addr && family == local_addr->family &&
+					local_addr->addr.in.s_addr == addr->in.s_addr) {
+			found = true;
+			break;
 		}
 	}
 	rcu_read_unlock();
+	
+	if(!local_addr || !found){
+		mpdccp_pr_debug("pm was unable to claim address %pI4", &addr->in.s_addr);
+		return 0;
+	}
+
+	pm_add_addr(mpcb, local_addr->family, local_addr->id, &local_addr->addr, 0, false);
+	return local_addr->id;
 }
 
-static void pm_handle_rcv_prio(struct mpdccp_cb *mpcb, u8 prio, u8 id)
+/* remove id from list and closes all subflows with remote id == id learned from MP_REMOVEADDR option*/
+static void pm_handle_rm_addr(struct mpdccp_cb *mpcb, u8 id)
 {
 	struct sock *sk;
 	rcu_read_lock();
+	/* remove all sockets with id remote_id from subflow list */
 	mpdccp_for_each_sk(mpcb, sk) {
 		if(mpdccp_my_sock(sk)->remote_addr_id == id){
-			struct mpdccp_link_info *link;
-			link = mpdccp_ctrl_getcpylink(sk);
-			if (!link){
-				rcu_read_unlock();
-				return;
-			}
-
-			mpdccp_pr_debug("assigning prio %u - old prio %u to addr id %u sk (%p) is_copy: %i",
-				    prio, link->mpdccp_prio, id, sk, mpdccp_my_sock(sk)->link_iscpy);
-			mpdccp_my_sock(sk)->link_iscpy = 1;
-			mpdccp_set_prio(sk, prio);
-			mpdccp_link_put(link);
+			/* when we receive MP_REMOVEADDR the subflow is already dead
+			using mpdccp_close_subflow will keep the socket open until timeout */
+			//mpdccp_close_subflow(mpcb, sk, 0);
+			mpdccp_my_sock(sk)->closing += 2;
+			dccp_close(sk, 0);
+			mpdccp_pr_debug("deleting path with id: %u sk %p", id, sk);
 		}
 	}
+	//remove id from list
+	pm_del_addr(mpcb, id, true, false);
+	rcu_read_unlock();
+}
+
+/* Function is called when receiving mp_confirm for mp_removeaddr.
+ * It checks if it possible to free the global address id of the removed subflow */
+static void pm_free_id(const struct sock *meta_sk, u8 id) {
+	struct mpdccp_cb *mpcb;
+	struct sock *sk;
+	struct mpdccp_pm_ns *pm_ns;
+
+	mpdccp_for_each_conn(pconnection_list, mpcb) {
+		mpdccp_for_each_sk(mpcb, sk) {
+			if(mpdccp_my_sock(sk)->local_addr_id == id){
+				mpdccp_pr_debug("socket still in use cant free id: %u", id);
+				return;
+			}
+		}
+	}
+
+	pm_ns = fm_get_ns(sock_net(meta_sk));
+	spin_lock(&pm_ns->plocal_lock);
+	mpdccp_pr_debug("loc4_bits %llu removing id: %u", pm_ns->loc4_bits, id);
+	pm_ns->loc4_bits &= ~(1 << (id-1));
+	spin_unlock(&pm_ns->plocal_lock);
+}
+
+/*  handle received mp_prio option - clone link and set prio */
+static void pm_handle_rcv_prio(struct sock *sk, u8 prio, u64 seq)
+{
+	struct mpdccp_link_info *link;
+
+	rcu_read_lock();
+	link = mpdccp_ctrl_getlink(sk);
+
+	if(!link || prio == link->mpdccp_prio || 
+			seq < mpdccp_my_sock(sk)->last_prio_seq || !mpdccp_accept_prio){
+		if(!mpdccp_accept_prio)
+			mpdccp_pr_debug("mpdccp configured to ignore incoming mp_prio options");
+		if(seq < mpdccp_my_sock(sk)->last_prio_seq)
+			mpdccp_pr_debug("outdated mp_prio option detected");
+
+		mpdccp_link_put(link);
+		rcu_read_unlock();
+		return;
+	}
+
+	mpdccp_pr_debug("assigning prio %u - old prio %u to sk (%p)",
+			prio, link->mpdccp_prio, sk);
+	mpdccp_my_sock(sk)->prio_rcvrd = true;
+
+	if(link->is_devlink)		// create copy and change prio of new copy
+		mpdccp_link_cpy_set_prio(sk, prio); 
+	else						// change prio of this (virtual) link
+		mpdccp_link_change_mpdccp_prio(link, prio);
+
+	mpdccp_my_sock(sk)->last_prio_seq = seq;
+	mpdccp_link_put(link);
 	rcu_read_unlock();
 }
 
@@ -302,12 +388,11 @@ static int pm_handle_link_event(struct notifier_block *this,
 		rcu_read_lock();
 		mpdccp_for_each_conn(pconnection_list, mpcb) {
 			mpdccp_for_each_sk(mpcb, sk) {
-				if(!mpdccp_my_sock(sk)->link_iscpy && 
-					    mpdccp_my_sock(sk)->link_info->id == link->id){
+				if(!mpdccp_my_sock(sk)->prio_rcvrd && 
+					    mpdccp_my_sock(sk)->link_info->id == link->id)
 					mpdccp_init_announce_prio(sk);
-					rcu_read_unlock();
-					return NOTIFY_DONE;
-				}
+				else
+					mpdccp_my_sock(sk)->prio_rcvrd = false;
 			}
 		}
 		rcu_read_unlock();
@@ -320,48 +405,187 @@ static struct notifier_block mpdccp_pm_link_notifier = {
 };
 
 
-/* loops through plocal_addr_list and looks for matching address */
-static int mpdccp_find_address(struct mpdccp_pm_ns *pm_ns,
-				  sa_family_t family, const union inet_addr *addr, int if_idx, int *id)
+/* this function handles the retransmission queue */
+static void pm_retransmit_worker(struct work_struct *work)
 {
-	struct mpdccp_local_addr *local_addr;
-	struct list_head *pos, *temp;
-	int i = 0;
+	const struct delayed_work *delayed_work = container_of(work, struct delayed_work, work);
+	struct mpdccp_pm_ns *pm_ns = container_of(delayed_work, struct mpdccp_pm_ns, retransmit_worker);
+	struct pm_retransmit_event *event;
+	struct mpdccp_confirm_opt *my_opt;
+	const u32 now = pm_jiffies32;
 
-	rcu_read_lock();
-	list_for_each_safe(pos, temp, &pm_ns->plocal_addr_list) {
-		i += 1;
-		local_addr = list_entry(pos, struct mpdccp_local_addr, address_list);
-		if (local_addr && family == local_addr->family &&
-					(!if_idx || if_idx == local_addr->if_idx) &&
-					local_addr->addr.in.s_addr == addr->in.s_addr) {
-			*id = local_addr->id;
-			rcu_read_unlock();
-			return i;
+next_event:
+	event = list_first_entry_or_null(&pm_ns->retransmit, struct pm_retransmit_event, list);
+	if (!event)
+		return;
+
+	my_opt = event->cnf_opt;
+/* we loop through the list and check if retransmission timeout has surpassed */
+	if (now > my_opt->t_timeout){
+		u32 delay, age = now - my_opt->t_init;
+
+		/* initiate retransmission of option */
+		memcpy(&mpdccp_my_sock(event->sk)->reins_cache, &my_opt->opt[9], my_opt->opt[10]);
+		dccp_send_keepalive(event->sk);
+		my_opt->resent_cnt++;
+
+		mpdccp_pr_debug("Retransmitting (x%u) unconfirmed option after: %ums, type: %u",
+				my_opt->resent_cnt, jiffies_to_msecs(age), my_opt->opt[11]);
+
+		/* check if we still have retransmit tries. if yes, keep event in list and move to tail */
+		if (my_opt->resent_cnt < MPDCCP_CONFIRM_RETRANSMIT_TRIES){
+			/* calculate new timeout based of original timestamp(age) to remove */
+			delay = (my_opt->resent_cnt + 2) * MPDCCP_CONFIRM_RETRANSMIT_TIMEOUT - age;
+			my_opt->t_timeout = now + delay;
+
+			/* now calculate timeout for next event in list */
+			if (!list_is_singular(&pm_ns->retransmit))
+				list_move_tail(&event->list, &pm_ns->retransmit);
+		} else {
+			/* no retransmit tries left, del event */
+			list_del_rcu(&event->list);
+			kfree(event);
+		}
+		goto next_event;
+	} else
+		/* set new work queue timeout for remaining elements in list and exit */
+		queue_delayed_work(mpdccp_wq, &pm_ns->retransmit_worker, event->cnf_opt->t_timeout - now);
+}
+
+/*	this function queues a new retransmission event */
+static void pm_add_insert_rt_event(struct sock *sk, struct mpdccp_confirm_opt *my_opt){
+	struct mpdccp_cb *mpcb = get_mpcb(sk);
+	struct mpdccp_pm_ns *pm_ns = fm_get_ns(sock_net(mpcb->meta_sk));
+	struct pm_retransmit_event *event = kzalloc(sizeof(*event), GFP_KERNEL);
+
+	event->cnf_opt = my_opt;
+	event->sk = sk;
+	list_add_tail_rcu(&event->list, &pm_ns->retransmit);
+	mpdccp_pr_debug("Added retransmission event to queue");
+
+	/* Create work-queue */
+	if (!delayed_work_pending(&pm_ns->retransmit_worker))
+		queue_delayed_work(mpdccp_wq, &pm_ns->retransmit_worker, MPDCCP_CONFIRM_RETRANSMIT_TIMEOUT);
+}
+
+/*  remove option from reinsertion list. either because it was confirmed or because sk is closing
+	if my_opt is used, we only remove this specific option from list
+	if sk is used, we remove all options linked to sk from list
+	if we remove the first option on the list we also cancel the delayed work */
+static void pm_remove_rt_event(struct net *net, struct sock *sk, struct mpdccp_confirm_opt *my_opt){
+	struct mpdccp_pm_ns *pm_ns = fm_get_ns(net);
+	struct pm_retransmit_event *event;
+	bool first = true;
+
+next_event:
+
+	event = list_first_entry_or_null(&pm_ns->retransmit, struct pm_retransmit_event, list);
+	if(!event)
+		return;
+
+	if(event->cnf_opt == my_opt || event->sk == sk){
+		list_del_rcu(&event->list);
+		kfree(event);
+
+		if (first && delayed_work_pending(&pm_ns->retransmit_worker))
+			cancel_delayed_work(&pm_ns->retransmit_worker);
+
+		first = false;
+		mpdccp_pr_debug("Removed retransmission event");
+	}
+	goto next_event;
+}
+
+static void pm_del_retrans(struct net *net, struct sock *sk){
+	pm_remove_rt_event(net, sk, NULL);
+}
+
+/* returns pointer to right memory that stores info for option confirmation */
+static struct mpdccp_confirm_opt* get_cnf_mem(struct mpdccp_cb *mpcb, u8 id, u8 type)
+{
+	struct mpdccp_addr *mp_addr;
+
+	mpdccp_pr_debug("looking for address id: %u, opt_type %u", id, type);
+	list_for_each_entry_rcu(mp_addr, &mpcb->paddress_list, address_list) {
+		if (!mp_addr->remote && mp_addr->id == id) {
+			switch (type)
+			{
+				case DCCPO_MP_ADDADDR:
+					return &mp_addr->cnf_addaddr;
+				case DCCPO_MP_REMOVEADDR:
+					return &mp_addr->cnf_remaddr;
+				case DCCPO_MP_PRIO:
+					return &mp_addr->cnf_prio;
+			}
 		}
 	}
-	rcu_read_unlock();
-	return -1;
+	DCCP_CRIT("couldnt locate confirm memory for id %u", id);
+	return NULL;
 }
 
-/* returns the address id belonging to the ip address + interface */
-static int pm_get_local_id(const struct sock *meta_sk,
-				  sa_family_t family, union inet_addr *addr, int if_idx)
+/* Function is called when sending either mp_addaddr, mp_remoeaddr or mp_prio to store a copy */
+static void pm_store_confirm_opt(struct sock *sk, u8 *buf, u8 id, u8 type, u8 len)
 {
-	int index, id;
-	struct mpdccp_pm_ns *pm_ns = fm_get_ns(sock_net(meta_sk));
+	struct mpdccp_cb *mpcb = get_mpcb(sk);
+	u8 real_id = id ? id : mpcb->master_addr_id;		//if id = 0 we store master id
+	struct mpdccp_confirm_opt *new_opt = get_cnf_mem(mpcb, real_id, type);
 
-	index = mpdccp_find_address(pm_ns, family, addr, if_idx, &id);
-	if (index != -1) {
-		mpdccp_pr_debug("get_local_id returned id: %u for %pI4", id, &addr->in.s_addr);
-		return id;
+	if (new_opt) {
+		__be64 seq = cpu_to_be64((mpcb->mp_oall_seqno << 16));
+		rcu_read_lock();
+		new_opt->opt[0] = DCCPO_MULTIPATH;
+		new_opt->opt[1] = 9;
+		new_opt->opt[2] = DCCPO_MP_SEQ;
+		memcpy(&new_opt->opt[3], &seq, 6);
+		new_opt->opt[9] = DCCPO_MULTIPATH;
+		new_opt->opt[10] = len + 3;
+		new_opt->opt[11] = type;
+		memcpy(&new_opt->opt[12], buf, len);
+		
+		new_opt->t_init = pm_jiffies32;
+		new_opt->t_timeout = new_opt->t_init + MPDCCP_CONFIRM_RETRANSMIT_TIMEOUT;
+		new_opt->resent_cnt = 0;
+		rcu_read_unlock();
+
+		pm_add_insert_rt_event(sk, new_opt);
 	}
-	mpdccp_pr_debug("%s could not find address:%pI4 in memory.\n", __func__, &addr->in.s_addr);
-	return index;
 }
 
+/*  handle received mp_confirm option */
+static int pm_rcv_confirm_opt(struct mpdccp_cb *mpcb, u8 *rcv_opt, u8 id)
+{
+	u8 len = rcv_opt[10];
+	u8 type = rcv_opt[11];
+	struct mpdccp_confirm_opt *snt_opt = get_cnf_mem(mpcb, id, type);
+
+	if(!snt_opt){
+		DCCP_CRIT("could not recover a matching sent option");
+		return 1;
+	}
+
+	rcu_read_lock();
+	if(snt_opt && len == snt_opt->opt[10] && !memcmp(rcv_opt, snt_opt->opt, len)) {
+		mpdccp_pr_debug("mp_confirm matches sent option. txpe: %u, len %u", type, len);
+
+		/* only mp_removeaddr requires action after received confirm */
+		if(type == DCCPO_MP_REMOVEADDR) {
+			pm_del_addr(mpcb, id, false, false);
+			pm_free_id(mpcb->meta_sk, id);
+		}
+		rcu_read_unlock();
+		/* option was confirmed, stop retransmitting the option */
+		pm_remove_rt_event(sock_net(mpcb->meta_sk), NULL, snt_opt);
+		return 0;
+	}
+
+	DCCP_CRIT("mp_confirm does not match any stored option");
+	rcu_read_unlock();
+	return 1;
+}
+
+/* Pathmanager namespace related functions */
 /* Find the first free index in the bitfield */
-static int mpdccp_find_free_index(u8 bitfield)
+static int mpdccp_find_free_index(u64 bitfield)
 {
 	int i;
 	/* There are anyways no free bits... */
@@ -374,10 +598,15 @@ static int mpdccp_find_free_index(u8 bitfield)
 	return i;
 }
 
+/* The following two functions mpdccp_add_addr and mpdccp_del_addr
+ * add or delete an address to/from both the global address list and all
+ * existing connections. We assume that every operation produces a 
+ * consistent state upon completion, i.e. if an address is not
+ * in the list, it is not used in any connection. */
 static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
-			      			struct mpdccp_local_addr_event *event)
+			      			struct pm_local_addr_event *event)
 {
-	struct mpdccp_local_addr *local_addr;
+	struct pm_local_addr *local_addr;
 	struct mpdccp_cb *mpcb;
 
 	struct sockaddr 			*local;
@@ -429,11 +658,6 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
     local_addr->family = family;
 	local_addr->if_idx = if_idx;
 
-	if (!pm_ns->loc4_bits) {
-		pm_ns->loc4_bits = 0;
-		mpdccp_pr_debug("Initiating loc4_bits.\n");
-	}
-
 	loc_id = mpdccp_find_free_index(pm_ns->loc4_bits);
 
 	if (loc_id < 0) {
@@ -447,13 +671,13 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 	if (family == AF_INET) {
 	    local_addr->addr.in.s_addr = addr->in.s_addr;
 
-		mpdccp_pr_debug("updated IP %pI4 on ifidx %u, id: %u loc4: %u\n",
+		mpdccp_pr_debug("updated IP %pI4 on ifidx %u, id: %u loc4: %llu",
 			    &addr->in.s_addr, if_idx, local_addr->id, pm_ns->loc4_bits);
 	} else {
 		local_addr->addr.in6 = addr->in6;
 
-		mpdccp_pr_debug("updated IP %pI6 on ifidx %u\n",
-				&addr->in6, if_idx);
+		mpdccp_pr_debug("updated IP %pI6 on ifidx %u, id: %u loc4: %llu",
+				&addr->in6, if_idx, local_addr->id, pm_ns->loc4_bits);
 	}
 	
 	list_add_tail_rcu(&local_addr->address_list, plocal_addr_list);
@@ -504,6 +728,7 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 			/* send mp_addaddress */
 			if (!(mpcb->fallback_sp && (mpcb->cnt_subflows > 0))){
 				//add_init_server_conn(mpcb, backlog);
+				pm_add_addr(mpcb, family, local_addr->id, &local_addr->addr, port, false);
 				mpdccp_send_add_path(local_addr, port, mpcb);
 			}
 			break;
@@ -518,18 +743,19 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
 }
 
 static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
-			      struct mpdccp_local_addr_event *event)
+			      struct pm_local_addr_event *event)
 {
 
 	struct sock *sk;
 	struct mpdccp_cb *mpcb;
-	struct 	mpdccp_local_addr *local_addr;
+	struct 	pm_local_addr *local_addr;
 
 	sa_family_t family 			= event->family;
 	union inet_addr *addr 		= &event->addr;
     int if_idx 					= event->if_idx;
     int addr_id;
 	bool found 					= false;
+	bool in_use					= false;
 
 	struct list_head *plocal_addr_list = &pm_ns->plocal_addr_list;
 
@@ -560,17 +786,13 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 		}
 	}
 
-	/* Address is unknown, so it is not used in any connection. */
+	/* Address is unknown, so it can not be used in any connection. */
 	if(!found) 
 	{
 		spin_unlock(&pm_ns->plocal_lock);
 		//rcu_read_unlock_bh();
 		return false;
 	}
-
-	mpdccp_pr_debug("loc4_bits %u removing id: %u\n", pm_ns->loc4_bits, addr_id);
-	pm_ns->loc4_bits &= ~(1 << (addr_id-1));
-	mpdccp_pr_debug("loc4_bits updated: %u\n", pm_ns->loc4_bits);
 
 	/* Iterate over all connections and remove any socket that still
 	 * uses this address */
@@ -601,9 +823,11 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 						mpdccp_pr_debug("Deleting subflow socket %p with address %pI6.\n", sk, &sk->__sk_common.skc_v6_rcv_saddr);
 
 					addr_id = mpdccp_my_sock(sk)->local_addr_id;
+					in_use = true;
 					mpdccp_my_sock(sk)->delpath_sent = true;
 					mpdccp_close_subflow (mpcb, sk, 0);
-					mpdccp_send_remove_path(addr_id, mpcb);
+					mpdccp_send_remove_path(mpcb, addr_id);
+					pm_free_id(mpcb->meta_sk, addr_id);
 				}
 			}
 		}
@@ -632,18 +856,26 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 					else
 						mpdccp_pr_debug("Deleting listening socket %p with address %pI6.\n", sk, &sk->__sk_common.skc_v6_rcv_saddr);
 
-					mpdccp_close_subflow (mpcb, sk, 0);
+					//addr_id = mpdccp_my_sock(sk)->local_addr_id;
+					//in_use = true;
+					mpdccp_close_subflow (mpcb, sk, 1);
 				}
 			}
 		}
 	}
+
+	if(!in_use){
+		pm_ns->loc4_bits &= ~(1 << (addr_id-1));
+		mpdccp_pr_debug("loc4_bits updated: %llu, removed id: %u", pm_ns->loc4_bits, addr_id);
+	}
+
 	spin_unlock(&pm_ns->plocal_lock);
 	//rcu_read_unlock_bh();
 
 	return true;
 }
 
-static void mpdccp_local_address_worker(struct work_struct *work)
+static void pm_local_address_worker(struct work_struct *work)
 {
 	const struct delayed_work *delayed_work = container_of(work,
 							 struct delayed_work,
@@ -651,7 +883,7 @@ static void mpdccp_local_address_worker(struct work_struct *work)
 	struct mpdccp_pm_ns *pm_ns = container_of(delayed_work,
 						 struct mpdccp_pm_ns,
 						 address_worker);
-	struct mpdccp_local_addr_event *event = NULL;
+	struct pm_local_addr_event *event = NULL;
 
 next_event:
 	kfree(event);
@@ -660,7 +892,7 @@ next_event:
 	/* TODO: is _bh REALLY the right thing to do here? */
 	//rcu_read_lock_bh();
 	event = list_first_entry_or_null(&pm_ns->events,
-					 struct mpdccp_local_addr_event, list);
+					 struct pm_local_addr_event, list);
 	if (!event) {
 		/* No more events to work on */
 		//rcu_read_unlock_bh();
@@ -674,7 +906,6 @@ next_event:
 		if( !mpdccp_del_addr(pm_ns, event) ) {
 			mpdccp_pr_debug("Delete address failed: Address not found.\n");
 		}
-			
 	} else {
 		/* TODO: Filter link local and TUN devices */
 		if( !mpdccp_add_addr(pm_ns, event) ) {
@@ -692,10 +923,10 @@ next_event:
 * IPv4/v6 address event handling
 ************************************/
 
-static struct mpdccp_local_addr_event *lookup_similar_event(const struct net *net,
-						     const struct mpdccp_local_addr_event *event)
+static struct pm_local_addr_event *lookup_similar_event(const struct net *net,
+						     const struct pm_local_addr_event *event)
 {
-	struct mpdccp_local_addr_event *eventq;
+	struct pm_local_addr_event *eventq;
 	struct mpdccp_pm_ns *pm_ns = fm_get_ns(net);
 
 	list_for_each_entry(eventq, &pm_ns->events, list) {
@@ -715,31 +946,32 @@ static struct mpdccp_local_addr_event *lookup_similar_event(const struct net *ne
 }
 
 /* We already hold the net-namespace MPDCCP-lock */
-static void add_pm_event(struct net *net, const struct mpdccp_local_addr_event *event)
+static void add_pm_event(struct net *net, const struct pm_local_addr_event *event)
 {
-	struct mpdccp_local_addr_event *eventq = lookup_similar_event(net, event);
+	struct pm_local_addr_event *eventq = lookup_similar_event(net, event);
 	struct mpdccp_pm_ns *pm_ns = fm_get_ns(net);
+	int delay = 10;
 
 	if (eventq) {
 		switch (event->code) {
 		case MPDCCP_EVENT_DEL:
-			mpdccp_pr_debug("%s del old_code %u\n", __func__, eventq->code);
+			mpdccp_pr_debug("del old_code %u\n", eventq->code);
 			list_del(&eventq->list);
 			kfree(eventq);
 			break;
 		case MPDCCP_EVENT_ADD:
-			mpdccp_pr_debug("%s add old_code %u\n", __func__, eventq->code);
+			mpdccp_pr_debug("add old_code %u\n", eventq->code);
 			eventq->code = MPDCCP_EVENT_ADD;
 			return;
 		case MPDCCP_EVENT_MOD:
-			mpdccp_pr_debug("%s mod old_code %u\n", __func__, eventq->code);
+			mpdccp_pr_debug("mod old_code %u\n", eventq->code);
 			eventq->code = MPDCCP_EVENT_MOD;
 			return;
 		}
 	}
 
 	/* OK, we have to add the new address to the wait queue */
-	eventq = kmemdup(event, sizeof(struct mpdccp_local_addr_event), GFP_ATOMIC);
+	eventq = kmemdup(event, sizeof(struct pm_local_addr_event), GFP_ATOMIC);
 	if (!eventq)
 		return;
 
@@ -747,7 +979,7 @@ static void add_pm_event(struct net *net, const struct mpdccp_local_addr_event *
 
 	/* Create work-queue */
 	if (!delayed_work_pending(&pm_ns->address_worker))
-		queue_delayed_work(mpdccp_wq, &pm_ns->address_worker, msecs_to_jiffies(10));
+		queue_delayed_work(mpdccp_wq, &pm_ns->address_worker, msecs_to_jiffies(delay));
 }
 
 static void addr4_event_handler(const struct in_ifaddr *ifa, unsigned long event,
@@ -755,7 +987,7 @@ static void addr4_event_handler(const struct in_ifaddr *ifa, unsigned long event
 {
 	const struct net_device *netdev = ifa->ifa_dev->dev;
 	struct mpdccp_pm_ns *pm_ns = fm_get_ns(net);
-	struct mpdccp_local_addr_event mpevent;
+	struct pm_local_addr_event mpevent;
 
 	/* Do not create events for link-local interfaces and TUN devices */
 	if ( ifa->ifa_scope > RT_SCOPE_LINK 	||
@@ -937,7 +1169,7 @@ static void addr6_event_handler(const struct inet6_ifaddr *ifa, unsigned long ev
 	const struct net_device *netdev = ifa->idev->dev;
 	int addr_type = ipv6_addr_type(&ifa->addr);
 	struct mpdccp_pm_ns *pm_ns = fm_get_ns(net);
-	struct mpdccp_local_addr_event mpevent;
+	struct pm_local_addr_event mpevent;
 
 	if ( ifa->scope > RT_SCOPE_LINK 		||
 		 netdev->flags & IFF_POINTOPOINT	||
@@ -1003,7 +1235,9 @@ static int mpdccp_init_net(struct net *net)
 	INIT_LIST_HEAD(&pm_ns->plocal_addr_list);
 	spin_lock_init(&pm_ns->plocal_lock);
 	INIT_LIST_HEAD(&pm_ns->events);
-	INIT_DELAYED_WORK(&pm_ns->address_worker, mpdccp_local_address_worker);
+	INIT_DELAYED_WORK(&pm_ns->address_worker, pm_local_address_worker);
+	INIT_LIST_HEAD(&pm_ns->retransmit);
+	INIT_DELAYED_WORK(&pm_ns->retransmit_worker, pm_retransmit_worker);
 	pm_ns->net = net;
 	net->mpdccp.path_managers[MPDCCP_PM_FULLMESH] = pm_ns;
 
@@ -1013,10 +1247,10 @@ static int mpdccp_init_net(struct net *net)
 /* Wipe the local address list */
 static void dccp_free_local_addr_list(struct mpdccp_pm_ns *pm_ns)
 {
-	struct mpdccp_local_addr *addr;
+	struct pm_local_addr *addr;
 	struct list_head *pos, *temp;
 	list_for_each_safe(pos, temp, &pm_ns->plocal_addr_list) {
-		addr = list_entry(pos, struct mpdccp_local_addr, address_list);
+		addr = list_entry(pos, struct pm_local_addr, address_list);
 		list_del(pos);
 		kfree(addr);
 	}
@@ -1029,6 +1263,7 @@ static void mpdccp_exit_net(struct net *net)
 	pm_ns = net->mpdccp.path_managers[MPDCCP_PM_FULLMESH];
 	/* Stop the worker */
 	cancel_delayed_work_sync(&pm_ns->address_worker);
+	cancel_delayed_work_sync(&pm_ns->retransmit_worker);
 
 	/* Clean and free the list */
 	dccp_free_local_addr_list(pm_ns);
@@ -1116,7 +1351,7 @@ static int mpdccp_pm_init(void)
 {
     int ret = 0;
 
-    mpdccp_pm_addr_cache = kmem_cache_create("mpdccp_pm_addr", sizeof(struct mpdccp_local_addr),
+    mpdccp_pm_addr_cache = kmem_cache_create("mpdccp_pm_addr", sizeof(struct pm_local_addr),
                        0, SLAB_TYPESAFE_BY_RCU|SLAB_HWCACHE_ALIGN,
                        NULL);
     if (!mpdccp_pm_addr_cache) {
@@ -1217,7 +1452,7 @@ add_init_client_conn (
 	struct sockaddr			*remote_address,
 	int				socklen)
 {
-	struct mpdccp_local_addr 	*local;
+	struct pm_local_addr 	*local;
 	struct sockaddr 		*local_address;
 	struct sockaddr_in		*meta_v4_address;
 	struct sockaddr_in 		local_v4_address;
@@ -1246,7 +1481,7 @@ add_init_client_conn (
 		rema.in6 = ad6->sin6_addr;
 		port = ad6->sin6_port;
 	}
-	pm_add_remote_addr(mpcb, remote_address->sa_family, 0, &rema, port);
+	pm_add_addr(mpcb, remote_address->sa_family, 0, &rema, port, true);
 
 	if(mpcb->has_localaddr == 0)
 		mpdccp_get_mpcb_local_address(mpcb, (struct sockaddr_in *)remote_address);
@@ -1265,7 +1500,7 @@ add_init_client_conn (
 			ret = mpdccp_add_client_conn (mpcb, local_address, sizeof(struct sockaddr_in),
 				local->if_idx, remote_address, socklen);
 			if ((ret < 0) && (ret != -EINPROGRESS) ) {
-				mpdccp_pr_debug ("error in mpdccp_add_client_conn() for master subflow: %d", ret);
+				mpdccp_pr_debug ("error in mpdccp_add_client_conn() for master subflow: %d\n", ret);
 				goto out;
 			} else {
 				num++;
@@ -1329,7 +1564,7 @@ add_init_server_conn (
     struct mpdccp_cb		*mpcb,
     int				backlog)
 {
-    struct mpdccp_local_addr 	*local;
+    struct pm_local_addr 	*local;
     struct sockaddr 		*local_address;
     struct sockaddr_in 		local_v4_address;
     struct sockaddr_in6 	local_v6_address;
@@ -1396,13 +1631,20 @@ add_init_server_conn (
 static struct mpdccp_pm_ops mpdccp_pm_default = {
 	.add_init_server_conn	= add_init_server_conn,
 	.add_init_client_conn	= add_init_client_conn,
-	.get_local_id		= pm_get_local_id,
-	.rm_remote_addr		= pm_handle_rm_addr,
-	.add_remote_addr = pm_add_remote_addr,
-	.get_remote_id = pm_get_remote_id,
-	.free_remote_addr = pm_free_remote_addr_list,
-	.pm_hmac = pm_get_addr_hmac,
-	.handle_rcv_prio = pm_handle_rcv_prio,
+
+	.claim_local_addr = pm_claim_local_addr,
+	.get_id_from_ip = pm_get_id_from_ip,
+	.del_addr = pm_del_addr,
+	.add_addr = pm_add_addr,
+
+	.rcv_removeaddr_opt	= pm_handle_rm_addr,
+	.get_hmac = pm_get_addr_hmac,
+	.rcv_prio_opt = pm_handle_rcv_prio,
+
+	.rcv_confirm_opt = pm_rcv_confirm_opt,
+	.store_confirm_opt = pm_store_confirm_opt,
+	.del_retrans = pm_del_retrans,
+
 	.name 			= "default",
 	.owner 			= THIS_MODULE,
 };

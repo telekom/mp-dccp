@@ -11,7 +11,8 @@
 struct mpdccp_link_info {
 
 	struct list_head	link_list;
-	char			name[IFNAMSIZ+1];
+//	char			name[IFNAMSIZ+1];
+	char			name[64];
 	int			id;
 	u32			is_linked:1,
 				is_devlink:1,

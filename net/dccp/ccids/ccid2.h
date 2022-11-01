@@ -71,6 +71,10 @@ struct ccid2_hc_tx_sock {
 				tx_mdev_max,
 				tx_rttvar,
 				tx_rto,
+				tx_min_rtt,
+				tx_max_rtt,
+				tx_min_rtt_stamp,	        /* timestamp of min_rtt_us */
+				tx_max_rtt_stamp,	        /* timestamp of max_rtt_us */
 				tx_last_ack_recv;
 	u64			tx_rtt_seq:48;
 	struct timer_list	tx_rtotimer;

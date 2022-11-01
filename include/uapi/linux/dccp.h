@@ -250,6 +250,7 @@ enum dccp_packet_dequeueing_policy {
 #define MPDCCP_HMAC_SIZE 20
 
 #define MPDCCP_ADDADDR_SIZE 22
+#define MPDCCP_CONFIRM_SIZE 31
 
 /* MPDCCP version type */
 enum mpdccp_version {

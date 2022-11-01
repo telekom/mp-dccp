@@ -1063,6 +1063,12 @@ static void bbr_update_rt_prop(struct sock *sk, const struct rate_sample_dccp *r
 		hc->min_rtt_stamp = ccid5_jiffies32;
 		}
 
+	if (rs->rtt_us > 0 &&
+		hc->max_rtt_us <= rs->rtt_us){
+		hc->max_rtt_us = rs->rtt_us;
+		hc->max_rtt_stamp = ccid5_jiffies32;
+	}
+
 	//Equivalent to check_probe_rtt
 	if (bbr_probe_rtt_mode_ms > 0 && filter_expired &&
 	    !hc->idle_restart && hc->mode != BBR_PROBE_RTT) {
@@ -1467,6 +1473,7 @@ static int ccid5_hc_tx_init(struct ccid *ccid, struct sock *sk)
 	hc->tx_cwnd_used = 0;
 	hc->tx_pipe = 0;
 	hc->min_rtt_us = 0;
+	hc->max_rtt_us = 0;
 
 	hc->prior_cwnd = 0;
 	hc->tso_segs_goal = 0;	 /* default segs per skb until first ACK */
@@ -1479,6 +1486,7 @@ static int ccid5_hc_tx_init(struct ccid *ccid, struct sock *sk)
 	hc->probe_rtt_done_stamp = 0;
 	hc->probe_rtt_round_done = 0;
 	hc->min_rtt_stamp = ccid5_jiffies32;
+	hc->max_rtt_stamp = ccid5_jiffies32;
 
 
 	hc->has_seen_rtt = 0;
@@ -1540,6 +1548,14 @@ static void ccid5_hc_tx_get_info(struct sock *sk, struct tcp_info *info)
 	info->tcpi_snd_cwnd = ccid5_hc_tx_sk(sk)->tx_cwnd;
 	info->tcpi_last_data_sent = ccid5_hc_tx_sk(sk)->tx_lsndtime;
 	info->tcpi_last_ack_recv = (ccid5_hc_tx_sk(sk)->tx_last_ack_recv > 0) ? ccid5_jiffies32 - ccid5_hc_tx_sk(sk)->tx_last_ack_recv : 0;
+	
+	info->tcpi_min_rtt = ccid5_hc_tx_sk(sk)->min_rtt_us;
+	//calculate time since tx_min_rtt_stamp was set and store it in some unused var.
+	info->tcpi_last_ack_sent = (ccid5_hc_tx_sk(sk)->min_rtt_stamp > 0) ? ccid5_jiffies32 - ccid5_hc_tx_sk(sk)->min_rtt_stamp : 0;
+	
+	info->tcpi_snd_mss = ccid5_hc_tx_sk(sk)->max_rtt_us;
+	//calculate time since tx_min_rtt_stamp was set and store it in some unused var.
+	info->tcpi_rcv_mss = (ccid5_hc_tx_sk(sk)->max_rtt_stamp > 0) ? ccid5_jiffies32 - ccid5_hc_tx_sk(sk)->max_rtt_stamp : 0;
 }
 
 struct ccid_operations ccid5_ops = {

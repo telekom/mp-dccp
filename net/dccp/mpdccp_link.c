@@ -136,6 +136,16 @@ found:
 }
 EXPORT_SYMBOL(mpdccp_link_find_by_name);
 
+int mpdccp_link_change_name (struct mpdccp_link_info *link, struct sock *sk) {
+	char newname[64];
+
+	snprintf(newname, 64, "%s_%pI4:%u", link->ndev_name,
+				&sk->__sk_common.skc_daddr, sk->__sk_common.skc_dport);
+	strcpy(link->ndev_name, "mp_prio");
+	return mpdccp_link_sysfs_changename(link, newname);
+}
+EXPORT_SYMBOL(mpdccp_link_change_name);
+
 struct mpdccp_link_info*
 mpdccp_link_find_by_dev (
 	struct net_device	*dev)
@@ -788,10 +798,14 @@ mpdccp_link_free (
 	if (!link) return;
 	//mlk_lock;
 	if (!link->is_released) {
-printk ("mpdccp_link:: link not released yet (%s)\n",  MPDCCP_LINK_NAME(link));
-		mpdccp_link_get (link);
-		//mlk_unlock;
-		return;
+		mpdccp_pr_info ("mpdccp_link:: link not released yet (%s) ref cnt: %d",
+				MPDCCP_LINK_NAME(link), MPDCCP_LINK_REFCOUNT(link));
+		
+		if(strcmp(link->ndev_name, "mp_prio")) {
+			mpdccp_link_get (link);
+			return;
+		}
+		mpdccp_link_release_nolock(link);
 	}
 	if (MPDCCP_LINK_ISDEV(link)) {
 		mpdccp_pr_info ("mpdccp_link:: device link freed (dev=%s)\n", link->ndev_name);
@@ -807,6 +821,7 @@ void
 mpdccp_link_release (
 	struct mpdccp_link_info	*link)
 {
+	mpdccp_pr_info ("mpdccp_link:: named link %s released\n", link->name);
 	if (!link) return;
 	mlk_lock;
 	mpdccp_link_release_nolock (link);

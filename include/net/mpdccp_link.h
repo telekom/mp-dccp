@@ -84,6 +84,7 @@ MPDCCP_DEV_CHANGE(mpdccp_match_mask,u32)
 MPDCCP_DEV_CHANGE(mpdccp_send_mark,u32)
 MPDCCP_DEV_CHANGE(mpdccp_path_type,u32)
 MPDCCP_DEV_CHANGE(mpdccp_match_pathtype,u32)
+int mpdccp_link_change_name (struct mpdccp_link_info *link, struct sock *sk);
 int mpdccp_link_change_mpdccp_cgstalg(struct mpdccp_link_info *, const char *, size_t );
 static inline int dev_change_mpdccp_cgstalg(struct net_device *dev, const char *buf, size_t len)
 {

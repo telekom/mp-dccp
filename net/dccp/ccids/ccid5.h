@@ -111,7 +111,9 @@ struct ccid5_hc_tx_sock {
 
 	/* variables of BBR struct */
 	u32			min_rtt_us;
+	u32			max_rtt_us;
 	u32			min_rtt_stamp;	        /* timestamp of min_rtt_us */
+	u32			max_rtt_stamp;	        /* timestamp of min_rtt_us */
 	u32			probe_rtt_done_stamp;   /* end time for BBR_PROBE_RTT mode */
 	u32 		mode:3,		     /* current bbr_mode in state machine */
 				prev_ca_state:3,     /* CA state on previous ACK */

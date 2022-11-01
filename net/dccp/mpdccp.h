@@ -89,6 +89,7 @@ static const char *mpdccp_state_name(const int state)
 #endif
 
 extern bool mpdccp_debug;
+extern bool mpdccp_accept_prio;
 #ifdef CONFIG_IP_MPDCCP_DEBUG
 #define MPDCCP_PRINTK(enable, fmt, args...)   do { if (enable)                  \
                             printk_ratelimited(fmt, ##args);                    \
@@ -232,9 +233,8 @@ struct mpdccp_cb {
 	spinlock_t              plisten_list_lock;
 	/* Pointer to list of request sockets (client side) */
 	struct list_head __rcu  prequest_list;
-	/* Pointer to list of remote addresses (initial and learned) */
-	struct list_head __rcu  premote_list;
-
+	/* Pointer to list of addresses */
+	struct list_head __rcu  paddress_list;
 	/* kref for freeing */
 	struct kref             kref;
 	int			to_be_closed;
@@ -259,13 +259,7 @@ struct mpdccp_cb {
 	int                     remaddr_len;	// length of mpdccp_remote_addr;
 	u16			    server_port;	// Server only 
 	int			    backlog;
-	u8			announce_prio[3];				// id, prio, flag for send
 
-	u8              delpath_id;
-	u8			    addpath_id;
-	sa_family_t		addpath_family;
-	union inet_addr	addpath_addr;
-	u16			addpath_port;
 	int			up_reported;
 	u8 			master_addr_id;
 	int  		cnt_remote_addrs;
@@ -328,8 +322,31 @@ struct my_sock
 	
 	/* Path manager related data */
 	int     if_idx; /* Interface ID, used for event handling */
+
+/* following data is used for sending options*/
+
+	/* send mp_prio option with next packet:*/
+	u8  announce_prio;
+	bool prio_rcvrd;
+	/* prio was changed with this sequence number */
+	u64 last_prio_seq;
+
+	u8 delpath_id;
 	bool delpath_sent;
-	
+
+	/* addpath[0] is used for the length of the option */
+	u8 addpath[MPDCCP_ADDADDR_SIZE];
+	u8 addpath_hmac[MPDCCP_HMAC_SIZE];
+
+	u64 last_addpath_seq;
+
+	/* temporary memory for received options that require sending a confirm as response  */
+	u8 cnf_cache[MPDCCP_CONFIRM_SIZE];
+	u8 cnf_cache_len;
+
+	/* temporary memory for resending unconfirmed options, biggest possible option is MP_ADDADDR */
+	u8 reins_cache[MPDCCP_ADDADDR_SIZE];
+
 	/* Scheduler related data */
 	/* Limit in Bytes. Dont forget to adjust when increasing the
 	 * size of any scheduler's priv data struct*/
@@ -353,6 +370,7 @@ struct my_sock
 
 	/* Close in progress flag */
 	int	closing;
+	int saw_mp_close;
 };
 
 
@@ -400,7 +418,7 @@ int mpdccp_xmit_to_sk (struct sock *sk, struct sk_buff *skb);
 
 void mpdccp_init_announce_prio(struct sock *sk);
 int mpdccp_get_prio(struct sock *sk);
-int mpdccp_set_prio(struct sock *sk, int prio);
+int mpdccp_link_cpy_set_prio(struct sock *sk, int prio);
 
 /* Functions for authentication */
 int mpdccp_hash_key(const u8 *in, u8 inlen, u32 *token);
@@ -411,6 +429,7 @@ static inline struct mpdccp_cb *get_mpcb(const struct sock *sk)
 {
 	return MPDCCP_CB(sk);
 }
+
 static inline struct sock *mpdccp_getmeta (const struct sock *sk)
 {
 	struct mpdccp_cb *mpcb = MPDCCP_CB(sk);
@@ -423,10 +442,13 @@ static inline struct sock *dccp_sk_inv(const struct dccp_sock *dp)
 	return (struct sock *)dp;
 }
 
-static inline u8 get_id(struct sock *sk){
+static inline u8 get_id(struct sock *sk)
+{
     return chk_id(mpdccp_my_sock(sk)->local_addr_id, mpdccp_my_sock(sk)->mpcb->master_addr_id);
 }
 
+static inline void mpdccp_set_accept_prio(void){mpdccp_accept_prio = true;}
+static inline void mpdccp_set_ignore_prio(void){mpdccp_accept_prio = false;}
 
 #endif /* _MPDCCP_H */
 
