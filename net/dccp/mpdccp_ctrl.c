@@ -1012,6 +1012,9 @@ int mpdccp_close_subflow (struct mpdccp_cb *mpcb, struct sock *sk, int destroy)
     if (!mpcb || !sk || !mpdccp_my_sock(sk)) return -EINVAL;
     mpdccp_pr_debug("enter for %p role %s state %d closing %d", sk, dccp_role(sk), sk->sk_state, mpdccp_my_sock(sk)->closing);
 
+    if(mpcb->pm_ops->del_retrans)
+        mpcb->pm_ops->del_retrans(sock_net(mpcb->meta_sk), sk);
+
     /* This will call dccp_close() in process context (only once per socket) */
     if (!mpdccp_my_sock(sk)->closing) {
         mpdccp_my_sock(sk)->closing = 1;

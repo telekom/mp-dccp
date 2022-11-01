@@ -36,6 +36,7 @@
 /* Maximum lengths for module names */
 #define MPDCCP_PM_NAME_MAX          16
 
+#define pm_jiffies32	((u32)jiffies)
 /*
  * Namespace related functionality
  */
@@ -49,6 +50,9 @@ struct mpdccp_pm_ns {
 	struct list_head	plocal_addr_list;
 	spinlock_t		plocal_lock;
 	
+	struct list_head	retransmit;
+	struct delayed_work	retransmit_worker;
+
 	struct list_head	events;
 	struct delayed_work	address_worker;
 
@@ -75,6 +79,10 @@ struct mpdccp_pm_ops {
 	int 		(*get_hmac)				(struct mpdccp_cb*, u8, sa_family_t, union inet_addr*, u16, bool, u8*);
 	void		(*rcv_removeaddr_opt)   (struct mpdccp_cb*, u8);
 	void 		(*rcv_prio_opt)			(struct sock*, u8, u64);
+
+	int 		(*rcv_confirm_opt)		(struct mpdccp_cb*, u8*, u8);
+	void 		(*store_confirm_opt)	(struct sock*, u8*, u8, u8, u8);
+	void		(*del_retrans)			(struct net*, struct sock*);
 
 	char			name[MPDCCP_PM_NAME_MAX];
 	struct module		*owner;
