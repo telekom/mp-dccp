@@ -36,7 +36,7 @@ static bool ccid2_debug;
 #endif
 
 /* Function pointer to either get SRTT or MRTT ...*/
-u32 (*get_delay_val)(struct ccid2_hc_tx_sock *hc) = mrtt_as_delay;
+u32 (*get_delay_val)(struct ccid2_hc_tx_sock *hc) = ccid2_mrtt_as_delay;
 EXPORT_SYMBOL_GPL(get_delay_val);
 
 static int ccid2_hc_tx_alloc_seq(struct ccid2_hc_tx_sock *hc)

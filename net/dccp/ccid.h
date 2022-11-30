@@ -340,4 +340,13 @@ static inline void set_min_rtt_as_delayn(void){
 static inline void set_max_rtt_as_delayn(void){
     get_delay_valn = max_rtt_as_delayn;
 }
+
+/*
+ * Convert RFC 3390 larger initial window into an equivalent number of packets.
+ * This is based on the numbers specified in RFC 5681, 3.1.
+ */
+static inline u32 rfc3390_bytes_to_packets(const u32 smss)
+{
+        return smss <= 1095 ? 4 : (smss > 2190 ? 2 : 3);
+}
 #endif /* _CCID_H */

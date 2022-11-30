@@ -162,10 +162,10 @@ static inline bool ccid7_cwnd_network_limited(struct ccid7_hc_tx_sock *hc)
  * Convert RFC 3390 larger initial window into an equivalent number of packets.
  * This is based on the numbers specified in RFC 5681, 3.1.
  */
-static inline u32 ccid7_rfc3390_bytes_to_pkts(const u32 smss)
+/*static inline u32 ccid7_rfc3390_bytes_to_pkts(const u32 smss)
 {
 	return smss <= 1095 ? 4 : (smss > 2190 ? 2 : 3);
-}
+}*/
 
 /**
  * struct ccid7_hc_rx_sock  -  Receiving end of CCID-2 half-connection
