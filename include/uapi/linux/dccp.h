@@ -195,6 +195,8 @@ enum {
 	DCCPC_CCID2 = 2,
 	DCCPC_CCID3 = 3,
 	DCCPC_CCID5 = 5,
+	DCCPC_CCID6 = 6,
+	DCCPC_CCID7 = 7,
 
 #define DCCPC_TESTING_MIN	248
 #define DCCPC_TESTING_MAX	255
@@ -301,6 +303,7 @@ struct mpdccp_key {
 #define DCCP_SOCKOPT_MP_REORDER		22
 #define DCCP_SOCKOPT_CCID_RX_INFO	128
 #define DCCP_SOCKOPT_CCID_TX_INFO	192
+#define DCCP_SOCKOPT_CCID_LIM_RTO   193
 
 /* maximum number of services provided on the same listening port */
 #define DCCP_SERVICE_LIST_MAX_LEN      32

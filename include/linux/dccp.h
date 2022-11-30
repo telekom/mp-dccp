@@ -350,6 +350,13 @@ struct dccp_sock {
 	struct tasklet_struct		dccps_xmitlet;
 	struct timer_list		dccps_xmit_timer;
 	struct timer_list		dccps_rcv_timer;
+	
+	/* alerab: for ccid6 */
+	u32	data_segs_out;		/* total number of data segments sent. */
+	u64	dccps_wstamp_ns;	/* departure time for next sent data packet */
+	u64	dccps_clock_cache; 	/* cache last tcp_clock_ns() (see dccp_mstamp_refresh()) */
+	u64	dccps_mstamp;		/* most recent packet received/sent */
+	
 #if IS_ENABLED(CONFIG_DCCP_KEEPALIVE)
 	unsigned int		dccps_keepalive_enable;	  
 	unsigned int		dccps_keepalive_snd_intvl;

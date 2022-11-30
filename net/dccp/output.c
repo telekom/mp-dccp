@@ -43,6 +43,35 @@ static struct sk_buff *dccp_skb_entail(struct sock *sk, struct sk_buff *skb)
 	return skb_clone(sk->sk_send_head, gfp_any());
 }
 
+static void dccp_update_skb_after_send(struct sock *sk, unsigned int len, u64 prior_wstamp) {
+	struct dccp_sock *dp = dccp_sk(sk);
+
+	if (sk->sk_pacing_status != SK_PACING_NONE) {
+		unsigned long rate = sk->sk_pacing_rate;
+
+		/* Original sch_fq does not pace first 10 MSS */
+		if (rate != ~0UL && rate && dp->data_segs_out >= 10) {
+			u64 len_ns = div64_u64(len * NSEC_PER_SEC, rate);
+			u64 credit = dp->dccps_wstamp_ns - prior_wstamp;
+
+			/* take into account OS jitter */
+			len_ns -= min_t(u64, len_ns / 2, credit);
+			dp->dccps_wstamp_ns += len_ns;
+		}
+	}
+}
+
+/* Refresh clocks of a DCCP socket,
+ * ensuring monotically increasing values.
+ */
+static void dccp_mstamp_refresh(struct dccp_sock *dp)
+{
+	u64 val = tcp_clock_ns();
+
+	dp->dccps_clock_cache = val;
+	dp->dccps_mstamp = div_u64(val, NSEC_PER_USEC);
+}
+
 /*
  * All SKB's seen here are completely headerless. It is our
  * job to build the DCCP header, and pass the packet down to
@@ -57,6 +86,11 @@ static int dccp_transmit_skb(struct sock *sk, struct sk_buff *skb)
 		struct dccp_sock *dp = dccp_sk(sk);
 		struct dccp_skb_cb *dcb = DCCP_SKB_CB(skb);
 		struct dccp_hdr *dh;
+		unsigned int len = skb->len;
+
+		u64 prior_wstamp = dp->dccps_wstamp_ns;
+		dp->dccps_wstamp_ns = max(dp->dccps_wstamp_ns, dp->dccps_clock_cache); // alerab: check this
+    
 		/* XXX For now we're using only 48 bits sequence numbers */
 		const u32 dccp_header_size = sizeof(*dh) +
 					     sizeof(struct dccp_hdr_ext) +
@@ -72,8 +106,10 @@ static int dccp_transmit_skb(struct sock *sk, struct sk_buff *skb)
 		switch (dcb->dccpd_type) {
 		case DCCP_PKT_DATA:
 			set_ack = 0;
+			dp->data_segs_out++;
 			/* fall through */
 		case DCCP_PKT_DATAACK:
+			dp->data_segs_out++;
 		case DCCP_PKT_RESET:
 			break;
 
@@ -150,6 +186,9 @@ static int dccp_transmit_skb(struct sock *sk, struct sk_buff *skb)
 #if IS_ENABLED(CONFIG_DCCP_KEEPALIVE)
 		dp->dccps_lsndtime = tcp_jiffies32;
 #endif
+		if (!err) /* alerab: tcp uses a copy of skb, but we only need the len */
+			dccp_update_skb_after_send(sk, len, prior_wstamp);
+
 		return net_xmit_eval(err);
 	}
 	return -ENOBUFS;
@@ -289,6 +328,7 @@ static void dccp_xmit_packet(struct sock *sk)
 		DCCP_SKB_CB(skb)->dccpd_type = DCCP_PKT_DATA;
 	}
 
+	dccp_mstamp_refresh(dp); // alerab
 	err = dccp_transmit_skb(sk, skb);
 	if (err)
 		dccp_pr_debug("transmit_skb() returned err=%d\n", err);
@@ -541,6 +581,7 @@ EXPORT_SYMBOL_GPL(dccp_ctl_make_reset);
 int dccp_send_reset(struct sock *sk, enum dccp_reset_codes code)
 {
 	struct sk_buff *skb;
+  struct dccp_sock *dp = dccp_sk(sk);
 	/*
 	 * FIXME: what if rebuild_header fails?
 	 * Should we be doing a rebuild_header here?
@@ -559,6 +600,7 @@ int dccp_send_reset(struct sock *sk, enum dccp_reset_codes code)
 	DCCP_SKB_CB(skb)->dccpd_type	   = DCCP_PKT_RESET;
 	DCCP_SKB_CB(skb)->dccpd_reset_code = code;
 
+  dccp_mstamp_refresh(dp);
 	return dccp_transmit_skb(sk, skb);
 }
 
@@ -593,6 +635,7 @@ int dccp_connect(struct sock *sk)
 
 	DCCP_SKB_CB(skb)->dccpd_type = DCCP_PKT_REQUEST;
 
+  dccp_mstamp_refresh(dp);
 	dccp_transmit_skb(sk, dccp_skb_entail(sk, skb));
 	DCCP_INC_STATS(DCCP_MIB_ACTIVEOPENS);
 
@@ -608,6 +651,7 @@ EXPORT_SYMBOL_GPL(dccp_connect);
 void dccp_send_ack(struct sock *sk)
 {
 	struct sk_buff *skb;
+	int err;
 	/* If we have been reset, we may not send again. */
 	if (sk->sk_state != DCCP_CLOSED) {
 		skb = alloc_skb(sk->sk_prot->max_header, GFP_ATOMIC);
@@ -624,7 +668,7 @@ void dccp_send_ack(struct sock *sk)
 		/* Reserve space for headers */
 		skb_reserve(skb, sk->sk_prot->max_header);
 		DCCP_SKB_CB(skb)->dccpd_type = DCCP_PKT_ACK;
-		dccp_transmit_skb(sk, skb);
+		err = dccp_transmit_skb(sk, skb);
 	}
 }
 
@@ -683,6 +727,9 @@ void dccp_send_keepalive(struct sock *sk)
 		skb_reserve(skb, sk->sk_prot->max_header);
 		DCCP_SKB_CB(skb)->dccpd_type = DCCP_PKT_DATA;
 		dccp_pr_debug("enter dccp_send_ack just be transmit");
+    
+		dccp_mstamp_refresh(dccp_sk(sk));
+    
 		err = dccp_transmit_skb(sk, skb);
 		}
 
@@ -727,6 +774,7 @@ void dccp_send_delayed_ack(struct sock *sk)
 void dccp_send_sync(struct sock *sk, const u64 ackno,
 		    const enum dccp_pkt_type pkt_type)
 {
+  struct dccp_sock *dp = dccp_sk(sk);
 	/*
 	 * We are not putting this on the write queue, so
 	 * dccp_transmit_skb() will set the ownership to this
@@ -749,8 +797,9 @@ void dccp_send_sync(struct sock *sk, const u64 ackno,
 	 * Clear the flag in case the Sync was scheduled for out-of-band data,
 	 * such as carrying a long Ack Vector.
 	 */
-	dccp_sk(sk)->dccps_sync_scheduled = 0;
+	dp->dccps_sync_scheduled = 0;
 
+  dccp_mstamp_refresh(dp);
 	dccp_transmit_skb(sk, skb);
 }
 
