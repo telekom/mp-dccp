@@ -1,10 +1,11 @@
 /*  SPDX-License-Identifier: GNU General Public License v2 only (GPL-2.0-only)
  *
- * Copyright (C) 2022 by Alexander Rabitsch, Karlstad University for Deutsche Telekom AG
+ *  Copyright (C) 2022 by Alexander Rabitsch, Karlstad University for Deutsche Telekom AG
  *
  *  This code is a version of the BBR algorithm for the DCCP protocol.
  *	Due to that, it copies and adapts as much code as possible from 
- *	net/ipv4/tcp_bbr.c net/ipv4/tcp_rate.c and net/dccp/ccids/ccid2.c
+ *	net/ipv4/tcp_bbr.c, net/ipv4/tcp_rate.c, net/dccp/ccids/ccid5.c, 
+ *	and net/dccp/ccids/ccid2.c
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -609,7 +610,7 @@ static void ccid6_rtt_estimator(struct sock *sk, const long mrtt)
 /************************************************************/
 
 void ccid6_rate_skb_delivered(struct sock *sk, struct ccid6_seq *acked,
-				struct rate_sample_dccp *rs)
+				struct rate_sample_ccid6 *rs)
 {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	if (!acked->delivered_mstamp)
@@ -630,7 +631,7 @@ void ccid6_rate_skb_delivered(struct sock *sk, struct ccid6_seq *acked,
 	}
 }
 
-void ccid6_rate_gen(struct sock *sk, u32 delivered, u32 lost, u64 now, struct rate_sample_dccp *rs)
+void ccid6_rate_gen(struct sock *sk, u32 delivered, u32 lost, u64 now, struct rate_sample_ccid6 *rs)
 {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	s64 ack_us;
@@ -923,7 +924,7 @@ static u32 bbr_probe_rtt_cwnd (struct sock* sk) {
 	return max_t (u32, hc->params.cwnd_min_target, bbr_bdp (sk, bbr_bw (sk), hc->params.probe_rtt_cwnd_gain));
 } 
 
-static void bbr_set_cwnd (struct sock* sk, const struct rate_sample_dccp* rs, u32 acked, u32 bw, int gain, u32 cwnd, struct bbr_context* ctx) {
+static void bbr_set_cwnd (struct sock* sk, const struct rate_sample_ccid6* rs, u32 acked, u32 bw, int gain, u32 cwnd, struct bbr_context* ctx) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	struct dccp_sock *dp = dccp_sk(sk);
 	int r_seq_used = hc->tx_cwnd / dp->dccps_l_ack_ratio;
@@ -994,7 +995,7 @@ done:
 	ctx->log = (hc->tx_cwnd != prev_cwnd);
 } 
 
-static void bbr_update_round_start (struct sock* sk, const struct rate_sample_dccp* rs, struct bbr_context* ctx) {
+static void bbr_update_round_start (struct sock* sk, const struct rate_sample_ccid6* rs, struct bbr_context* ctx) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	hc->round_start = 0;
 
@@ -1004,7 +1005,7 @@ static void bbr_update_round_start (struct sock* sk, const struct rate_sample_dc
 	}
 }
 
-static void bbr_calculate_bw_sample (struct sock* sk, const struct rate_sample_dccp* rs, struct bbr_context* ctx) {
+static void bbr_calculate_bw_sample (struct sock* sk, const struct rate_sample_ccid6* rs, struct bbr_context* ctx) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 
 	u64 bw = 0;
@@ -1018,7 +1019,7 @@ static void bbr_calculate_bw_sample (struct sock* sk, const struct rate_sample_d
 	hc->debug.rs_bw = bw;
 } 
 
-static void bbr_update_ack_aggregation (struct sock* sk,const struct rate_sample_dccp* rs) {
+static void bbr_update_ack_aggregation (struct sock* sk,const struct rate_sample_ccid6* rs) {
 	u32 epoch_us, expected_acked, extra_acked;
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 
@@ -1052,7 +1053,7 @@ static void bbr_update_ack_aggregation (struct sock* sk,const struct rate_sample
 	} 
 }
 
-static void bbr_check_full_bw_reached (struct sock* sk, const struct rate_sample_dccp* rs) {
+static void bbr_check_full_bw_reached (struct sock* sk, const struct rate_sample_ccid6* rs) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 
 	u32 bw_thresh;
@@ -1070,7 +1071,7 @@ static void bbr_check_full_bw_reached (struct sock* sk, const struct rate_sample
 	hc->full_bw_reached = hc->full_bw_cnt >= hc->params.full_bw_cnt;
 } 
 
-static bool bbr_check_drain (struct sock* sk, const struct rate_sample_dccp* rs, struct bbr_context* ctx) {
+static bool bbr_check_drain (struct sock* sk, const struct rate_sample_ccid6* rs, struct bbr_context* ctx) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	if (hc->mode == BBR_STARTUP && bbr_full_bw_reached (sk)) {
 		hc->mode = BBR_DRAIN;
@@ -1099,7 +1100,7 @@ static void bbr_check_probe_rtt_done (struct sock* sk) {
 	bbr2_exit_probe_rtt (sk);
 }
 
-static void bbr_update_min_rtt (struct sock* sk, const struct rate_sample_dccp* rs) {
+static void bbr_update_min_rtt (struct sock* sk, const struct rate_sample_ccid6* rs) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	bool probe_rtt_expired, min_rtt_expired;
 	u32 expire;
@@ -1353,7 +1354,7 @@ static void bbr2_raise_inflight_hi_slope (struct sock* sk) {
 	hc->bw_probe_up_cnt = cnt;
 } 
 
-static void bbr2_probe_inflight_hi_upward (struct sock* sk, const struct rate_sample_dccp* rs) {
+static void bbr2_probe_inflight_hi_upward (struct sock* sk, const struct rate_sample_ccid6* rs) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	u32 delta;
 	// not sure about the below line
@@ -1372,7 +1373,7 @@ static void bbr2_probe_inflight_hi_upward (struct sock* sk, const struct rate_sa
 	} 
 } 
 
-static bool bbr2_is_inflight_too_high (const struct sock* sk, const struct rate_sample_dccp * rs) {
+static bool bbr2_is_inflight_too_high (const struct sock* sk, const struct rate_sample_ccid6 * rs) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	u32 loss_thresh, ecn_thresh;
 	if (rs->lost > 0 && rs->tx_in_flight) {
@@ -1390,7 +1391,7 @@ static bool bbr2_is_inflight_too_high (const struct sock* sk, const struct rate_
 	return false;
 } 
 
-static u32 bbr2_inflight_hi_from_lost_skb (const struct sock* sk, const struct rate_sample_dccp* rs, u32 pcount) {
+static u32 bbr2_inflight_hi_from_lost_skb (const struct sock* sk, const struct rate_sample_ccid6* rs, u32 pcount) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);		
 	u32 loss_thresh = hc->params.loss_thresh;
 	u32 divisor, inflight_hi;
@@ -1513,7 +1514,7 @@ static void bbr2_reset_congestion_signals (struct ccid6_hc_tx_sock *hc) {
 	hc->inflight_latest = 0;
 } 
 
-static void bbr2_update_congestion_signals (struct sock* sk, const struct rate_sample_dccp* rs, struct bbr_context* ctx) {
+static void bbr2_update_congestion_signals (struct sock* sk, const struct rate_sample_ccid6* rs, struct bbr_context* ctx) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	u64 bw;
 	hc->loss_round_start = 0;
@@ -1609,7 +1610,7 @@ static void bbr2_start_bw_probe_cruise (struct sock* sk) {
 	bbr2_set_cycle_idx (sk, BBR_BW_PROBE_CRUISE); 
 } 
 
-static void bbr2_handle_inflight_too_high (struct sock* sk, const struct rate_sample_dccp* rs) {
+static void bbr2_handle_inflight_too_high (struct sock* sk, const struct rate_sample_ccid6* rs) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	const u32 beta = hc->params.beta;
 	hc->prev_probe_too_high = 1;
@@ -1622,7 +1623,7 @@ static void bbr2_handle_inflight_too_high (struct sock* sk, const struct rate_sa
 	} 
 } 
 
-static bool bbr2_adapt_upper_bounds (struct sock* sk, const struct rate_sample_dccp* rs) {
+static bool bbr2_adapt_upper_bounds (struct sock* sk, const struct rate_sample_ccid6* rs) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	if (hc->ack_phase == BBR_ACKS_PROBE_STARTING && hc->round_start) {
 		hc->ack_phase = BBR_ACKS_PROBE_FEEDBACK;
@@ -1688,7 +1689,7 @@ static bool bbr2_check_time_to_cruise (struct sock* sk, u32 inflight, u32 bw) {
 	return is_under_bdp || is_long_enough;
 } 
 
-static void bbr2_update_cycle_phase (struct sock* sk, const struct rate_sample_dccp* rs) {
+static void bbr2_update_cycle_phase (struct sock* sk, const struct rate_sample_ccid6* rs) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	bool is_risky = false, is_queuing = false;
 	u32 inflight, bw;
@@ -1750,7 +1751,7 @@ static void bbr2_exit_probe_rtt (struct sock* sk) {
 	}
 } 
 
-static void bbr2_check_loss_too_high_in_startup (struct sock* sk, const struct rate_sample_dccp* rs) {
+static void bbr2_check_loss_too_high_in_startup (struct sock* sk, const struct rate_sample_ccid6* rs) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	if (bbr_full_bw_reached (sk)) {
 		return;
@@ -1767,7 +1768,7 @@ static void bbr2_check_loss_too_high_in_startup (struct sock* sk, const struct r
 	} 
 } 
 
-static void bbr2_check_drain (struct sock* sk, const struct rate_sample_dccp* rs, struct bbr_context* ctx) {
+static void bbr2_check_drain (struct sock* sk, const struct rate_sample_ccid6* rs, struct bbr_context* ctx) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	if (bbr_check_drain (sk, rs, ctx)) {
 		hc->mode = BBR_PROBE_BW;
@@ -1775,7 +1776,7 @@ static void bbr2_check_drain (struct sock* sk, const struct rate_sample_dccp* rs
 	}
 } 
 
-static void bbr2_update_model (struct sock* sk, const struct rate_sample_dccp* rs, struct bbr_context* ctx) {
+static void bbr2_update_model (struct sock* sk, const struct rate_sample_ccid6* rs, struct bbr_context* ctx) {
 	bbr2_update_congestion_signals (sk, rs, ctx);
 	bbr_update_ack_aggregation (sk, rs);
 	bbr2_check_loss_too_high_in_startup (sk, rs);
@@ -1785,7 +1786,7 @@ static void bbr2_update_model (struct sock* sk, const struct rate_sample_dccp* r
 	bbr_update_min_rtt (sk, rs);
 } 
 
-static bool bbr2_fast_path (struct sock* sk, bool* update_model, const struct rate_sample_dccp* rs, struct bbr_context* ctx) {
+static bool bbr2_fast_path (struct sock* sk, bool* update_model, const struct rate_sample_ccid6* rs, struct bbr_context* ctx) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 	u32 prev_min_rtt_us, prev_mode;
 	if (hc->params.fast_path && hc->try_fast_path && rs->is_app_limited && ctx->sample_bw < bbr_max_bw (sk) && !hc->loss_in_round && !hc->ecn_in_round) {
@@ -1802,7 +1803,7 @@ static bool bbr2_fast_path (struct sock* sk, bool* update_model, const struct ra
 	return false;
 } 
 
-void bbr2_main (struct sock* sk, const struct rate_sample_dccp* rs) {
+void bbr2_main (struct sock* sk, const struct rate_sample_ccid6* rs) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
 
 	struct bbr_context ctx = { 0 };
@@ -1908,7 +1909,7 @@ static void bbr2_init (struct sock* sk, struct ccid6_hc_tx_sock *hc) {
 /* Called when the given skb was just marked lost.*/
 static void bbr2_skb_marked_lost (struct sock* sk, const struct ccid6_seq* seqp) {
 	struct ccid6_hc_tx_sock *hc = ccid6_hc_tx_sk(sk);
-	struct rate_sample_dccp rs;
+	struct rate_sample_ccid6 rs;
 	
 	/* Capture "current" data over the full round trip of loss,
 	 * to have a better chance to see the full capacity of the path.
@@ -2121,8 +2122,8 @@ static void ccid6_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 	int done = 0;
 	bool not_rst = 0;
 	unsigned int maxincr = 0;
-	struct rate_sample_dccp rs_i = { .prior_delivered = 0 };
-	struct rate_sample_dccp *rs = &rs_i;
+	struct rate_sample_ccid6 rs_i = { .prior_delivered = 0 };
+	struct rate_sample_ccid6 *rs = &rs_i;
 	u32 delivered = hc->delivered;
 	u32 lost = hc->lost;
 	u64 now_mstamp;
@@ -2245,6 +2246,7 @@ static void ccid6_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 					ccid6_rate_skb_delivered(sk, seqp, rs);
 					if (seqp->ccid6s_seq == ackno)	{ 
 						rs->rtt_us = tcp_stamp_us_delta(now_mstamp, seqp->sent_mstamp);
+						hc->rtt_us = rs->rtt_us;
 					}
 				}
 				if (seqp == hc->tx_seqt) {

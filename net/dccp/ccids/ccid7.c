@@ -374,7 +374,7 @@ static void ccid7_cwnd_application_limited(struct sock *sk, const u32 now)
 {
 	struct ccid7_hc_tx_sock *hc = ccid7_hc_tx_sk(sk);
 	/* don't reduce cwnd below the initial window (IW) */
-	u32 init_win = ccid7_rfc3390_bytes_to_pkts(dccp_sk(sk)->dccps_mss_cache),
+	u32 init_win = rfc3390_bytes_to_packets(dccp_sk(sk)->dccps_mss_cache),
 	    win_used = max(hc->tx_cwnd_used, init_win);
 
 	if (win_used < hc->tx_cwnd) {
@@ -394,7 +394,7 @@ static void ccid7_cwnd_restart(struct sock *sk, const u32 now)
 {
 	struct ccid7_hc_tx_sock *hc = ccid7_hc_tx_sk(sk);
 	u32 cwnd = hc->tx_cwnd, restart_cwnd,
-	    iwnd = ccid7_rfc3390_bytes_to_pkts(dccp_sk(sk)->dccps_mss_cache);
+	    iwnd = rfc3390_bytes_to_packets(dccp_sk(sk)->dccps_mss_cache);
 	s32 delta = now - hc->tx_lsndtime;
 
 	hc->tx_ssthresh = max(hc->tx_ssthresh, (cwnd >> 1) + (cwnd >> 2));
@@ -944,7 +944,7 @@ static int ccid7_hc_tx_init(struct ccid *ccid, struct sock *sk)
   hc->exp_inc_rtotimer = 0;
 
 	/* Use larger initial windows (RFC 4341, section 5). */
-	hc->tx_cwnd = ccid7_rfc3390_bytes_to_pkts(dp->dccps_mss_cache);
+	hc->tx_cwnd = rfc3390_bytes_to_packets(dp->dccps_mss_cache);
 	hc->tx_expected_wnd = hc->tx_cwnd;
 
 	/* Make sure that Ack Ratio is enabled and within bounds. */

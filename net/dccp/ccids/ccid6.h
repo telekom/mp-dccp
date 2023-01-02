@@ -4,7 +4,8 @@
  *
  *  This code is a version of the BBR algorithm for the DCCP protocol.
  *	Due to that, it copies and adapts as much code as possible from 
- *	net/ipv4/tcp_bbr.c, net/dccp/ccids/ccid5.c, and net/dccp/ccids/ccid2.c
+ *	net/ipv4/tcp_bbr.c, net/ipv4/tcp_rate.c, net/dccp/ccids/ccid5.c, 
+ *	and net/dccp/ccids/ccid2.c
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -108,6 +109,8 @@ struct ccid6_hc_tx_sock {
 	u32			tx_last_cong;
 	u64			tx_high_ack;
 	struct list_head	tx_av_chunks;
+
+	u32                     rtt_us;
 
 	/* Rate sample population for BBR */
 	//struct skb_mstamp	 first_tx_mstamp;
@@ -283,7 +286,7 @@ struct ccid6_hc_tx_sock {
 	} debug;
 };
 
-struct rate_sample_dccp {
+struct rate_sample_ccid6 {
 	//u32	prior_mstamp;
 	//struct	skb_mstamp prior_mstamp; /* starting timestamp for interval */
 	u64  prior_mstamp;
