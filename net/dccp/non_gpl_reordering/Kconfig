@@ -2,8 +2,8 @@
 # Reordering
 menu  "MPDCCP non-gpl advanced reordering control"
 
-config MPDCCP_REORDER_FIXED
-	tristate "MPDCCP Fixed Reordering"
+config MPDCCP_REORDER_ACTIVE
+	tristate "MPDCCP Adaptive Reordering"
 	depends on IP_MPDCCP
 	---help---
 	  This is an advanced reordering engine. It features means of

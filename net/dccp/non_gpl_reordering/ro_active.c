@@ -51,6 +51,39 @@
  * notice.
  *
  * Licensor: Deutsche Telekom AG
+ *
+ * sysctl allows a configuration as follows:
+ *
+ * echo <val> > /proc/sys/net/mpdccp/mpdccp_active_reordering/<property>
+ *
+ * 1) property = adaptive : Configure active reordering to be adaptive.  
+ * 		a) val = 0 : fixed active reordering, timeout is a fixed value (*see 2) : to = const.
+ *		b) val = 1 : adaptive active reordering, timeout is an adaptive value derived from 
+ *		             fastest and slowest paths : to = max_latency - min_latency
+ *      c) val = 2 : equalized adaptive reordering, timeout is an adaptive value derived from 
+ *					 slowest and current path : to = max_latency - cur_latency, by that packets  
+ *					 from different paths show a different lifetime.
+ *
+ * 2) property = fixed_timeout : Configure a fixed packet lifetime/timeout used for fixed acitve 
+ *								 reordering and as initial value for adaptive algorithms.
+ *		a) val > 0 : in ms
+ *
+ * 3) property = adaptive_timeout_max : Configure an upper bound for adaptive timeout values.
+ *		a) val > 0 : in ms 
+ *
+ * 4) property = timeout_offset : Configure a fixed timeout offset used for adaptive approaches 
+ *                                to compensate variances. This will be done adaptively eventually.
+ *		a) val > 0 : in ms
+ *
+ * 5) property = loss_detection : Configure the used loss detection mechanism.
+ *		a) val = 0 : no (fast) loss detection
+ *		b) val = 1 : fast loss detection by overall sequencing
+ *		c) val = 2 : fast loss detection by path sequencing
+ *		d) val = 3 : fast loss detection by combining overall and path sequencing
+ *
+ * 6) property = drop_lost : Configure what to do when receiving lost packets.
+ *      a) val = 0 : forward packets to the application
+ *      b) val > 0 : drop packets
  */
 
 
@@ -130,16 +163,17 @@ DEFINE_SPINLOCK(active_cb_list_lock);
 LIST_HEAD(active_cb_list);
 
 /* sysctl properties */
-int sysctl_adaptive 		= 0;					// selection of adaptivness, not available
+int sysctl_adaptive 		= 0;					// selection of adaptivness, see description 1)
 int sysctl_fto 				= FTO_DEF; 				// fixed timeout [ms]
-int sysctl_ato_max 			= ATO_MAX; 				// maximum adaptive timeout, not available
-int sysctl_to_off 			= TO_OFF; 				// TimeOut OFFset for adaptive algorithms (to compensate variance) [ms], not available
+int sysctl_ato_max 			= ATO_MAX; 				// maximum adaptive timeout
+int sysctl_to_off 			= TO_OFF; 				// TimeOut OFFset for adaptive algorithms (to compensate variance) [ms]
 int sysctl_loss_detection 	= 0;					// selection of loss detection, see description 5)
 int sysctl_not_rcv_max 		= NOT_RCV_MAX;			// token threshold for activity monitoring
 int sysctl_rbuf_size 		= RBUF_SIZE;			// buffer size
 int sysctl_rtt_type 		= RTT_TYPE;				// selection of rtt type
 int sysctl_exp_to           = EXP_TO;               // expiry timeout
 int sysctl_drop_lost		= 0;					// drop of lost packets
+int sysctl_drop_dup		= 0;					// drop of duplicated packets
 
 /************************************************* 
  *     structures
@@ -147,6 +181,7 @@ int sysctl_drop_lost		= 0;					// drop of lost packets
 struct mpdccp_rbuf_entry{
 	struct sk_buff *skb;
 	ktime_t abs_to;                                 // timeout (absolute)
+	atomic64_t oall_seqno;
 };
 
 /*
@@ -210,6 +245,8 @@ void exp_timer_cb(unsigned long arg);
 
 // reconfigurability functions
 u64 get_fixed_to(struct active_cb *acb, u64 latency);
+u64 get_adaptive_to(struct active_cb *acb, u64 latency);
+u64 get_equalized_adatptive_to(struct active_cb *acb, u64 latency);
 char* set_adaptive(void);
 void detect_no_loss(struct active_cb *acb, struct mpdccp_reorder_path_cb *pcb);
 void detect_fast_loss_oall(struct active_cb *acb, struct mpdccp_reorder_path_cb *pcb);
@@ -362,6 +399,26 @@ void do_reorder_active_mod(struct rcv_buff *rb){
             else my_itr->pcb->not_rcv++;                                            // assign/increase token 
             ro_dbug3("RO-DEBUG: sk (0x%p) - tokens : %u", my_itr->pcb->sk, my_itr->pcb->not_rcv);
         }       
+        /* find max. and min. delay from all active links (which are active) */
+        if(my_itr->pcb->active){
+            /* update max. delay */
+            if(__max_sk(acb) == my_itr->pcb->sk) __max_lat_set(acb, mpdccp_get_lat(my_itr->pcb));
+            /* new slowest link */
+            else if(__max_lat(acb) < mpdccp_get_lat(my_itr->pcb)){
+                __max_lat_set(acb, mpdccp_get_lat(my_itr->pcb));
+                __max_sk_set(acb, my_itr->pcb->sk);
+                 ro_dbug3("RO-DEBUG: slowest acb: %p pcb: %p sk: %p lat: %u", acb, pcb, my_itr->pcb->sk, mpdccp_get_lat(my_itr->pcb));
+            } 
+
+            /* update min. delay */
+            if(__min_sk(acb) == my_itr->pcb->sk) __min_lat_set(acb, mpdccp_get_lat(my_itr->pcb));
+            /* new fastest link */
+            else if(__min_lat(acb) > mpdccp_get_lat(my_itr->pcb)){
+                __min_lat_set(acb, mpdccp_get_lat(my_itr->pcb));
+                __min_sk_set(acb, my_itr->pcb->sk);
+                ro_dbug3("RO-DEBUG: fastest acb: %p pcb: %p sk: %p lat: %u", acb, pcb, my_itr->pcb->sk, mpdccp_get_lat(my_itr->pcb));
+            } 
+        }
     }
     spin_unlock(&((acb->mpcb)->psubflow_list_lock));
 
@@ -382,6 +439,8 @@ void do_reorder_active_mod(struct rcv_buff *rb){
     else if(rb->oall_seqno < exp) {
         if (sysctl_drop_lost) {
             ro_dbug3("RO-DEBUG: dropping outdated packet seq: %llu pcb %p\n", (u64)rb->oall_seqno, pcb);
+  	    kfree_skb (rb->skb);
+   	    rb->skb = NULL;
             goto finished;
         } else {
             ro_dbug3("RO-DEBUG: forwarding outdated packet seq: %llu pcb %p\n", (u64)rb->oall_seqno, pcb);
@@ -450,14 +509,26 @@ void rbuf_insert(struct active_cb *acb, struct rcv_buff *rb, struct mpdccp_reord
 retry:
 	if(!__rbuf_entry(acb, rb->oall_seqno).skb){
 		__rbuf_entry(acb, rb->oall_seqno).skb = rb->skb;
-        __rbuf_entry(acb, rb->oall_seqno).abs_to = ktime_add_ms(mpdccp_get_now(), get_to(acb, mpdccp_get_lat(pcb))); 
-        ro_dbug3("RO-DEBUG: insert acb: %p pcb: %p to %llu", acb, pcb, get_to(acb, mpdccp_get_lat(pcb)));
+        	__rbuf_entry(acb, rb->oall_seqno).abs_to = ktime_add_ms(mpdccp_get_now(), get_to(acb, mpdccp_get_lat(pcb))); 
+        	ro_dbug3("RO-DEBUG: insert acb: %p pcb: %p to %llu", acb, pcb, get_to(acb, mpdccp_get_lat(pcb)));
 		__rbuf_size_inc(acb);
+		atomic64_set (&__rbuf_entry(acb, rb->oall_seqno).oall_seqno, rb->oall_seqno);
 
 		/* determine start and end of buffer */
 		if(__rbuf_last(acb) < rb->oall_seqno) __rbuf_last_set(acb, rb->oall_seqno);
 		if(__rbuf_next(acb) > rb->oall_seqno) __rbuf_next_set(acb, rb->oall_seqno);
 	}
+	else if (sysctl_drop_dup && rb->oall_seqno == (u64)atomic64_read (&__rbuf_entry(acb, rb->oall_seqno).oall_seqno)) {
+		/* drop duplicated packets */
+		kfree_skb (rb->skb);
+		rb->skb = NULL;
+	}
+#if 0
+	else if (rb->oall_seqno <= (u64)atomic64_read (&__rbuf_entry(acb, rb->oall_seqno).oall_seqno)) {
+		ro_warn("RO-WARN: overwriting packets"); 
+            	mpdccp_forward_skb(rb->skb, rb->mpcb);
+	}
+#endif
 	else{
 		ro_warn("RO-WARN: overwriting packets"); 
 		forward(acb, rb->oall_seqno);
@@ -596,18 +667,26 @@ void exp_timer_cb(unsigned long arg){
  * reordering.
  */
 u64 get_fixed_to(struct active_cb *acb, u64 latency){ return (u64)sysctl_fto; }
+u64 get_adaptive_to(struct active_cb *acb, u64 latency){ 
+	u64 ato = ((__max_lat(acb) - __min_lat(acb)) + sysctl_to_off);
+	return (ato < sysctl_ato_max) ? ato : sysctl_ato_max;
+}
+u64 get_equalized_adatptive_to(struct active_cb *acb, u64 latency){ 
+	u64 eato = (__max_lat(acb) - latency) + sysctl_to_off;
+	return (eato < sysctl_ato_max) ? eato : sysctl_ato_max;
+}
 char* set_adaptive(void){
 	switch(sysctl_adaptive){
 	case 0:
 fixed:
 		get_to = get_fixed_to;
 		return "FIXED";
-//	case 1:
-//		get_to = get_adaptive_to;
-//		return "ADAPTIVE";
-//	case 2:
-//		get_to = get_equalized_adatptive_to;
-//		return "EQUALIZED ADAPTIVE";
+	case 1:
+		get_to = get_adaptive_to;
+		return "ADAPTIVE";
+	case 2:
+		get_to = get_equalized_adatptive_to;
+		return "EQUALIZED ADAPTIVE";
 	default:
 		goto fixed;
 	}
@@ -793,14 +872,14 @@ fixed:
 			get_to = get_fixed_to;
 			ro_info("RO-INFO: > FIXED active reordering\n");	
 			break;
-		//case 1:
-		//	get_to = get_adaptive_to;
-		//	ro_info("RO-INFO: > ADAPTIVE active reordering\n");
-		//	break;
-		//case 2:
-		//	get_to = get_equalized_adatptive_to;
-		//	ro_info("RO-INFO: > EQUALIZED ADAPTIVE active reordering\n");
-		//	break;
+		case 1:
+			get_to = get_adaptive_to;
+			ro_info("RO-INFO: > ADAPTIVE active reordering\n");
+			break;
+		case 2:
+			get_to = get_equalized_adatptive_to;
+			ro_info("RO-INFO: > EQUALIZED ADAPTIVE active reordering\n");
+			break;
 		default:
 			goto fixed;
     	}
@@ -1030,6 +1109,28 @@ static int proc_drop_lost(struct ctl_table *table, int write,
 	return 0;
 }
 
+
+/**
+ * Configure drop of duplicated packet behaviour.
+ * 0   = duplicated packet are forwarded
+ * >0  = duplicated packets are dropped
+ */
+static int proc_drop_dup(struct ctl_table *table, int write,
+                void __user *buffer, size_t *lenp,
+                loff_t *ppos){
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	if (write && ret == 0){
+		if (sysctl_drop_dup) {
+			ro_info("RO-INFO: duplicated packets are DROPPED\n");
+		} else {
+			ro_info("RO-INFO: duplicated packets are FORWARDED\n");
+		}
+	}
+	return 0;
+}
+
 /**
  * ctl table
  */
@@ -1104,6 +1205,13 @@ static struct ctl_table mpdccp_reorder_active_table[] = {
         .maxlen = sizeof(int),
         .proc_handler = proc_drop_lost,
     },
+    {
+        .procname = "drop_dup",
+        .data = &sysctl_drop_dup,
+        .mode = 0644,
+        .maxlen = sizeof(int),
+        .proc_handler = proc_drop_dup,
+    },
     { }
 };
 
@@ -1138,7 +1246,7 @@ void cleanup_active_mod(void) {
 struct mpdccp_reorder_ops mpdccp_reorder_active_mod = {
 	.init = init_reorder_active_mod,
 	.do_reorder = do_reorder_active_mod,
-	.name = "fixed",
+	.name = "active",
 	.owner = THIS_MODULE,
 };
 
