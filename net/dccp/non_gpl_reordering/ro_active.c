@@ -53,8 +53,12 @@
  * Licensor: Deutsche Telekom AG
  *
  * sysctl allows a configuration as follows:
+ * 
+ * Enable Active reordering: echo active > proc/sys/net/mpdccp/mpdccp_reordering
  *
- * echo <val> > /proc/sys/net/mpdccp/mpdccp_active_reordering/<property>
+ * Once enabled, the following properties are configurable
+ *
+ * echo <val> > /proc/sys/mpdccp_active_reordering/<property>
  *
  * 1) property = adaptive : Configure active reordering to be adaptive.  
  * 		a) val = 0 : fixed active reordering, timeout is a fixed value (*see 2) : to = const.
