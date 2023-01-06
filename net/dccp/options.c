@@ -1053,11 +1053,17 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 {
 	struct mpdccp_cb *mpcb = get_mpcb(sk);
 	struct my_sock  *my_sk = mpdccp_my_sock(sk);
-	u8 mp_addr_id = get_id(sk);
+	u8 mp_addr_id = 0;
+
+	/* nothing to do here if my_sock is not available in sk_user_data */
+	if (my_sk == NULL)
+		return;
 
 	/* Skip if fallback to sp DCCP */
 	if (mpcb && mpcb->fallback_sp)
 		return;
+
+	mp_addr_id = get_id(sk);
 
 	/* Insert delay value (sub-flow specific) as DCCP option */
 	switch(DCCP_SKB_CB(skb)->dccpd_type){
