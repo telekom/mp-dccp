@@ -1467,6 +1467,8 @@ int dccp_feat_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 			if (is_mpdccp(sk) && server && (feat == DCCPF_MULTIPATH))
 				return dccp_mpcap_change_recv(dreq, fn, opt, val, len);
+			else if(!is_mpdccp(sk) && server && (feat == DCCPF_MULTIPATH))
+				dccp_push_empty_confirm(fn, DCCPF_MULTIPATH, 1);
 			else
 #endif
 				return dccp_feat_change_recv(fn, mandatory, opt, feat,
