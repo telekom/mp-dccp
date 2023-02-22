@@ -376,7 +376,7 @@ void do_reorder_active_mod(struct rcv_buff *rb){
       ro_dbug1("RO-DEBUG: new active subflow detected : pcb (0x%p) sk (0x%p)", pcb, pcb->sk);
     }
 
-    spin_lock(&((acb->mpcb)->psubflow_list_lock));
+    spin_lock_bh(&((acb->mpcb)->psubflow_list_lock));
     /* assign tokens to all other sublows but not this */
     list_for_each_entry(my_itr, &((acb->mpcb)->psubflow_list), sk_list) {
         if(!my_itr->pcb) continue;                                                  // skip not initialized links
@@ -424,12 +424,12 @@ void do_reorder_active_mod(struct rcv_buff *rb){
             } 
         }
     }
-    spin_unlock(&((acb->mpcb)->psubflow_list_lock));
+    spin_unlock_bh(&((acb->mpcb)->psubflow_list_lock));
 
     /* 
      * ### LOSS DETECTION:
      */
-    spin_lock(&acb->adaptive_cb_lock);
+    spin_lock_bh(&acb->adaptive_cb_lock);
     detect_loss(acb, pcb);
     pcb->last_oall_seqno = rb->oall_seqno;
     pcb->last_path_seqno = pcb->path_seqno;
@@ -469,7 +469,7 @@ finished:
 		rbuf_flush(acb, __exp(acb));
 	}
 
-    spin_unlock(&acb->adaptive_cb_lock);
+    spin_unlock_bh(&acb->adaptive_cb_lock);
 exit:
 	mpdccp_release_rcv_buff(&rb);
 	return;
@@ -641,7 +641,7 @@ void exp_timer_cb(unsigned long arg){
     }
 
     acb = rbuf->acb;
-    spin_lock(&acb->adaptive_cb_lock);
+    spin_lock_bh(&acb->adaptive_cb_lock);
     ro_dbug1("RO-DEBUG: timer (0x%p) elapsed, exp %llu", &rbuf->exp_timer, (u64)__exp(acb));
 
     /* forward all packets that are buffered */
@@ -654,7 +654,7 @@ void exp_timer_cb(unsigned long arg){
             cnt++;
         } 
     }
-    spin_unlock(&acb->adaptive_cb_lock);
+    spin_unlock_bh(&acb->adaptive_cb_lock);
     ro_dbug1("RO-DEBUG: %u packets expired", cnt);
 }
 
@@ -712,13 +712,13 @@ void detect_fast_loss_oall(struct active_cb *acb, struct mpdccp_reorder_path_cb 
     u64 min = U64_MAX;                          // latest received packet with lowest oaverall sequence number (tunnel-level)
     u64 oall_gap;
 
-    spin_lock(&((acb->mpcb)->psubflow_list_lock));
+    spin_lock_bh(&((acb->mpcb)->psubflow_list_lock));
 	list_for_each_entry(my_itr, &((acb->mpcb)->psubflow_list), sk_list) {
         if(!my_itr->pcb) continue;                                                  // skip not initialized links
         if(!my_itr->pcb->active) continue;                                          // skip inactive links
         min = (min > my_itr->pcb->oall_seqno) ? my_itr->pcb->oall_seqno : min;
     }
-    spin_unlock(&((acb->mpcb)->psubflow_list_lock));
+    spin_unlock_bh(&((acb->mpcb)->psubflow_list_lock));
 
     oall_gap = (__exp(acb) < min) ? (min - __exp(acb)) : 0;
     if (oall_gap) {
@@ -1034,14 +1034,14 @@ static int proc_rbuf_size(struct ctl_table *table, int write,
     	if(sysctl_rbuf_size >= 0){
     		if(!__is2n(sysctl_rbuf_size)) ro_warn("RO-WARN: chosen buffer size is not 2^n, this can lead to a performance degradation");
 
-    		spin_lock(&active_cb_list_lock);
+    		spin_lock_bh(&active_cb_list_lock);
 				list_for_each_entry_rcu(acb, &active_cb_list, list){
 					if(acb->rbuf.buf) kfree(acb->rbuf.buf);
 					acb->rbuf.buf = kmalloc(sizeof(struct sk_buff*) * sysctl_rbuf_size, GFP_ATOMIC);
 
 					ro_warn("RO-WARN: reset rbuf for acb (0x%p) to size : %d", acb, sysctl_rbuf_size);
 				}	
-			spin_unlock(&active_cb_list_lock);
+			spin_unlock_bh(&active_cb_list_lock);
 
     		ro_info("RO-INFO: > RBUF_SIZE : %d \n", sysctl_rbuf_size);
     		return 0;
