@@ -244,6 +244,13 @@ static int proc_mpdccp_accept_prio(struct ctl_table *table, int write,
 
 struct ctl_table mpdccp_table[] = {
 	{
+		.procname = "mpdccp_enabled",
+		.data = &mpdccp_enabled,
+		.maxlen = sizeof(int),
+		.mode = 0644,
+		.proc_handler = proc_dointvec,
+	},
+	{
 		.procname = "mpdccp_path_manager",
 		.maxlen = MPDCCP_PM_NAME_MAX,
 		.mode = 0644,

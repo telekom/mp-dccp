@@ -63,7 +63,7 @@ int dccp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	if (usin->sin_family != AF_INET)
 		return -EAFNOSUPPORT;
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
-	if (mpdccp_isactive(sk) > 0) {
+	if (mpdccp_isactive(sk) > 0 || try_mpdccp(sk) == 1) {
 		return mpdccp_connect (sk, uaddr, addr_len);
 	}
 #endif

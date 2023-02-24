@@ -84,14 +84,20 @@ _mpdccp_activate (
 	int		on)
 {
 	if (!sk) return -EINVAL;
-	mpdccp_pr_debug("activate mpdccp on socket\n");
+
+	if (!mpdccp_enabled) {
+		mpdccp_pr_debug ("mpdccp_enabled: %u, interrupting socket creation", mpdccp_enabled);
+		return -EINVAL;
+	}
 
 	if (on) {
+		mpdccp_pr_debug("activate mpdccp on socket %p\n", sk);
 		dccp_sk(sk)->mpdccp = (struct mpdccp_meta_cb) {
 								.magic = MPDCCP_MAGIC,
 								.mpcb = NULL,
 								.is_meta = 0};
 	} else {
+		mpdccp_pr_debug("deactivate mpdccp on socket %p\n", sk);
 		dccp_sk(sk)->mpdccp = (struct mpdccp_meta_cb) {
 								.magic = 0,
 								.mpcb = NULL,
@@ -1013,6 +1019,16 @@ static int _mpdccp_close_meta(struct sock *meta_sk)
 	return ret;
 }
 
+static int _mpdccp_try(struct sock *sk)
+{
+	if(!is_mpdccp(sk) && mpdccp_enabled == 1){
+		mpdccp_pr_debug ("mpdcc_enabled: 1, upgrading to mpdccp (%p)", sk);
+		_mpdccp_activate(sk,1);
+		return 1;
+	}
+	return 0;
+}
+
 int
 mpdccp_init_funcs (void)
 {
@@ -1034,6 +1050,7 @@ mpdccp_init_funcs (void)
 		.check_req = _mpdccp_check_req,
 		.create_master = _mpdccp_create_master,
 		.close_meta = _mpdccp_close_meta,
+		.try_mpdccp = _mpdccp_try,
 	};
 	mpdccp_pr_debug ("mpdccp functions initialized (.magic=%x)\n",
 				mpdccp_funcs.magic);

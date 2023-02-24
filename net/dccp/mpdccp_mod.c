@@ -51,6 +51,11 @@
 #include "mpdccp_pm.h"
 
 
+int mpdccp_enabled = 1;
+module_param(mpdccp_enabled, int, 0644);
+MODULE_PARM_DESC(mpdccp_enabled, "Enable MPDCCP");
+EXPORT_SYMBOL(mpdccp_enabled);
+
 bool mpdccp_debug;
 module_param(mpdccp_debug, bool, 0644);
 MODULE_PARM_DESC(mpdccp_debug, "Enable debug messages");
