@@ -653,7 +653,7 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
     local_addr = kmem_cache_zalloc(mpdccp_pm_addr_cache, GFP_ATOMIC);
     if (!local_addr) {
     	spin_unlock(&pm_ns->plocal_lock);
-		rcu_read_unlock_bh();
+	//rcu_read_unlock_bh();
 
         mpdccp_pr_debug("Failed to allocate memory for new local address.\n");
         
@@ -768,7 +768,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 	pr_info("RO: mpdccp_del_addr triggered...");
 
 	//rcu_read_lock_bh();
-	spin_lock(&pm_ns->plocal_lock);
+	spin_lock_bh(&pm_ns->plocal_lock);
 
 	/* Delete the address from the list of known addresses so that
 	 * new connections stop using it. */
@@ -794,7 +794,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 	/* Address is unknown, so it can not be used in any connection. */
 	if(!found) 
 	{
-		spin_unlock(&pm_ns->plocal_lock);
+		spin_unlock_bh(&pm_ns->plocal_lock);
 		//rcu_read_unlock_bh();
 		return false;
 	}
@@ -874,7 +874,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 		mpdccp_pr_debug("loc4_bits updated: %llu, removed id: %u", pm_ns->loc4_bits, addr_id);
 	}
 
-	spin_unlock(&pm_ns->plocal_lock);
+	spin_unlock_bh(&pm_ns->plocal_lock);
 	//rcu_read_unlock_bh();
 
 	return true;
