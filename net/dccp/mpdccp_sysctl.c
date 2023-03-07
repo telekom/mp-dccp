@@ -233,12 +233,8 @@ static int proc_mpdccp_accept_prio(struct ctl_table *table, int write,
 {
 	int ret = proc_dointvec(table, write, buffer, lenp, ppos);
 
-	if(ret == 0){
-		if(sysctl_mpdccp_accept_prio > 0)
-			mpdccp_set_accept_prio();
-		else
-			mpdccp_set_ignore_prio();
-	}
+	if(ret == 0)
+		mpdccp_set_accept_prio(sysctl_mpdccp_accept_prio);
 	return ret;
 }
 

@@ -372,7 +372,7 @@ static void pm_handle_rcv_prio(struct sock *sk, u8 prio, u64 seq)
 	if(link->is_devlink)		// create copy and change prio of new copy
 		mpdccp_link_cpy_set_prio(sk, prio); 
 	else						// change prio of this (virtual) link
-		mpdccp_link_change_mpdccp_prio(link, prio);
+		link->mpdccp_prio = prio;
 
 	mpdccp_my_sock(sk)->last_prio_seq = seq;
 	mpdccp_link_put(link);
@@ -392,6 +392,7 @@ static int pm_handle_link_event(struct notifier_block *this,
 
 		rcu_read_lock();
 		mpdccp_for_each_conn(pconnection_list, mpcb) {
+			if(mpcb->fallback_sp) continue;
 			mpdccp_for_each_sk(mpcb, sk) {
 				if(!mpdccp_my_sock(sk)->prio_rcvrd && 
 					    mpdccp_my_sock(sk)->link_info->id == link->id)
