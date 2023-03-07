@@ -88,7 +88,7 @@ static const char *mpdccp_state_name(const int state)
         return dccp_state_names[state];
 }
 #endif
-
+extern int mpdccp_enabled;
 extern bool mpdccp_debug;
 extern bool mpdccp_accept_prio;
 #ifdef CONFIG_IP_MPDCCP_DEBUG
