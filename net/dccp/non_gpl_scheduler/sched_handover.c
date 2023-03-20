@@ -7,8 +7,8 @@
  * MPDCCP - Handover scheduler kernel module
  *
  * A Handover style scheduler. All traffic is sent through the sufblows
- * marked as active (prio = 0). If no active flows are available, traffic
- * is routed through the subflows marked as backup (any prio different to 0).
+ * marked as active (prio > 1). If no active flows are available, traffic
+ * is routed through the subflows marked as backup (prio = 1).
  * Based on CPF scheduler.
  *
  * This is not Open Source software. 
@@ -72,11 +72,11 @@ static struct sock *get_subflow_from_selectors(struct mpdccp_cb *mpcb, bool *the
 	struct sock		*best_sk = NULL;
 	struct tcp_info		info;
 	struct tcp_info		*infop = &info;
-	struct mpdccp_link_info	*link;    
-	__u8			priority = 0;
+	struct mpdccp_link_info	*link;
+	__u8			priority;
 
-	/* Initialise to arbitrarily high (max) value */
-	__u8			min_prio = ~((__u8)0);
+	/* Initialise to arbitrarily low (min) value */
+	__u8			min_prio = 1;
 	u32			min_srtt = ~((u32)0);
 	
 	mpdccp_for_each_sk(mpcb, sk) {
@@ -108,7 +108,7 @@ static struct sock *get_subflow_from_selectors(struct mpdccp_cb *mpcb, bool *the
 			continue;
 		}
 		ccid_hc_tx_get_info(dccp_sk(sk)->dccps_hc_tx_ccid, sk, infop);
-		if (priority < min_prio ||
+		if (priority > min_prio ||
 			(priority == min_prio && infop->tcpi_rtt < min_srtt)) {
 			min_prio = priority;
 			min_srtt = infop->tcpi_rtt;
