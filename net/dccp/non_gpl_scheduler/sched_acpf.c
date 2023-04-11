@@ -392,11 +392,11 @@ struct sock *schedule_acpf(struct mpdccp_cb *mpcb)
 	struct dccp_sock *dp;
 	struct tcp_info info;
 	struct tcp_info *infop = &info;
-	__u8 priority = 0;
+	__u8 priority;
 	struct mpdccp_link_info *link;
+	__u8 min_prio = 1;
 
 	/* Initialise to arbitrarily high (max) value */
-	__u8 min_prio = ~((__u8) 0);
 	u32 min_srtt = ~((u32) 0);
 
 	mpdccp_for_each_sk(mpcb, sk) {
@@ -422,13 +422,13 @@ struct sock *schedule_acpf(struct mpdccp_cb *mpcb)
 			priority = link->mpdccp_prio;
 			//mpdccp_pr_debug("socket %p has link prio %d (link %d)", sk, priority, link->id);
 		} else {
-			priority = 0;
+			priority = 3;
 			//mpdccp_pr_debug ("cannot get link for sk %p - use prio 0\n", sk);
 		}
 		mpdccp_link_put(link);
 
 		ccid_hc_tx_get_info(dp->dccps_hc_tx_ccid, sk, infop);
-		if (priority < min_prio ||
+		if (priority > min_prio ||
 		    (priority == min_prio && infop->tcpi_rtt < min_srtt)) {
 			min_prio = priority;
 			min_srtt = infop->tcpi_rtt;
