@@ -452,7 +452,7 @@ static void ccid5_rtt_estimator(struct sock *sk, const long mrtt)
 /************************************************************/
 
 void dccp_rate_skb_delivered(struct sock *sk, struct ccid5_seq *acked,
-			    struct rate_sample_dccp *rs)
+			    struct rate_sample_ccid5 *rs)
 {
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
 	if (!acked->delivered_mstamp)
@@ -473,7 +473,7 @@ void dccp_rate_skb_delivered(struct sock *sk, struct ccid5_seq *acked,
 		}
 }
 
-void dccp_rate_gen(struct sock *sk, u32 delivered, u32 lost, u64 now, struct rate_sample_dccp *rs)
+void dccp_rate_gen(struct sock *sk, u32 delivered, u32 lost, u64 now, struct rate_sample_ccid5 *rs)
 {
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
 	s64 ack_us;
@@ -647,7 +647,7 @@ static u32 bbr_target_cwnd(struct sock *sk, u32 bw, int gain)
 }
 
 static bool bbr_set_cwnd_to_recover_or_restore(
-	struct sock *sk, const struct rate_sample_dccp *rs, u32 acked, u32 *new_cwnd)
+	struct sock *sk, const struct rate_sample_ccid5 *rs, u32 acked, u32 *new_cwnd)
 {
 
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
@@ -690,7 +690,7 @@ static bool bbr_set_cwnd_to_recover_or_restore(
 }
 
 
-static void bbr_set_cwnd(struct sock *sk, const struct rate_sample_dccp *rs,
+static void bbr_set_cwnd(struct sock *sk, const struct rate_sample_ccid5 *rs,
 			 u32 acked, u32 bw, int gain)
 {
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
@@ -754,7 +754,7 @@ done:
 
 
 static bool bbr_is_next_cycle_phase(struct sock *sk,
-				    const struct rate_sample_dccp *rs)
+				    const struct rate_sample_ccid5 *rs)
 {
 
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
@@ -805,7 +805,7 @@ static void bbr_advance_cycle_phase(struct sock *sk)
 }
 
 static void bbr_update_cycle_phase(struct sock *sk,
-				   const struct rate_sample_dccp *rs)
+				   const struct rate_sample_ccid5 *rs)
 {
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
 
@@ -882,7 +882,7 @@ static void bbr_lt_bw_interval_done(struct sock *sk, u32 bw)
 	bbr_reset_lt_bw_sampling_interval(hc);
 }
 
-static void bbr_lt_bw_sampling(struct sock *sk, const struct rate_sample_dccp *rs)
+static void bbr_lt_bw_sampling(struct sock *sk, const struct rate_sample_ccid5 *rs)
 {
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
 	u32 lost, delivered;
@@ -952,7 +952,7 @@ static void bbr_lt_bw_sampling(struct sock *sk, const struct rate_sample_dccp *r
 	bbr_lt_bw_interval_done(sk, bw);
 }
 
-static void bbr_update_btl_bw(struct sock *sk, const struct rate_sample_dccp *rs)
+static void bbr_update_btl_bw(struct sock *sk, const struct rate_sample_ccid5 *rs)
 {
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
 	u64 bw;
@@ -999,7 +999,7 @@ static void bbr_save_cwnd(struct sock *sk)
 }
 
 static void bbr_check_full_bw_reached(struct sock *sk,
-				      const struct rate_sample_dccp *rs)
+				      const struct rate_sample_ccid5 *rs)
 {
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
 	u32 bw_thresh;
@@ -1018,7 +1018,7 @@ static void bbr_check_full_bw_reached(struct sock *sk,
 	hc->full_bw_reached = hc->full_bw_cnt >= bbr_full_bw_cnt;
 }
 
-static void bbr_check_drain(struct sock *sk, const struct rate_sample_dccp *rs)
+static void bbr_check_drain(struct sock *sk, const struct rate_sample_ccid5 *rs)
 {
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
 
@@ -1033,7 +1033,7 @@ static void bbr_check_drain(struct sock *sk, const struct rate_sample_dccp *rs)
 		bbr_reset_probe_bw_mode(sk);  /* we estimate queue is drained */
 }
 
-static void bbr_update_rt_prop(struct sock *sk, const struct rate_sample_dccp *rs)
+static void bbr_update_rt_prop(struct sock *sk, const struct rate_sample_ccid5 *rs)
 {
 	
 	struct ccid5_hc_tx_sock *hc = ccid5_hc_tx_sk(sk);
@@ -1227,8 +1227,8 @@ static void ccid5_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 	int done = 0;
 	bool not_rst = 0;
 	unsigned int maxincr = 0;
-	struct rate_sample_dccp rs_i = { .prior_delivered = 0 };
-	struct rate_sample_dccp *rs = &rs_i;
+	struct rate_sample_ccid5 rs_i = { .prior_delivered = 0 };
+	struct rate_sample_ccid5 *rs = &rs_i;
 	u32 bw;
 	u32 delivered = hc->delivered;
 	u32 lost = hc->lost;
@@ -1342,7 +1342,8 @@ static void ccid5_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 					hc->tx_pipe--;
 					dccp_rate_skb_delivered(sk, seqp, rs);
 					if (seqp->ccid5s_seq == ackno)	{ 
-						rs->rtt_us = tcp_stamp_us_delta(now_mstamp, seqp->sent_mstamp);			
+						rs->rtt_us = tcp_stamp_us_delta(now_mstamp, seqp->sent_mstamp);
+						hc->rtt_us = rs->rtt_us;
 					}
 				}
 				if (seqp == hc->tx_seqt) {

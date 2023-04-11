@@ -96,7 +96,7 @@ struct ccid2_hc_tx_sock {
 /**
  * Obtain SRTT value form CCID2 TX sock.
  */
-static inline u32 srtt_as_delay(struct ccid2_hc_tx_sock *hc){
+static inline u32 ccid2_srtt_as_delay(struct ccid2_hc_tx_sock *hc){
 	dccp_pr_debug("srtt value : %u", hc->tx_srtt);
 	if(hc){ return hc->tx_srtt;	}
 	else{ return 0; }
@@ -106,7 +106,7 @@ static inline u32 srtt_as_delay(struct ccid2_hc_tx_sock *hc){
  * Obtain MRTT value form CCID2 TX sock.
  * NOTE: value is scaled by 8 to match SRTT
  */
-static inline u32 mrtt_as_delay(struct ccid2_hc_tx_sock *hc){
+static inline u32 ccid2_mrtt_as_delay(struct ccid2_hc_tx_sock *hc){
 	dccp_pr_debug("mrtt value : %u", hc->tx_mrtt);
 	if(hc){ return (hc->tx_mrtt * 8); }
 	else{ return 0;	}
@@ -116,11 +116,11 @@ static inline u32 mrtt_as_delay(struct ccid2_hc_tx_sock *hc){
 extern u32 (*get_delay_val)(struct ccid2_hc_tx_sock *hc);
 
 static inline void set_srtt_as_delay(void){
-	get_delay_val = srtt_as_delay;
+	get_delay_val = ccid2_srtt_as_delay;
 }
 
 static inline void set_mrtt_as_delay(void){
-	get_delay_val = mrtt_as_delay;
+	get_delay_val = ccid2_mrtt_as_delay;
 }
 
 
@@ -133,10 +133,10 @@ static inline bool ccid2_cwnd_network_limited(struct ccid2_hc_tx_sock *hc)
  * Convert RFC 3390 larger initial window into an equivalent number of packets.
  * This is based on the numbers specified in RFC 5681, 3.1.
  */
-static inline u32 rfc3390_bytes_to_packets(const u32 smss)
+/*static inline u32 rfc3390_bytes_to_packets(const u32 smss)
 {
 	return smss <= 1095 ? 4 : (smss > 2190 ? 2 : 3);
-}
+}*/
 
 /**
  * struct ccid2_hc_rx_sock  -  Receiving end of CCID-2 half-connection

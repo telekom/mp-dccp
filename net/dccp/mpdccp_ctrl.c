@@ -523,8 +523,11 @@ static void mpdccp_close_worker(struct work_struct *work)
     /* Try again later if the wq is not empty, otherwise dccp_close will invalidate it causing a crash */
     if (skwq_has_sleeper(wq))
         schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, msecs_to_jiffies(200));
-    else
+    else{
+        if(my_sk->closing == 2)
+            dccp_disconnect(sk, 0);
         dccp_close(sk, 0);
+    }
 }
 
 void subflow_write_space(struct sock *sk)
@@ -1018,7 +1021,7 @@ int mpdccp_close_subflow (struct mpdccp_cb *mpcb, struct sock *sk, int destroy)
 
     /* This will call dccp_close() in process context (only once per socket) */
     if (!mpdccp_my_sock(sk)->closing) {
-        mpdccp_my_sock(sk)->closing = 1;
+        mpdccp_my_sock(sk)->closing = destroy;
         mpdccp_pr_debug("Close socket(%p)", sk);
         schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, 0);
     }

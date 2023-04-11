@@ -87,7 +87,7 @@ static const char *mpdccp_state_name(const int state)
         return dccp_state_names[state];
 }
 #endif
-
+extern int mpdccp_enabled;
 extern bool mpdccp_debug;
 extern bool mpdccp_accept_prio;
 #ifdef CONFIG_IP_MPDCCP_DEBUG
@@ -447,8 +447,7 @@ static inline u8 get_id(struct sock *sk)
     return chk_id(mpdccp_my_sock(sk)->local_addr_id, mpdccp_my_sock(sk)->mpcb->master_addr_id);
 }
 
-static inline void mpdccp_set_accept_prio(void){mpdccp_accept_prio = true;}
-static inline void mpdccp_set_ignore_prio(void){mpdccp_accept_prio = false;}
+static inline void mpdccp_set_accept_prio(int val) { mpdccp_accept_prio = val; }
 
 #endif /* _MPDCCP_H */
 

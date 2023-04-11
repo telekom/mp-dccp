@@ -241,7 +241,7 @@ static void pm_add_addr(struct mpdccp_cb *mpcb, sa_family_t family, u8 id, union
 static void pm_del_addr(struct mpdccp_cb *mpcb, u8 id, bool is_remote, bool flush)
 {
 	struct mpdccp_addr *mp_addr;
-	if(!id) id = mpcb->master_addr_id;
+	if(!is_remote && !id) id = mpcb->master_addr_id;
 	mpdccp_pr_debug("trying to remove address id %u from addr memory", id);
 	list_for_each_entry_rcu(mp_addr, &mpcb->paddress_list, address_list) {
 		if( flush || (mp_addr->remote == is_remote && mp_addr->id == id)) {
@@ -304,11 +304,8 @@ static void pm_handle_rm_addr(struct mpdccp_cb *mpcb, u8 id)
 	/* remove all sockets with id remote_id from subflow list */
 	mpdccp_for_each_sk(mpcb, sk) {
 		if(mpdccp_my_sock(sk)->remote_addr_id == id){
-			/* when we receive MP_REMOVEADDR the subflow is already dead
-			using mpdccp_close_subflow will keep the socket open until timeout */
-			//mpdccp_close_subflow(mpcb, sk, 0);
-			mpdccp_my_sock(sk)->closing += 2;
-			dccp_close(sk, 0);
+			/* when we receive MP_REMOVEADDR the subflow is already dead */
+			mpdccp_close_subflow(mpcb, sk, 2);
 			mpdccp_pr_debug("deleting path with id: %u sk %p", id, sk);
 		}
 	}
@@ -367,7 +364,7 @@ static void pm_handle_rcv_prio(struct sock *sk, u8 prio, u64 seq)
 	if(link->is_devlink)		// create copy and change prio of new copy
 		mpdccp_link_cpy_set_prio(sk, prio); 
 	else						// change prio of this (virtual) link
-		mpdccp_link_change_mpdccp_prio(link, prio);
+		link->mpdccp_prio = prio;
 
 	mpdccp_my_sock(sk)->last_prio_seq = seq;
 	mpdccp_link_put(link);
@@ -387,6 +384,7 @@ static int pm_handle_link_event(struct notifier_block *this,
 
 		rcu_read_lock();
 		mpdccp_for_each_conn(pconnection_list, mpcb) {
+			if(mpcb->fallback_sp) continue;
 			mpdccp_for_each_sk(mpcb, sk) {
 				if(!mpdccp_my_sock(sk)->prio_rcvrd && 
 					    mpdccp_my_sock(sk)->link_info->id == link->id)
@@ -648,7 +646,7 @@ static int mpdccp_add_addr(struct mpdccp_pm_ns *pm_ns,
     local_addr = kmem_cache_zalloc(mpdccp_pm_addr_cache, GFP_ATOMIC);
     if (!local_addr) {
     	spin_unlock(&pm_ns->plocal_lock);
-		rcu_read_unlock_bh();
+	//rcu_read_unlock_bh();
 
         mpdccp_pr_debug("Failed to allocate memory for new local address.\n");
         
@@ -763,7 +761,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 	pr_info("RO: mpdccp_del_addr triggered...");
 
 	//rcu_read_lock_bh();
-	spin_lock(&pm_ns->plocal_lock);
+	spin_lock_bh(&pm_ns->plocal_lock);
 
 	/* Delete the address from the list of known addresses so that
 	 * new connections stop using it. */
@@ -789,7 +787,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 	/* Address is unknown, so it can not be used in any connection. */
 	if(!found) 
 	{
-		spin_unlock(&pm_ns->plocal_lock);
+		spin_unlock_bh(&pm_ns->plocal_lock);
 		//rcu_read_unlock_bh();
 		return false;
 	}
@@ -825,7 +823,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 					addr_id = mpdccp_my_sock(sk)->local_addr_id;
 					in_use = true;
 					mpdccp_my_sock(sk)->delpath_sent = true;
-					mpdccp_close_subflow (mpcb, sk, 0);
+					mpdccp_close_subflow (mpcb, sk, 1);
 					mpdccp_send_remove_path(mpcb, addr_id);
 					pm_free_id(mpcb->meta_sk, addr_id);
 				}
@@ -869,7 +867,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 		mpdccp_pr_debug("loc4_bits updated: %llu, removed id: %u", pm_ns->loc4_bits, addr_id);
 	}
 
-	spin_unlock(&pm_ns->plocal_lock);
+	spin_unlock_bh(&pm_ns->plocal_lock);
 	//rcu_read_unlock_bh();
 
 	return true;
@@ -1074,7 +1072,7 @@ static int mpdccp_pm_dccp_event(struct notifier_block *this,
 #if 0
 				/* Handle close events for both the subflow and meta sockets */
 				if (mpcb->meta_sk == sk_closed) {
-					mpdccp_close_subflow(mpcb, sk, 0);
+					mpdccp_close_subflow(mpcb, sk, 1);
 					mpdccp_pr_debug("close dccp sk %p", sk_closed);
 				}
 				else

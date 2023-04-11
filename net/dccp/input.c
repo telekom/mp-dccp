@@ -31,6 +31,17 @@ static void dccp_enqueue_skb(struct sock *sk, struct sk_buff *skb)
 	sk->sk_data_ready(sk);
 }
 
+/* Refresh clocks of a DCCP socket,
+ * ensuring monotically increasing values.
+ */
+static void dccp_mstamp_refresh(struct dccp_sock *dp)
+{
+	u64 val = tcp_clock_ns();
+
+	dp->dccps_clock_cache = val;
+	dp->dccps_mstamp = div_u64(val, NSEC_PER_USEC);
+}
+
 static void dccp_fin(struct sock *sk, struct sk_buff *skb)
 {
 	/*
@@ -379,6 +390,8 @@ discard:
 int dccp_rcv_established(struct sock *sk, struct sk_buff *skb,
 			 const struct dccp_hdr *dh, const unsigned int len)
 {
+	dccp_mstamp_refresh(dccp_sk(sk)); // alerab
+  
 	if (dccp_check_seqno(sk, skb))
 		goto discard;
 
@@ -708,6 +721,8 @@ int dccp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
 			return 0;
 		goto discard;
 	}
+
+	dccp_mstamp_refresh(dp); // alerab
 
 	switch (sk->sk_state) {
 	case DCCP_REQUESTING:

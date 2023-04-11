@@ -101,6 +101,8 @@ struct ccid5_hc_tx_sock {
 	u64			tx_high_ack;
 	struct list_head	tx_av_chunks;
 
+	u32                     rtt_us;
+
 	/* Rate sample population for BBR */
 	//struct skb_mstamp	 first_tx_mstamp;
 	u64			first_tx_mstamp;
@@ -158,7 +160,7 @@ struct ccid5_hc_tx_sock {
 	u64			prior_seqwin;
 };
 
-struct rate_sample_dccp {
+struct rate_sample_ccid5 {
 	//u32	prior_mstamp;
 	//struct	skb_mstamp prior_mstamp; /* starting timestamp for interval */
 	u64  prior_mstamp;
@@ -179,7 +181,7 @@ struct rate_sample_dccp {
 /**
  * Obtain SRTT value form CCID5 TX sock.
  */
-static inline u32 srtt_as_delay(struct ccid5_hc_tx_sock *hc){
+static inline u32 ccid5_srtt_as_delay(struct ccid5_hc_tx_sock *hc){
 	dccp_pr_debug("srtt value : %u", hc->tx_srtt);
 	if(hc){ return hc->tx_srtt;	}
 	else{ return 0; }
@@ -189,7 +191,7 @@ static inline u32 srtt_as_delay(struct ccid5_hc_tx_sock *hc){
  * Obtain MRTT value form CCID2 TX sock.
  * NOTE: value is scaled by 8 to match SRTT
  */
-static inline u32 mrtt_as_delay(struct ccid5_hc_tx_sock *hc){
+static inline u32 ccid5_mrtt_as_delay(struct ccid5_hc_tx_sock *hc){
 	dccp_pr_debug("mrtt value : %u", hc->tx_mrtt);
 	if(hc){ return (hc->tx_mrtt * 8); }
 	else{ return 0;	}
@@ -223,10 +225,10 @@ static inline bool ccid5_cwnd_network_limited(struct ccid5_hc_tx_sock *hc)
  * Convert RFC 3390 larger initial window into an equivalent number of packets.
  * This is based on the numbers specified in RFC 5681, 3.1.
  */
-static inline u32 rfc3390_bytes_to_packets(const u32 smss)
+/*static inline u32 rfc3390_bytes_to_packets(const u32 smss)
 {
 	return smss <= 1095 ? 4 : (smss > 2190 ? 2 : 3);
-}
+}*/
 
 /**
  * struct ccid2_hc_rx_sock  -  Receiving end of CCID-2 half-connection

@@ -605,7 +605,7 @@ static u8 dccp_feat_is_valid_sp_val(u8 feat_num, u8 val)
 {
 	switch (feat_num) {
 	case DCCPF_CCID:
-		return (val == DCCPC_CCID2 || val == DCCPC_CCID3 || val == DCCPC_CCID5);
+		return (val == DCCPC_CCID2 || val == DCCPC_CCID3 || val == DCCPC_CCID5 || val == DCCPC_CCID6 || val == DCCPC_CCID7);
 	/* Type-check Boolean feature values: */
 	case DCCPF_SHORT_SEQNOS:
 	case DCCPF_ECN_INCAPABLE:
@@ -941,6 +941,10 @@ static const struct ccid_dependency *dccp_feat_ccid_deps(u8 ccid, bool is_local)
 	case DCCPC_CCID3:
 		return ccid3_dependencies[is_local];
 	case DCCPC_CCID5:
+		return ccid2_dependencies[is_local];
+	case DCCPC_CCID6:
+		return ccid2_dependencies[is_local];
+	case DCCPC_CCID7:
 		return ccid2_dependencies[is_local];
 	default:
 		return NULL;
@@ -1468,6 +1472,8 @@ int dccp_feat_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 			if (is_mpdccp(sk) && server && (feat == DCCPF_MULTIPATH))
 				return dccp_mpcap_change_recv(dreq, fn, opt, val, len);
+			else if(!is_mpdccp(sk) && server && (feat == DCCPF_MULTIPATH))
+				dccp_push_empty_confirm(fn, DCCPF_MULTIPATH, 1);
 			else
 #endif
 				return dccp_feat_change_recv(fn, mandatory, opt, feat,

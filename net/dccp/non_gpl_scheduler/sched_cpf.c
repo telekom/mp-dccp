@@ -6,7 +6,7 @@
  * MPDCCP - Cheapest-pipe-first scheduler kernel module
  *
  * A cheapest-pipe first scheduler. It will return the cheapest available sk
- * (i.e. lowest priority, OR lowest SRTT in case of matching priority values)
+ * (i.e. highest priority, OR lowest SRTT in case of matching priority values)
  * that has a free cwnd for both the data in send queue and the new skb.
  * Scheduler kernel module management inspired by mptcp_sched.c
  *
@@ -77,9 +77,9 @@ struct sock *mpdccp_cpfsched(struct mpdccp_cb *mpcb)
 	struct tcp_info		*infop = &info;
 	__u8			priority = 0;
 	struct mpdccp_link_info	*link;
+	__u8			min_prio   = 1;
 	
 	/* Initialise to arbitrarily high (max) value */
-	__u8			min_prio   = ~((__u8)0);
 	u32			min_srtt   = ~((u32)0);
 	
 	
@@ -105,15 +105,15 @@ struct sock *mpdccp_cpfsched(struct mpdccp_cb *mpcb)
 		link = mpdccp_ctrl_getlink (sk);
 		if (link) {
 			priority = link->mpdccp_prio;
-			//mpdccp_pr_debug("get link prio %d", priority);
+			//mpdccp_pr_debug("get link prio %d for sk %p", priority, sk);
 		} else {
-			priority = 0;
-			mpdccp_pr_debug ("cannot get link for sk %p - use prio 0\n", sk);
+			priority = 3;
+			mpdccp_pr_debug ("cannot get link for sk %p - use prio 3\n", sk);
 		}
 		mpdccp_link_put (link);
         
 		ccid_hc_tx_get_info(dccp_sk(sk)->dccps_hc_tx_ccid, sk, infop);
-		if (priority < min_prio ||
+		if (priority > min_prio ||
 			(priority == min_prio && infop->tcpi_rtt < min_srtt)) {
 			min_prio = priority;
 			min_srtt = infop->tcpi_rtt;

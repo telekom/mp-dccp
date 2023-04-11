@@ -21,6 +21,12 @@ static struct ccid_operations *ccids[] = {
 #ifdef CONFIG_IP_DCCP_CCID5
 	&ccid5_ops,
 #endif
+#ifdef CONFIG_IP_DCCP_CCID6
+	&ccid6_ops,
+#endif
+#ifdef CONFIG_IP_DCCP_CCID7
+	&ccid7_ops,
+#endif
 };
 
 u32 (*get_delay_valn)(struct sock *sk, struct tcp_info *info, u8 *type) = mrtt_as_delayn;

@@ -52,6 +52,7 @@ struct mpdccp_funcs {
 	int (*xmit_skb) (struct sock*, struct sk_buff*);
 	int (*activate) (struct sock*, int);
 	int (*isactive) (const struct sock*);
+	int (*try_mpdccp) (struct sock*);
 	int (*conn_request) (struct sock *sk, struct dccp_request_sock *dreq);
 	int (*rcv_request_sent_state_process) (struct sock *sk, const struct sk_buff *skb);
 	int (*rcv_respond_partopen_state_process) (struct sock *sk, int type);
@@ -201,6 +202,15 @@ static inline int unregister_mpdccp_subflow_notifier (struct notifier_block *nb)
 }
 #endif
 
+static inline int try_mpdccp (struct sock *sk)
+{
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+	MPDCCP_CHECK_FUNC(try_mpdccp);
+	return mpdccp_funcs.try_mpdccp (sk);
+#else
+	return 0;
+#endif
+}
 
 static inline int mpdccp_activate (struct sock *sk, int on)
 {

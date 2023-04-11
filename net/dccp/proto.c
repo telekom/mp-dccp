@@ -295,7 +295,7 @@ static inline int dccp_listen_start(struct sock *sk, int backlog)
 	dp->dccps_role = DCCP_ROLE_LISTEN;
 
 	/* Register MP_CAPABLE feature for multipath sockets */
-	if (is_mpdccp(sk)) {
+	if (is_mpdccp(sk) || try_mpdccp(sk) == 1) {
 		int ret;
 		ret = dccp_feat_register_sp(sk, DCCPF_MULTIPATH, 1,
 						mpdccp_supported_versions,

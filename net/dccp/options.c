@@ -47,6 +47,27 @@ u64 dccp_decode_value_var(const u8 *bf, const u8 len)
 	return value;
 }
 
+#if IS_ENABLED(CONFIG_IP_MPDCCP)
+static int mpdccp_is_link_mpcap(struct dccp_request_sock *dreq,
+		       struct sk_buff *skb)
+{
+	struct inet_request_sock *ireq;
+	struct net *net;
+	struct net_device *ndev;
+
+	ireq = &dreq->dreq_inet_rsk;
+	if (!ireq) return 0;
+	net = read_pnet(&(ireq->ireq_net));
+	if(!net) return 0;
+	ndev = dev_get_by_index(net, skb->skb_iif);
+	if(!ndev) return 0;
+	if(!(ndev->flags & IFF_MPDCCPON)){
+		dccp_pr_debug("Not accepting MP-DCCP on this interface, dropping options!");
+		return 1;
+	}
+	return 0;
+}
+
 static int mpdccp_do_hmac_chk(struct sock *sk, struct dccp_options_received *opt_recv)
 {
 	struct mpdccp_cb *mpcb = get_mpcb(sk);
@@ -115,6 +136,7 @@ static int mpdccp_do_hmac_chk(struct sock *sk, struct dccp_options_received *opt
 	}
 	return 0;
 }
+#endif
 
 /**
  * dccp_parse_options  -  Parse DCCP options present in @skb
@@ -295,6 +317,7 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 			break;
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 		case DCCPO_MULTIPATH:
+			if (dreq && skb && mpdccp_is_link_mpcap(dreq, skb)) break;
 			if (len == 0)
 				goto out_invalid_option;
 			mp_opt = *value++;
@@ -1053,11 +1076,17 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 {
 	struct mpdccp_cb *mpcb = get_mpcb(sk);
 	struct my_sock  *my_sk = mpdccp_my_sock(sk);
-	u8 mp_addr_id = get_id(sk);
+	u8 mp_addr_id = 0;
+
+	/* nothing to do here if my_sock is not available in sk_user_data */
+	if (my_sk == NULL)
+		return;
 
 	/* Skip if fallback to sp DCCP */
 	if (mpcb && mpcb->fallback_sp)
 		return;
+
+	mp_addr_id = get_id(sk);
 
 	/* Insert delay value (sub-flow specific) as DCCP option */
 	switch(DCCP_SKB_CB(skb)->dccpd_type){
