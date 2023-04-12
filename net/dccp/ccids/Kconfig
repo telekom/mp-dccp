@@ -72,12 +72,12 @@ config IP_DCCP_CCID5_DEBUG
 config IP_DCCP_CCID6
 	bool "CCID 6 (Cubic)"
 	def_bool y if (IP_DCCP = y || IP_DCCP = m)
-	---help---
+	help
 	  CCID 6 - BBRv2 implementation for DCCP.
 config IP_DCCP_CCID6_DEBUG
 	bool "CCID-6 debugging messages"
 	depends on IP_DCCP_CCID6
-	---help---
+	help
 	  Enable CCID-6 specific debugging messages.
 
 	  The debugging output can additionally be toggled by setting the
@@ -88,12 +88,12 @@ config IP_DCCP_CCID6_DEBUG
 config IP_DCCP_CCID7
 	bool "CCID 7 (Cubic)"
 	def_bool y if (IP_DCCP = y || IP_DCCP = m)
-	---help---
+	help
 	  CCID 7 - Cubic implementation for DCCP.
 config IP_DCCP_CCID7_DEBUG
 	bool "CCID-7 debugging messages"
 	depends on IP_DCCP_CCID7
-	---help---
+	help
 	  Enable CCID-7 specific debugging messages.
 
 	  The debugging output can additionally be toggled by setting the

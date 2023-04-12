@@ -300,10 +300,12 @@ static void dccp_tasklet_schedule(struct sock *sk)
 	}
 }
 
-static void ccid7_hc_tx_rto_expire(unsigned long data)
+static void ccid7_hc_tx_rto_expire(struct timer_list *t)
 {
-	struct sock *sk = (struct sock *)data;
-	struct ccid7_hc_tx_sock *hc = ccid7_hc_tx_sk(sk);
+	//struct sock *sk = (struct sock *)data;
+	//struct ccid7_hc_tx_sock *hc = ccid7_hc_tx_sk(sk);
+	struct ccid7_hc_tx_sock *hc = from_timer(hc, t, tx_rtotimer);
+	struct sock *sk = hc->sk;
 	const bool sender_was_blocked = ccid7_cwnd_network_limited(hc);
 
 	bh_lock_sock(sk);
@@ -961,8 +963,10 @@ static int ccid7_hc_tx_init(struct ccid *ccid, struct sock *sk)
 	hc->tx_rpdupack  = -1;
 	hc->tx_last_cong = hc->tx_lsndtime = hc->tx_cwnd_stamp = ccid7_jiffies32;
 	hc->tx_cwnd_used = 0;
-	setup_timer(&hc->tx_rtotimer, ccid7_hc_tx_rto_expire,
-			(unsigned long)sk);
+	//setup_timer(&hc->tx_rtotimer, ccid7_hc_tx_rto_expire,
+	//		(unsigned long)sk);
+	hc->sk		 = sk;
+	timer_setup(&hc->tx_rtotimer, ccid7_hc_tx_rto_expire, 0);
 	INIT_LIST_HEAD(&hc->tx_av_chunks);
   
 	if (hystart)

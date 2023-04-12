@@ -17,7 +17,7 @@ config MPDCCP_SCHED_HANDOVER
 config MPDCCP_SCHED_ACPF
 	tristate "MPDCCP Adaptive Cheapest Path First"
 	depends on IP_MPDCCP
-	---help---
+	help
 	  A version of the CPF scheduler. It utilizes lower priority paths earlier to allow faster aggregation reduced latency.
 
 endmenu

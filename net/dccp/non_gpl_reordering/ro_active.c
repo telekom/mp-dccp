@@ -245,7 +245,7 @@ void rbuf_find_next(struct active_cb *acb, u64 exp);
 void __rbuf_find_next(struct active_cb *acb, u64 exp);
 
 // timer functions
-void exp_timer_cb(unsigned long arg);
+void exp_timer_cb(struct timer_list *t);
 
 // reconfigurability functions
 u64 get_fixed_to(struct active_cb *acb, u64 latency);
@@ -499,7 +499,8 @@ void rbuf_init(struct mpdccp_rbuf *rbuf, struct active_cb *acb){
         __rbuf_entry(acb, i).abs_to = ktime_set(0, 0);
 	}
 
-	setup_timer(&rbuf->exp_timer, exp_timer_cb, (unsigned long) rbuf);
+	//setup_timer(&rbuf->exp_timer, exp_timer_cb, (unsigned long) rbuf);
+    timer_setup(&rbuf->exp_timer, exp_timer_cb, 0);
 
 	rbuf->acb = acb;
 	rbuf->mpcb = acb->mpcb;
@@ -629,8 +630,9 @@ void __rbuf_find_next(struct active_cb *acb, u64 exp){
 /************************************************* 
  *     timer handling
  *************************************************/
-void exp_timer_cb(unsigned long arg){
-    struct mpdccp_rbuf *rbuf = (struct mpdccp_rbuf *) arg;
+void exp_timer_cb(struct timer_list *t){
+    //struct mpdccp_rbuf *rbuf = (struct mpdccp_rbuf *) arg;
+    struct mpdccp_rbuf *rbuf = from_timer(rbuf, t, exp_timer);
     struct active_cb *acb = NULL;
     u64 last;
     int i = 0, cnt = 0;

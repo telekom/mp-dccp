@@ -87,6 +87,7 @@ struct ccid7_hc_tx_sock {
 				  tx_rto;
 	u64			tx_rtt_seq:48;
 	struct timer_list	tx_rtotimer;
+  struct sock   *sk;
 
   /* Cubic related */
   u32     css_round_count,
