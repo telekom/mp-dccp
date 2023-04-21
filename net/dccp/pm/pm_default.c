@@ -425,6 +425,12 @@ next_event:
 	if (!event)
 		return;
 
+	if(event->sk->sk_state != DCCPF_OPEN){
+		list_del_rcu(&event->list);
+		kfree(event);
+		return;
+	}
+
 	my_opt = event->cnf_opt;
 /* we loop through the list and check if retransmission timeout has surpassed */
 	if (now > my_opt->t_timeout){
