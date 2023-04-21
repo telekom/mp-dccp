@@ -52,6 +52,8 @@
 #include "mpdccp_pm.h"
 
 static int do_mpdccp_write_xmit (struct sock*, struct sk_buff*);
+int mpdccp_setsockopt(struct sock *sk, int level, int optname, char __user *optval, unsigned int optlen);
+int mpdccp_getsockopt(struct sock *sk, int level, int optname, char __user *optval, int __user *optlen);
 
 static
 int
@@ -71,6 +73,8 @@ _mpdccp_mk_meta_sk (
 		module_put (THIS_MODULE);
 		return -ENOBUFS;
 	}
+	sk->sk_prot->setsockopt = mpdccp_setsockopt;
+	sk->sk_prot->getsockopt = mpdccp_getsockopt;
 	dp->mpdccp.mpcb->meta_sk = sk;
 	mpdccp_pr_debug ("meta socket created\n");
 
@@ -214,10 +218,12 @@ static int do_mpdccp_setsockopt(struct sock *sk, int level, int optname,
 	struct mpdccp_cb		*mpcb;
 	struct mpdccp_sched_ops		*sched;
 	char				*val;
+	u8					*intval;
 	struct mpdccp_reorder_ops	*reorder;
 
 	lock_sock(sk);
 	mpcb = MPDCCP_CB(sk);
+	mpdccp_pr_debug ("setsockopt: %d\n", optname );
 	if (level == SOL_DCCP) {
 		/* handle multipath socket options */
 		switch (optname) {
@@ -257,6 +263,15 @@ static int do_mpdccp_setsockopt(struct sock *sk, int level, int optname,
 			if (sched->init_conn)
 				sched->init_conn(mpcb);
 			goto out_release;
+		case DCCP_SOCKOPT_MP_FAST_CLOSE:
+			intval = memdup_user(optval, optlen);
+			if (IS_ERR(intval)) {
+				err = PTR_ERR(intval);
+				goto out_release;
+			}
+			mpcb->close_fast = *intval;
+			mpdccp_pr_debug("Toggle fast close %u\n", mpcb->close_fast);
+			goto out_release;
 		}
 	}
 	/* pass to all subflows */
@@ -275,6 +290,10 @@ int mpdccp_setsockopt(struct sock *sk, int level, int optname,
 		    char __user *optval, unsigned int optlen)
 {
 	int	ret;
+	if(!is_mpdccp(sk) || (is_mpdccp(sk) && !mpdccp_is_meta(sk))){
+		ret = dccp_setsockopt (sk, level, optname, optval, optlen);
+		return ret;
+	}
 
 	if (level != SOL_DCCP) {
 		ret = inet_csk(sk)->icsk_af_ops->setsockopt(sk, level,
@@ -1012,6 +1031,9 @@ static int _mpdccp_close_meta(struct sock *meta_sk)
 			}
 		}
 	}
+
+	meta_sk->sk_prot->setsockopt = dccp_setsockopt;
+	meta_sk->sk_prot->getsockopt = dccp_getsockopt;
 
 	if(mpcb->pm_ops->del_addr)
 		mpcb->pm_ops->del_addr(mpcb, 0, 0, true);
