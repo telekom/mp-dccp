@@ -1129,7 +1129,10 @@ static void dccp_terminate_connection(struct sock *sk)
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 		/* Don't send close pkt on MP meta sockets*/
 		if (!mpdccp_is_meta(sk)) {
-			dccp_send_close(sk, 1);
+			if (dccp_sk(sk)->is_fast_close)
+				dccp_send_reset(sk, DCCP_RESET_CODE_MPDCCP_ABORTED);
+			else
+				dccp_send_close(sk, 1);
 		}
 #endif
 
@@ -1183,8 +1186,12 @@ void dccp_close(struct sock *sk, long timeout)
 	}
 
 	/* If socket has been already reset kill it. */
-	if (sk->sk_state == DCCP_CLOSED)
+	if (sk->sk_state == DCCP_CLOSED){
+		if (is_mpdccp(sk) && dp->is_fast_close) {
+			dccp_send_reset(sk, DCCP_RESET_CODE_MPDCCP_ABORTED);
+		}
 		goto adjudge_to_death;
+	}
 
 	if (data_was_unread) {
 		/* Unread data was tossed, send an appropriate Reset Code */

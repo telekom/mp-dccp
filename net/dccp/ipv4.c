@@ -879,10 +879,6 @@ lookup:
 		sock_hold(sk);
 		refcounted = true;
 		nsk = dccp_check_req(sk, skb, req);
-		if(dccp_sk(nsk) && dccp_rsk(req)->id_rcv){
-		dccp_sk(nsk)->id_rcv = dccp_rsk(req)->id_rcv;
-		dccp_pr_debug("id_rcv %d", dccp_sk(nsk)->id_rcv);
-		}
 
 		if (!nsk) {
 			reqsk_put(req);

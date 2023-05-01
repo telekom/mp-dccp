@@ -1016,15 +1016,17 @@ static int _mpdccp_close_meta(struct sock *meta_sk)
 	struct my_sock *mysk;
 
 	if (!mpcb) return -EINVAL;
+	if(mpcb->to_be_closed) return 0;
+
+	mpcb->to_be_closed = 1;
 	mpdccp_pr_debug ("enter for sk %p\n", meta_sk);
 	/* close all subflows */
-	mpcb->to_be_closed = 1;
 	list_for_each_safe(pos, temp, &((mpcb)->psubflow_list)) {
 		mysk = list_entry(pos, struct my_sock, sk_list);
 		if (mysk) {
 			sk = mysk->my_sk_sock;
 			mpdccp_pr_debug ("closing subflow %p\n", sk);
-			ret = mpdccp_close_subflow(mpcb, sk, 1);
+			ret = mpdccp_close_subflow(mpcb, sk, mpcb->close_fast+1);
 			if (ret < 0) {
 				mpdccp_pr_debug ("error closing subflow: %d\n", ret);
 				break;

@@ -174,7 +174,6 @@ struct dccp_request_sock {
 	struct list_head	 dreq_featneg;
 	__u32			 dreq_timestamp_echo;
 	__u32			 dreq_timestamp_time;
-	int 			id_rcv;
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 	struct mpdccp_link_info  *link_info;
 	struct mpdccp_key	mpdccp_loc_key;
@@ -367,7 +366,7 @@ struct dccp_sock {
 #if IS_ENABLED(CONFIG_IP_MPDCCP)
 	struct mpdccp_meta_cb		mpdccp;
 #endif
-	int                 id_rcv;
+	int                 is_fast_close;
 	int 	multipath_active;
 	int 	is_kex_sk;
 	int 	auth_done;

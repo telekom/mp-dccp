@@ -156,6 +156,8 @@ static u16 dccp_reset_code_convert(const u8 code)
 	[DCCP_RESET_CODE_BAD_SERVICE_CODE]   = EBADRQC,
 	[DCCP_RESET_CODE_OPTION_ERROR]	     = EILSEQ,
 	[DCCP_RESET_CODE_MANDATORY_ERROR]    = EOPNOTSUPP,
+
+	[DCCP_RESET_CODE_MPDCCP_ABORTED] = ESHUTDOWN,
 	};
 
 	return code >= DCCP_MAX_RESET_CODES ? 0 : error_code[code];
@@ -169,6 +171,17 @@ static void dccp_rcv_reset(struct sock *sk, struct sk_buff *skb)
 
 	/* Queue the equivalent of TCP fin so that dccp_recvmsg exits the loop */
 	dccp_fin(sk, skb);
+
+	if(err == ESHUTDOWN){				//MPDCCP Fast-Close requires RST reply
+		switch (sk->sk_state) {
+		case DCCP_OPEN:
+			dccp_set_state(sk, DCCP_PASSIVE_CLOSE);
+			return;
+		case DCCP_ACTIVE_CLOSEREQ:
+			dccp_send_reset(sk, DCCP_RESET_CODE_MPDCCP_ABORTED);
+			break;
+		}
+	}
 
 	if (err && !sock_flag(sk, SOCK_DEAD))
 		sk_wake_async(sk, SOCK_WAKE_IO, POLL_ERR);

@@ -837,7 +837,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 					addr_id = mpdccp_my_sock(sk)->local_addr_id;
 					in_use = true;
 					mpdccp_my_sock(sk)->delpath_sent = true;
-					mpdccp_close_subflow (mpcb, sk, 1);
+					mpdccp_close_subflow (mpcb, sk, 2);
 					mpdccp_send_remove_path(mpcb, addr_id);
 					pm_free_id(mpcb->meta_sk, addr_id);
 				}
