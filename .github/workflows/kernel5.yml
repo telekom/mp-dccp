@@ -1,0 +1,50 @@
+name: Compile and Package Kernel v5.10
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - mpdccp_v03_k5.10
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: mpdccp_v03_k5.10
+
+      - name: Compile Linux Kernel # use a debian docker for kernel-compilation
+        run: |
+          docker run --name kernel_builder -v ${{ github.workspace }}:/mp-dccp debian:11-slim /bin/bash -c '
+            cd /mp-dccp
+            apt update
+            apt install -y cmake gcc build-essential linux-source bc kmod cpio flex libncurses5-dev libelf-dev libssl-dev dwarves bison rsync python3
+            cp sampleconfig .config
+            make -j$(nproc) bindeb-pkg
+            mv ../*.deb .
+            mkdir -p pkgs
+            cp *.deb pkgs/
+          '
+
+      - name: Upload .deb files to repository
+        uses: actions/upload-artifact@v3
+        with:
+          name: Kernel-deb-files
+          path: ${{ github.workspace }}/pkgs
+
+      - name: Create release branch and add .deb files
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          git checkout -b release_5
+          git rm -r .
+          git add *.deb
+          git commit -m "Add latest artifact"
+          git push --force origin release_5
+        env:
+          GH_TOKEN: ${{ secrets.MPDCCP_TOKEN }}
