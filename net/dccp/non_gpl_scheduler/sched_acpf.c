@@ -494,7 +494,7 @@ struct sock *mpdccp_acpfsched(struct mpdccp_cb *mpcb)
 		return mpdccp_return_single_flow(mpcb);
 	}
 
-	rcu_read_lock();
+	rcu_read_lock_bh();
 
 	// Determine ACPF mode
 	mpdccp_for_each_sk(mpcb, sk) {
@@ -517,7 +517,7 @@ struct sock *mpdccp_acpfsched(struct mpdccp_cb *mpcb)
 		update_frac(sk);
 	}
 
-	rcu_read_unlock();
+	rcu_read_unlock_bh();
 
 	if (best_sk)
 		mpdccp_pr_debug("ACPF returned socket %p\n", best_sk);
