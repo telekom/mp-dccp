@@ -170,6 +170,7 @@ static int mpdccp_read_from_subflow (struct sock *sk)
                 mpdccp_my_sock(sk)->closing = 1;
                 schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, 0);
             }
+        case DCCP_PKT_RESET:
             __kfree_skb(skb);
             break;
         default:
@@ -512,7 +513,10 @@ static void mpdccp_close_worker(struct work_struct *work)
                     sk->sk_send_head = NULL;
                 }
             }
-            dccp_finish_passive_close(sk);
+            if(my_sk->mpcb->close_fast)
+                dccp_set_state(sk, DCCP_CLOSED);
+            else
+                dccp_finish_passive_close(sk);
     }
 
     rcu_read_lock();
@@ -523,8 +527,7 @@ static void mpdccp_close_worker(struct work_struct *work)
     if (skwq_has_sleeper(wq))
         schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, msecs_to_jiffies(200));
     else{
-        if(my_sk->closing == 2)
-            dccp_disconnect(sk, 0);
+        dccp_sk(sk)->is_fast_close = my_sk->mpcb->close_fast;
         dccp_close(sk, 0);
     }
 }
@@ -1021,7 +1024,7 @@ int mpdccp_close_subflow (struct mpdccp_cb *mpcb, struct sock *sk, int destroy)
     /* This will call dccp_close() in process context (only once per socket) */
     if (!mpdccp_my_sock(sk)->closing) {
         mpdccp_my_sock(sk)->closing = destroy;
-        mpdccp_pr_debug("Close socket(%p)", sk);
+        mpdccp_pr_debug("Close socket(%p) %u", sk, destroy);
         schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, 0);
     }
     return 0;

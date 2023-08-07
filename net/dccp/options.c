@@ -382,6 +382,8 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 						DCCP_CRIT("MP_CLOSE keys dont match");
 						return -1;
 					}
+					mpcb->close_fast = 2;				//close_fast=2 doesn't add MP_FAST_CLOSE option to reset
+					mpdccp_close_meta(mpcb->meta_sk);
 				} else
 					goto out_invalid_option;
 				break;
@@ -472,7 +474,9 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 					goto out_invalid_option;
 				}
 				opt_recv->dccpor_oall_seq = dccp_decode_value_var(value, len);
-				dccp_pr_debug("%s rx opt: MP_SEQ = %llu", dccp_role(sk), (u64)opt_recv->dccpor_oall_seq);
+				dccp_pr_debug("%s rx opt: MP_SEQ = %llu on loc_id: %u, rem_id: %u",
+						dccp_role(sk), (u64)opt_recv->dccpor_oall_seq,
+						get_id(sk), mpdccp_my_sock(sk)->remote_addr_id);
 				break;
 
 			case DCCPO_MP_HMAC:
@@ -572,6 +576,7 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 						DCCP_CRIT("MP_CLOSE keys dont match");
 						return -1;
 					}
+					mpdccp_close_meta(mpcb->meta_sk);
 				} else
 					goto out_invalid_option;
 				break;
@@ -1201,7 +1206,7 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 		}
 		break;
 	case DCCP_PKT_RESET:
-		if(mpcb->to_be_closed && !mpdccp_my_sock(sk)->saw_mp_close){
+		if(mpcb->to_be_closed && mpdccp_my_sock(sk)->closing == 2){
 			dccp_pr_debug("(%s) RESET insert opt MP_FAST_CLOSE", dccp_role(sk));
 			dccp_insert_option_mp_fast_close(skb, &mpcb->mpdccp_rem_key);
 		}

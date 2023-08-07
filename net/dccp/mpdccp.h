@@ -293,6 +293,7 @@ struct mpdccp_cb {
 	int			cur_key_idx;
 	int			fallback_sp;
 
+	int			close_fast;
 	/* First subflow socket */
 	struct sock*		master_sk;
 
