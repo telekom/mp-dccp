@@ -432,7 +432,7 @@ void do_reorder_active_mod(struct rcv_buff *rb){
     spin_lock_bh(&acb->adaptive_cb_lock);
     detect_loss(acb, pcb);
     pcb->last_oall_seqno = rb->oall_seqno;
-    pcb->last_path_seqno = pcb->path_seqno;
+    //pcb->last_path_seqno = pcb->path_seqno;
     exp = __exp(acb);
     /*
     * ### REORDERING DECISION:
@@ -473,6 +473,12 @@ finished:
 exit:
 	mpdccp_release_rcv_buff(&rb);
 	return;
+}
+
+void do_update_pseq(struct my_sock *my_sk, struct sk_buff *skb){
+	struct mpdccp_reorder_path_cb *pcb = my_sk->pcb;
+	if(pcb && DCCP_SKB_CB(skb)->dccpd_seq > pcb->last_path_seqno)
+        pcb->last_path_seqno = DCCP_SKB_CB(skb)->dccpd_seq;
 }
 
 /************************************************* 
@@ -1057,8 +1063,9 @@ static int proc_rbuf_size(struct ctl_table *table, int write,
 /**
  * Set rtt-type according to the chosen delay estimation.
  * 0	= mrtt - measured rtt i.e. raw values
- * 1 	= krtt - kalman filter applied to mrtt
- * 2  	= drtt - directional filter applied to mrtt
+ * 1 	= min_rtt
+ * 2  	= max_rtt
+ * 3    = srtt
  */
 static int proc_rtt_type(struct ctl_table *table, int write,
                 void __user *buffer, size_t *lenp,
@@ -1250,6 +1257,7 @@ void cleanup_active_mod(void) {
 struct mpdccp_reorder_ops mpdccp_reorder_active_mod = {
 	.init = init_reorder_active_mod,
 	.do_reorder = do_reorder_active_mod,
+	.update_pseq = do_update_pseq,
 	.name = "active",
 	.owner = THIS_MODULE,
 };

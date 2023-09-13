@@ -1123,9 +1123,9 @@ EXPORT_SYMBOL_GPL(mpdccp_xmit_to_sk);
  * and accept the connection */
 int listen_backlog_rcv (struct sock *sk, struct sk_buff *skb)
 {
-    int ret = 0;    
+    int ret = 0;
     struct my_sock *my_sk = mpdccp_my_sock(sk);
-    //struct mpdccp_cb *mpcb  = my_sk->mpcb;
+    struct mpdccp_cb *mpcb  = my_sk->mpcb;
 
     mpdccp_pr_debug("Executing backlog_rcv callback. sk %p my_sk %p bklog %p \n", sk, my_sk, my_sk->sk_backlog_rcv);
 
@@ -1133,7 +1133,9 @@ int listen_backlog_rcv (struct sock *sk, struct sk_buff *skb)
 	mpdccp_pr_debug("There is sk_backlog_rcv");
         ret = my_sk->sk_backlog_rcv (sk, skb);
     }
-   
+
+    if(mpcb && mpcb->reorder_ops->update_pseq)
+        mpcb->reorder_ops->update_pseq(my_sk, skb);
 #if 0 
     /* If the queue was previously stopped because of a full cwnd,
     * a returning ACK will open the window again, so we should
