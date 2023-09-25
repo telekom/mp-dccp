@@ -1096,8 +1096,6 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 	/* Insert delay value (sub-flow specific) as DCCP option */
 	switch(DCCP_SKB_CB(skb)->dccpd_type){
 	case DCCP_PKT_DATAACK:
-		dccp_insert_option_mp_seq(skb, &mpcb->mp_oall_seqno, mpcb->do_incr_oallseq);
-		
 		if(!(mpcb->mp_oall_seqno % 1)){				//try sending mp_rtt with every x dataack	
 			struct tcp_info info;
 			u8 rtt_type;
@@ -1110,6 +1108,7 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 						rtt_value, rtt_type, rtt_age, sk, mp_addr_id, my_sk->remote_addr_id);
 			}
 		}
+		dccp_insert_option_mp_seq(skb, &mpcb->mp_oall_seqno, mpcb->do_incr_oallseq);
 		break;
 	case DCCP_PKT_DATA:
 		if(my_sk->delpath_id && mpcb->pm_ops->get_hmac){

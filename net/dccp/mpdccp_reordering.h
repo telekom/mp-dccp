@@ -145,6 +145,7 @@ struct mpdccp_reorder_ops {
 	
 	void			(*init) (struct mpdccp_cb *mpcb);
 	void			(*do_reorder) (struct rcv_buff *w);
+	void			(*update_pseq) (struct my_sock *, struct sk_buff *);
 	
 	char			name[MPDCCP_REORDER_NAME_MAX];
 	struct module		*owner;
