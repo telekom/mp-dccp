@@ -1021,6 +1021,10 @@ int mpdccp_close_subflow (struct mpdccp_cb *mpcb, struct sock *sk, int destroy)
     if(mpcb->pm_ops->del_retrans)
         mpcb->pm_ops->del_retrans(sock_net(mpcb->meta_sk), sk);
 
+    if(mpcb->close_fast == 2 && sk->sk_state == DCCP_OPEN){
+        dccp_set_state(sk, DCCP_PASSIVE_CLOSE);
+    }
+
     /* This will call dccp_close() in process context (only once per socket) */
     if (!mpdccp_my_sock(sk)->closing) {
         mpdccp_my_sock(sk)->closing = destroy;

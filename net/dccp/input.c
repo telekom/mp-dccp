@@ -176,10 +176,12 @@ static void dccp_rcv_reset(struct sock *sk, struct sk_buff *skb)
 		switch (sk->sk_state) {
 		case DCCP_OPEN:
 			dccp_set_state(sk, DCCP_PASSIVE_CLOSE);
+		case DCCP_PASSIVE_CLOSE:
 			return;
 		case DCCP_ACTIVE_CLOSEREQ:
 			dccp_send_reset(sk, DCCP_RESET_CODE_MPDCCP_ABORTED);
-			break;
+			dccp_done(sk);
+			return;
 		}
 	}
 
