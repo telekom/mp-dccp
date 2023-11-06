@@ -13,7 +13,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+
+      - name: Checkout
         uses: actions/checkout@v3
         with:
           ref: mpdccp_v03_k5.10
@@ -25,7 +32,7 @@ jobs:
             apt update
             apt install -y cmake gcc build-essential linux-source bc kmod cpio flex libncurses5-dev libelf-dev libssl-dev dwarves bison rsync python3
             cp sampleconfig .config
-            make -j$(nproc) bindeb-pkg
+            make -sj$(nproc) bindeb-pkg
             mv ../*.deb .
             mkdir -p pkgs
             cp *.deb pkgs/
@@ -42,7 +49,7 @@ jobs:
           git config user.name "${{ github.actor }}"
           git config user.email "${{ github.actor }}@users.noreply.github.com"
           git checkout -b release_5
-          git rm -r .
+          git rm -r -q .
           git add *.deb
           git commit -m "Add latest artifact"
           git push --force origin release_5
