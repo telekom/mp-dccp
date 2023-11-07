@@ -166,9 +166,9 @@ static int mpdccp_read_from_subflow (struct sock *sk)
             break;
         case DCCP_PKT_CLOSE:
         case DCCP_PKT_CLOSEREQ:
-            if (!mpdccp_my_sock(sk)->closing) {
-                mpdccp_my_sock(sk)->closing = 1;
-                schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, 0);
+            if (!my_sk->closing) {
+                my_sk->closing = 1;
+                schedule_delayed_work(&my_sk->close_work, 0);
             }
         case DCCP_PKT_RESET:
             __kfree_skb(skb);
@@ -468,15 +468,14 @@ void my_sock_final_destruct (struct sock *sk, struct mpdccp_cb *mpcb, int found)
 {
     if (!sk) return;
     if (found && mpcb && (mpcb->meta_sk->sk_state != DCCP_CLOSED) && mpcb->cnt_subflows == 0) {
-	struct sock	*msk = mpcb->meta_sk;
+        struct sock	*msk = mpcb->meta_sk;
         mpdccp_pr_debug ("closing meta %p\n", msk);
-	sock_hold (msk);
+        sock_hold (msk);
         dccp_done(msk);
-	mpdccp_report_alldown (msk);
-	sock_put (msk);
+        mpdccp_report_alldown (msk);
+        sock_put (msk);
     }
-    if (mpcb)
-	mpdccp_cb_put (mpcb);
+    if (mpcb) mpdccp_cb_put (mpcb);
 }
 
 void my_sock_destruct (struct sock *sk)
@@ -1206,8 +1205,8 @@ void mp_state_change(struct sock *sk)
             if (sk == subsk) {
                 mpdccp_pr_debug("sk %p already in subflow_list, skipping\n", sk);
                 spin_unlock(&mpcb->psubflow_list_lock);
-		/* nevertheless report it */
-        	mpdccp_report_new_subflow(sk);
+                /* nevertheless report it */
+                mpdccp_report_new_subflow(sk);
                 goto out;
             }
         }
@@ -1219,10 +1218,10 @@ void mp_state_change(struct sock *sk)
         spin_unlock(&mpcb->psubflow_list_lock);
 
         if (mpcb->sched_ops->init_subflow) {
-	    rcu_read_lock ();
+            rcu_read_lock ();
             mpcb->sched_ops->init_subflow(sk);
-	    rcu_read_unlock ();
-	}
+            rcu_read_unlock ();
+        }
 
         mpdccp_report_new_subflow(sk);
         mpdccp_pr_debug("client connection established successfully. There are %d subflows now.\n", mpcb->cnt_subflows);
