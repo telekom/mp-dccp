@@ -11,7 +11,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
@@ -33,9 +32,7 @@ jobs:
             apt install -y cmake gcc build-essential linux-source bc kmod cpio flex libncurses5-dev libelf-dev libssl-dev dwarves bison rsync
             cp sampleconfig .config
             make -j$(nproc) bindeb-pkg
-            mv ../*.deb .
-            mkdir -p pkgs
-            cp *.deb pkgs/
+            mkdir -p pkgs && cp ../*.deb pkgs/
           '
 
       - name: Upload .deb files to repository
@@ -44,14 +41,25 @@ jobs:
           name: Kernel-deb-files
           path: ${{ github.workspace }}/pkgs
 
-      - name: Create release branch and add .deb files
+  deploy:
+    runs-on: ubuntu-latest
+    env: 
+      CI_COMMIT_MESSAGE: Continuous Integration Build Artifacts
+      CI_COMMIT_AUTHOR: Continuous Integration
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    steps:
+      - name: "Checkout release branch"
+        uses: actions/checkout@v3
+        with:
+          ref: release_4
+      - name: "Receive debian files"
+        uses: actions/download-artifact@v3
+        with:
+          name: "Kernel-deb-files"
+      - name: "Deploy to Release Branch"
+        shell: "bash"
         run: |
-          git config user.name "${{ github.actor }}"
-          git config user.email "${{ github.actor }}@users.noreply.github.com"
-          git checkout -b release_4
-          git rm -r -q .
+          git config --global user.name "${{ env.CI_COMMIT_AUTHOR }}"
           git add *.deb
-          git commit -m "Add latest artifact"
-          git push --force origin release_4
-        env:
-          GH_TOKEN: ${{ secrets.MPDCCP_TOKEN }}
+          git commit -a -m "${{ env.CI_COMMIT_MESSAGE }}" && git push || exit 0
