@@ -88,6 +88,10 @@
  * 6) property = drop_lost : Configure what to do when receiving lost packets.
  *      a) val = 0 : forward packets to the application
  *      b) val = 1 : drop packets
+*
+ * 7) property = drop_dup : Configure what to do when receiving duplicated packets.
+ *      a) val = 0 : forward packets to the application
+ *      b) val = 1 : drop packets
  */
 
 
