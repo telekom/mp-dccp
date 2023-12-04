@@ -48,7 +48,6 @@ jobs:
       CI_COMMIT_MESSAGE: Continuous Integration Build Artifacts
       CI_COMMIT_AUTHOR: Continuous Integration
     needs: build
-    if: github.ref == 'refs/heads/master'
     steps:
       - name: "Checkout release branch"
         uses: actions/checkout@v3
