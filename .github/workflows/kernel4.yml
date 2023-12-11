@@ -62,3 +62,5 @@ jobs:
           git config --global user.name "${{ env.CI_COMMIT_AUTHOR }}"
           git add *.deb
           git commit -a -m "${{ env.CI_COMMIT_MESSAGE }}" && git push || exit 0
+        env:
+          GH_TOKEN: ${{ secrets.WORKFLOW }}
