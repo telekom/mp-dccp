@@ -56,9 +56,8 @@ jobs:
       - name: "Deploy to Release Branch"
         shell: "bash"
         run: |
-          git config --global user.name "${GITHUB_ACTOR}"
-          git config --global user.email "${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com"
+          git config --global user.name "NathalieRM"
+          git config --global user.email "NathalieRM@users.noreply.github.com"
+          git remote set-url origin https://NathalieRM:${{ secrets.WORKFLOW }}@github.com/telekom/mp-dccp
           git add *.deb
           git commit -a -m "Continuous Integration Build Artifacts" && git push || exit 0
-        env:
-          GH_TOKEN: ${{ secrets.WORKFLOW }}
