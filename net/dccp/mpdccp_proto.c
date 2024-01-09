@@ -447,6 +447,17 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 			mpdccp_pr_debug("error generating key of type %d", key_type);
 			return -1;
 		}
+
+		if ((opt_recv->dccpor_mp_keys[0].size == 0) || (opt_recv->dccpor_mp_keys[0].size > MPDCCP_MAX_KEY_SIZE)) {
+			mpdccp_pr_debug("received key has invalid length");
+			return -1;
+		}
+		/* Get the client key */
+		dreq->mpdccp_rem_key.type = opt_recv->dccpor_mp_keys[0].type;
+		dreq->mpdccp_rem_key.size = opt_recv->dccpor_mp_keys[0].size;
+		memcpy(dreq->mpdccp_rem_key.value, opt_recv->dccpor_mp_keys[0].value,
+			   dreq->mpdccp_rem_key.size);
+
 	} else if (opt_recv->saw_mpjoin) {
 		/* No MP_KEY: this is a join */
 		struct sock *meta_sk = NULL;
@@ -873,30 +884,15 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 		u8 dkeyB[MPDCCP_MAX_KEY_SIZE * 2];
 
 		/* Fallback to single path if mp cannot be established */
-		if (!opt_recv->saw_mpkey || (dreq->multipath_ver == MPDCCP_VERS_UNDEFINED)) {
+		if (dreq->multipath_ver == MPDCCP_VERS_UNDEFINED) {
 			mpdccp_pr_debug("failed MP negotiation with client, fallback to single path DCCP\n");
 			mpdccp_activate (newsk, 0);
 			*master_sk = inet_csk_complete_hashdance(sk, newsk, req, true);
 			return 0;
 		}
-		/* Validate the data from the options */
-		if (opt_recv->dccpor_mp_keys[0].type != dreq->mpdccp_loc_key.type) {
-			mpdccp_pr_debug("received key not the expected type rx: %d exp: %d",
-								opt_recv->dccpor_mp_keys[0].type, dreq->mpdccp_loc_key.type);
-			return -1;
-		}
-		if ((opt_recv->dccpor_mp_keys[0].size == 0) || (opt_recv->dccpor_mp_keys[0].size > MPDCCP_MAX_KEY_SIZE)) {
-			mpdccp_pr_debug("received key has invalid length");
-			return -1;
-		}
 
 		dccp_sk(newsk)->multipath_ver = dreq->multipath_ver;
 
-		/* Get the client key */
-		dreq->mpdccp_rem_key.type = opt_recv->dccpor_mp_keys[0].type;
-		dreq->mpdccp_rem_key.size = opt_recv->dccpor_mp_keys[0].size;
-		memcpy(dreq->mpdccp_rem_key.value, opt_recv->dccpor_mp_keys[0].value,
-			   dreq->mpdccp_rem_key.size);
 
 		mpdccp_pr_debug("key exchange done, creating meta socket");
 

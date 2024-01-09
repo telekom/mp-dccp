@@ -1177,19 +1177,9 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 		}
 		break;
 	case DCCP_PKT_ACK:
-		if (dccp_sk(sk)->is_kex_sk) {
-			dccp_pr_debug("(%s) ACK insert opt MP_KEY %llx %llx",
-							dccp_role(sk),
-							be64_to_cpu(*((__be64*)mpcb->mpdccp_loc_keys[mpcb->cur_key_idx].value)),
-							be64_to_cpu(*((__be64*)mpcb->mpdccp_rem_key.value)));
-			/* Insert local & remote key */
-			dccp_insert_option_mp_key(skb, mpcb, NULL);
-		} else {
-			if (!dccp_sk(sk)->auth_done){
-				/* Insert HMAC */
-				dccp_pr_debug("(%s) ACK insert opt MP_HMAC %llx", dccp_role(sk),be64_to_cpu(*((u64*)dccp_sk(sk)->mpdccp_loc_hmac)));
-				dccp_insert_option_mp_hmac(skb, dccp_sk(sk)->mpdccp_loc_hmac);
-			}
+		if (!dccp_sk(sk)->auth_done) {
+			dccp_pr_debug("(%s) ACK insert opt MP_HMAC %llx", dccp_role(sk),be64_to_cpu(*((u64*)dccp_sk(sk)->mpdccp_loc_hmac)));
+			dccp_insert_option_mp_hmac(skb, dccp_sk(sk)->mpdccp_loc_hmac);
 		}
 		break;
 	case DCCP_PKT_CLOSE:
