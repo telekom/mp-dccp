@@ -474,24 +474,23 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 		struct mpdccp_cb *mpcb;
 		int ret;
 
-		if ((opt_recv->dccpor_mp_token == 0) || (opt_recv->dccpor_mp_nonce == 0)) {
-			mpdccp_pr_debug("invalid token or nonce received");
+		if ((opt_recv->dccpor_mp_cix == 0) || (opt_recv->dccpor_mp_nonce == 0)) {
+			mpdccp_pr_debug("invalid CI or nonce received");
 			return -1;
 		}
 		dreq->mpdccp_rem_nonce = opt_recv->dccpor_mp_nonce;
-		dreq->mpdccp_rem_token = opt_recv->dccpor_mp_token;
 
 		/* Lookup the token in existing MPCBs */
 		mpdccp_for_each_conn(pconnection_list, mpcb) {
-			if (mpcb->mpdccp_loc_token == dreq->mpdccp_rem_token) {
+			if (mpcb->mpdccp_loc_cix == opt_recv->dccpor_mp_cix) {
 				meta_sk = mpcb->meta_sk;
-				mpdccp_pr_debug("found token in mpcb %p\n", mpcb);
+				mpdccp_pr_debug("found CI in mpcb %p\n", mpcb);
 				break;
 			}
 		}
 
 		if (meta_sk == NULL) {
-			mpdccp_pr_debug("no token found for join");
+			mpdccp_pr_debug("no CI found for join");
 			return -1;
 		}
 
@@ -512,7 +511,7 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 		mpdccp_pr_debug("generated nonce %x", dreq->mpdccp_loc_nonce);
 
 		/* Calculate HMAC */
-		put_unaligned_be32(mpcb->mpdccp_loc_token, &msg[0]);
+		put_unaligned_be32(mpcb->mpdccp_loc_cix, &msg[0]);
 		put_unaligned_be32(dreq->mpdccp_rem_nonce, &msg[4]);
 		ret = mpdccp_hmac_sha256(mpcb->dkeyB, mpcb->dkeylen, msg, 8, dreq->mpdccp_loc_hmac);
 		if (ret) {
@@ -604,16 +603,20 @@ static int _mpdccp_rcv_request_sent_state_process(struct sock *sk, const struct 
 			return -1;
 		}
 
-		if ((opt_recv->dccpor_mp_token == 0) || (opt_recv->dccpor_mp_nonce == 0)) {
-			mpdccp_pr_debug("invalid token or nonce received");
+		if ((opt_recv->dccpor_mp_cix == 0) || (opt_recv->dccpor_mp_nonce == 0)) {
+			mpdccp_pr_debug("invalid CI or nonce received");
 			return -1;
 		}
 		dccp_sk(sk)->mpdccp_rem_nonce = opt_recv->dccpor_mp_nonce;
-		mpcb->mpdccp_rem_token = opt_recv->dccpor_mp_token;
+
+		if (opt_recv->dccpor_mp_cix != mpcb->mpdccp_loc_cix){
+			mpdccp_pr_debug("error unknown CI");
+			return -1;
+		}
 
 		/* Validate HMAC from srv */
 		memcpy(dccp_sk(sk)->mpdccp_rem_hmac, opt_recv->dccpor_mp_hmac, MPDCCP_HMAC_SIZE);
-		put_unaligned_be32(mpcb->mpdccp_rem_token, &msg[0]);
+		put_unaligned_be32(mpcb->mpdccp_rem_cix, &msg[0]);
 		put_unaligned_be32(dccp_sk(sk)->mpdccp_loc_nonce, &msg[4]);
 		ret = mpdccp_hmac_sha256(mpcb->dkeyB, mpcb->dkeylen, msg, 8, hash_mac);
 		if (ret) {
@@ -631,7 +634,7 @@ static int _mpdccp_rcv_request_sent_state_process(struct sock *sk, const struct 
 		mpdccp_pr_debug("HMAC validation OK");
 
 		/* Now calculate the HMAC from the received JOIN */
-		put_unaligned_be32(mpcb->mpdccp_rem_token, &msg[0]);
+		put_unaligned_be32(mpcb->mpdccp_rem_cix, &msg[0]);
 		put_unaligned_be32(dccp_sk(sk)->mpdccp_rem_nonce, &msg[4]);
 		ret = mpdccp_hmac_sha256(mpcb->dkeyA, mpcb->dkeylen, msg, 8, dccp_sk(sk)->mpdccp_loc_hmac);
 		if (ret) {
@@ -843,8 +846,6 @@ _mpdccp_create_master(
 	memcpy(&mpcb->mpdccp_local_addr, &sin, sizeof(struct sockaddr_in));
 	mpcb->localaddr_len = sizeof(struct sockaddr_in);
 	mpcb->has_localaddr = 1;
-	mpcb->mpdccp_loc_token = dreq->mpdccp_loc_token;
-	mpcb->mpdccp_rem_token = dreq->mpdccp_rem_token;
 	mpcb->mpdccp_loc_keys[0] = dreq->mpdccp_loc_key;
 	mpcb->mpdccp_loc_cix = dreq->mpdccp_loc_cix;
 	mpcb->mpdccp_rem_cix = dreq->mpdccp_rem_cix;
@@ -891,7 +892,6 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 
 	if (dreq && !dreq->meta_sk && !mpdccp_is_meta(newsk)) {
 		/* This is a new session, need to create MPCB and meta */
-		u32 token;
 		int dkeylen;
 		u8 dkeyA[MPDCCP_MAX_KEY_SIZE * 2];
 		u8 dkeyB[MPDCCP_MAX_KEY_SIZE * 2];
@@ -908,8 +908,6 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 
 
 		mpdccp_pr_debug("key exchange done, creating meta socket");
-
-		/* Calculate the path tokens */
 		dccp_sk(newsk)->is_kex_sk = 0;
 
 		/* Created derived key(s) */
@@ -925,23 +923,6 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 			return -1;
 		}
 
-		/* Create local token */
-		ret = mpdccp_hash_key(dkeyB, dkeylen, &token);
-		if (ret) {
-			mpdccp_pr_debug("error hashing dkeyB, err %d", ret);
-			return -1;
-		}
-		dreq->mpdccp_loc_token = token;
-		mpdccp_pr_debug("token(B) %x", token);
-
-		/* Create remote token */
-		ret = mpdccp_hash_key(dkeyA, dkeylen, &token);
-		if (ret) {
-			mpdccp_pr_debug("error hashing dkeyA, err %d", ret);
-			return -1;
-		}
-		dreq->mpdccp_rem_token = token;
-		mpdccp_pr_debug("token(A) %x", token);
 
 		/* Now create the MPCB, meta & c */
 		ret = mpdccp_create_master(sk, newsk, req, skb);
@@ -973,7 +954,7 @@ static int _mpdccp_check_req(struct sock *sk, struct sock *newsk, struct request
 			return -1;
 		}
 		memcpy(dreq->mpdccp_rem_hmac, opt_recv->dccpor_mp_hmac, MPDCCP_HMAC_SIZE);
-		put_unaligned_be32(mpcb->mpdccp_loc_token, &msg[0]);
+		put_unaligned_be32(mpcb->mpdccp_loc_cix, &msg[0]);
 		put_unaligned_be32(dreq->mpdccp_loc_nonce, &msg[4]);
 		ret = mpdccp_hmac_sha256(mpcb->dkeyA, mpcb->dkeylen, msg, 8, hash_mac);
 		if (ret) {

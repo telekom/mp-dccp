@@ -286,8 +286,6 @@ struct mpdccp_cb {
 	u8			dkeyA[MPDCCP_MAX_KEY_SIZE * 2];
 	u8			dkeyB[MPDCCP_MAX_KEY_SIZE * 2];
 	int			dkeylen;
-	u32			mpdccp_loc_token;
-	u32			mpdccp_rem_token;
 	u32			mpdccp_loc_cix;
 	u32			mpdccp_rem_cix;
 	int			kex_done;

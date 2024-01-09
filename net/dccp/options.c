@@ -356,16 +356,16 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 				opt_recv->dccpor_join_port = dccp_hdr(skb)->dccph_sport;
 				opt_recv->dccpor_join_id = dccp_decode_value_var(value, 1);
 				value += 1;
-				opt_recv->dccpor_mp_token = get_unaligned_be32(value);
+				opt_recv->dccpor_mp_cix = get_unaligned_be32(value);
 				value += 4;
 				opt_recv->dccpor_mp_nonce = get_unaligned_be32(value);
 
 				dccp_pr_debug("%s rx opt: DCCPO_MP_JOIN = addrID %u on %pI4:%u from " \
-								"%pI4:%u, token %x nonce %x, sk %p",
+								"%pI4:%u, CI %x nonce %x, sk %p",
 								dccp_role(sk), opt_recv->dccpor_join_id,
 								&ip_hdr(skb)->daddr, htons(dccp_hdr(skb)->dccph_dport),
 								&ip_hdr(skb)->saddr, htons(dccp_hdr(skb)->dccph_sport),
-								opt_recv->dccpor_mp_token,
+								opt_recv->dccpor_mp_cix,
 								opt_recv->dccpor_mp_nonce, sk);
 				break;
 
@@ -949,11 +949,11 @@ static int dccp_insert_option_mp_confirm(struct sk_buff *skb, u8 *buf, u8 len)
 	return dccp_insert_option_multipath(skb, DCCPO_MP_CONFIRM, buf, len);
 }
 
-static int dccp_insert_option_mp_join(struct sk_buff *skb, u8 addr_id, u32 token, u32 nonce)
+static int dccp_insert_option_mp_join(struct sk_buff *skb, u8 addr_id, u32 cix, u32 nonce)
 {
 	u8 buf[9];
 	buf[0] = addr_id;
-	put_unaligned_be32(token, &buf[1]);
+	put_unaligned_be32(cix, &buf[1]);
 	put_unaligned_be32(nonce, &buf[5]);
 	return dccp_insert_option_multipath(skb, DCCPO_MP_JOIN, &buf, sizeof(buf));
 }
@@ -1172,13 +1172,13 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 			/* Insert supported keys */
 			dccp_insert_option_mp_key(skb, mpcb, NULL);
 		} else {
-			/* Insert token and nonce */
-			dccp_pr_debug("(%s) REQ insert opt MP_JOIN id:%u tk:%x nc:%x",
+			/* Insert cix and nonce */
+			dccp_pr_debug("(%s) REQ insert opt MP_JOIN id:%u CI:%x nc:%x",
 							dccp_role(sk),
 							mp_addr_id,
-							mpcb->mpdccp_rem_token,
+							mpcb->mpdccp_rem_cix,
 							dccp_sk(sk)->mpdccp_loc_nonce);
-			dccp_insert_option_mp_join(skb, mp_addr_id, mpcb->mpdccp_rem_token, dccp_sk(sk)->mpdccp_loc_nonce);
+			dccp_insert_option_mp_join(skb, mp_addr_id, mpcb->mpdccp_rem_cix, dccp_sk(sk)->mpdccp_loc_nonce);
 
 		}
 		break;
@@ -1316,9 +1316,9 @@ int dccp_insert_options_rsk_mp(const struct sock *sk, struct dccp_request_sock *
 		/* Insert HMAC */
 		dccp_pr_debug("(%s) RES insert opt MP_HMAC %llx", dccp_role(sk), be64_to_cpu(*((u64 *)dreq->mpdccp_loc_hmac)));
 		dccp_insert_option_mp_hmac(skb, dreq->mpdccp_loc_hmac);
-		/* Insert token and nonce */
-		dccp_pr_debug("(%s) RES insert opt MP_JOIN id:%u tk:%x nc:%x", dccp_role(sk), chk_id(loc_id, mpcb->master_addr_id), mpcb->mpdccp_loc_token, dreq->mpdccp_loc_nonce);
-		dccp_insert_option_mp_join(skb, chk_id(loc_id, mpcb->master_addr_id), mpcb->mpdccp_loc_token, dreq->mpdccp_loc_nonce);
+		/* Insert cix and nonce */
+		dccp_pr_debug("(%s) RES insert opt MP_JOIN id:%u CI:%x nc:%x", dccp_role(sk), chk_id(loc_id, mpcb->master_addr_id), mpcb->mpdccp_loc_cix, dreq->mpdccp_loc_nonce);
+		dccp_insert_option_mp_join(skb, chk_id(loc_id, mpcb->master_addr_id), mpcb->mpdccp_rem_cix, dreq->mpdccp_loc_nonce);
 	} else if (opt_recv->saw_mpkey) {
 		dccp_pr_debug("(%s) RES insert opt MP_KEY %llx", dccp_role(sk), be64_to_cpu(*((__be64 *)dreq->mpdccp_loc_key.value)));
 		/* Insert local key */

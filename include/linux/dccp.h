@@ -178,8 +178,6 @@ struct dccp_request_sock {
 	struct mpdccp_link_info  *link_info;
 	struct mpdccp_key	mpdccp_loc_key;
 	struct mpdccp_key	mpdccp_rem_key;
-	u32			mpdccp_loc_token;
-	u32			mpdccp_rem_token;
 	u32 		mpdccp_loc_cix;
 	u32 		mpdccp_rem_cix;
 	u32	 		mpdccp_loc_nonce;
