@@ -24,6 +24,7 @@
 
 
 
+#include <linux/random.h>
 #include <linux/kernel.h>
 #include <linux/workqueue.h>
 #include <linux/dccp.h>
@@ -54,6 +55,12 @@
 static int do_mpdccp_write_xmit (struct sock*, struct sk_buff*);
 int mpdccp_setsockopt(struct sock *sk, int level, int optname, char __user *optval, unsigned int optlen);
 int mpdccp_getsockopt(struct sock *sk, int level, int optname, char __user *optval, int __user *optlen);
+
+u32 mpdccp_generate_ci()
+{
+    /*TODO, assure that CI's are unique*/
+    return get_random_u32();
+}
 
 static
 int
@@ -390,6 +397,7 @@ _mpdccp_connect (
 
 	mpcb->glob_lfor_seqno = GLOB_SEQNO_INIT;
 	mpcb->mp_oall_seqno = GLOB_SEQNO_INIT;
+	mpcb->mpdccp_loc_cix = mpdccp_generate_ci();
 	
 	mpdccp_get_default_path_manager(pm_name);
 	pm = mpdccp_pm_find(pm_name);
@@ -458,6 +466,8 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 		memcpy(dreq->mpdccp_rem_key.value, opt_recv->dccpor_mp_keys[0].value,
 			   dreq->mpdccp_rem_key.size);
 
+		dreq->mpdccp_loc_cix = mpdccp_generate_ci();
+		dreq->mpdccp_rem_cix = opt_recv->dccpor_mp_cix;
 	} else if (opt_recv->saw_mpjoin) {
 		/* No MP_KEY: this is a join */
 		struct sock *meta_sk = NULL;
@@ -565,6 +575,7 @@ static int _mpdccp_rcv_request_sent_state_process(struct sock *sk, const struct 
 		mpcb->mpdccp_rem_key.size = opt_recv->dccpor_mp_keys[0].size;
 		memcpy(mpcb->mpdccp_rem_key.value, opt_recv->dccpor_mp_keys[0].value, mpcb->mpdccp_rem_key.size);
 
+		mpcb->mpdccp_rem_cix = opt_recv->dccpor_mp_cix;
 		/* Created derived key(s) */
 		if (mpcb->mpdccp_loc_keys[i].type == DCCPK_PLAIN) {
 			memcpy(&mpcb->dkeyA[0], mpcb->mpdccp_loc_keys[i].value, MPDCCP_PLAIN_KEY_SIZE);
@@ -835,6 +846,8 @@ _mpdccp_create_master(
 	mpcb->mpdccp_loc_token = dreq->mpdccp_loc_token;
 	mpcb->mpdccp_rem_token = dreq->mpdccp_rem_token;
 	mpcb->mpdccp_loc_keys[0] = dreq->mpdccp_loc_key;
+	mpcb->mpdccp_loc_cix = dreq->mpdccp_loc_cix;
+	mpcb->mpdccp_rem_cix = dreq->mpdccp_rem_cix;
 	mpcb->cur_key_idx = 0;
 	mpcb->mpdccp_rem_key = dreq->mpdccp_rem_key;
 	mpcb->role = MPDCCP_SERVER;

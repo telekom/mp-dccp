@@ -288,6 +288,8 @@ struct mpdccp_cb {
 	int			dkeylen;
 	u32			mpdccp_loc_token;
 	u32			mpdccp_rem_token;
+	u32			mpdccp_loc_cix;
+	u32			mpdccp_rem_cix;
 	int			kex_done;
 	u8			mpdccp_suppkeys;
 	int			cur_key_idx;
@@ -386,7 +388,7 @@ int mpdccp_deinit_funcs (void);
 int mpdccp_report_new_subflow (struct sock*);
 int mpdccp_report_destroy (struct sock*);
 int mpdccp_report_alldown (struct sock*);
-
+u32 mpdccp_generate_ci(void);
 
 
 int mpdccp_add_client_conn (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx, struct sockaddr *rem, int rlen);

@@ -180,6 +180,8 @@ struct dccp_request_sock {
 	struct mpdccp_key	mpdccp_rem_key;
 	u32			mpdccp_loc_token;
 	u32			mpdccp_rem_token;
+	u32 		mpdccp_loc_cix;
+	u32 		mpdccp_rem_cix;
 	u32	 		mpdccp_loc_nonce;
 	u32 			mpdccp_rem_nonce;
 	u8 			mpdccp_loc_hmac[MPDCCP_HMAC_SIZE];
@@ -222,6 +224,7 @@ struct dccp_options_received {
 	u32 dccpor_rtt_age;
 	u8 dccpor_mp_suppkeys;			/* MPDCCP supported key types */
 	u32 dccpor_mp_token;			/* MPDCCP path token */
+	u32 dccpor_mp_cix;			/* MPDCCP Connection ID */
 	u32 dccpor_mp_nonce;			/* MPDCCP path nonce */
 	u8 dccpor_mp_hmac[MPDCCP_HMAC_SIZE];	/* MPDCCP HMAC */
 	struct mpdccp_key dccpor_mp_keys[MPDCCP_MAX_KEYS];	/* MPDCCP keys */

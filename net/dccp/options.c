@@ -392,6 +392,10 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 				if (len < 2) {
 					goto out_invalid_option;
 				}
+				value++;
+				opt_recv->dccpor_mp_cix = get_unaligned_be32(value);
+				value += 4;
+				len -= 5;
 				opt_recv->saw_mpkey = 1;
 				if (pkt_type == DCCP_PKT_REQUEST) {
 					int i;
@@ -961,12 +965,13 @@ static int dccp_insert_option_mp_fast_close(struct sk_buff *skb, struct mpdccp_k
 
 static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_cb *mpcb, struct dccp_request_sock *dreq)
 {
-	u8 buf[MPDCCP_MAX_KEYS*(MPDCCP_MAX_KEY_SIZE + 1)];
+	u8 buf[MPDCCP_MAX_KEYS*(MPDCCP_MAX_KEY_SIZE + 1) + 5];
 	int ret, i;
-	int optlen = 0;
+	int optlen = 5;
 
 	switch (DCCP_SKB_CB(skb)->dccpd_type) {
 		case DCCP_PKT_REQUEST:
+			put_unaligned_be32(mpcb->mpdccp_loc_cix, &buf[1]);
 			for (i=0; i < MPDCCP_MAX_KEYS; i++) {
 				struct mpdccp_key *key = &mpcb->mpdccp_loc_keys[i];
 				if (mpcb && mpdccp_is_validkey(key)) {
@@ -978,16 +983,17 @@ static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_cb *mpcb
 			break;
 		case DCCP_PKT_RESPONSE:
 			if (dreq && mpdccp_is_validkey(&dreq->mpdccp_loc_key)) {
+				put_unaligned_be32(dreq->mpdccp_loc_cix, &buf[1]);
 				struct mpdccp_key *key = &dreq->mpdccp_loc_key;
-				buf[0] = key->type;
-				memcpy(&buf[1], key->value, key->size);
-				optlen = key->size + 1;
+				buf[optlen] = key->type;
+				memcpy(&buf[optlen + 1], key->value, key->size);
+				optlen += key->size + 1;
 			} else {
 				DCCP_WARN("MP_KEY: invalid input key for DCCP_PKT_RESPONSE\n");
 				ret = -1;
 			}
 			break;
-		case DCCP_PKT_ACK:
+/*		case DCCP_PKT_ACK:
 			if (mpcb && (mpcb->cur_key_idx < MPDCCP_MAX_KEYS)) {
 				struct mpdccp_key *key1, *key2;
 				key1 = &mpcb->mpdccp_loc_keys[mpcb->cur_key_idx];
@@ -1006,7 +1012,7 @@ static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_cb *mpcb
 				DCCP_WARN("MP_KEY: invalid mpcb for DCCP_PKT_ACK\n");
 				ret = -1;
 			}
-			break;
+			break;*/
 		default:
 			DCCP_WARN("MP_KEY: unsupported packet type %d\n", DCCP_SKB_CB(skb)->dccpd_type);
 			ret = -1;
