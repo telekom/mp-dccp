@@ -46,20 +46,19 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: "Checkout release branch"
-        uses: actions/checkout@v3
+      - name: Checkout release branch
+        uses: actions/checkout@v4
         with:
           ref: release_5
-      - name: "Receive debian files"
+      - name: Receive debian files
         uses: actions/download-artifact@v3
         with:
           name: "Kernel-deb-files"
-      - name: "Deploy to Release Branch"
+      - name: Deploy to Release Branch
         shell: "bash"
         run: |
           git config --global user.name "${GITHUB_ACTOR}"
           git config --global user.email "${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com"
           git add *.deb
           git commit -a -m "Continuous Integration Build Artifacts" && git push || exit 0
-        env:
-          GH_TOKEN: ${{ secrets.WORKFLOW }}
+
