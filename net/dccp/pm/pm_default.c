@@ -793,7 +793,7 @@ static bool mpdccp_del_addr(struct mpdccp_pm_ns *pm_ns,
 				found = true;
 				addr_id = local_addr->id;
 				list_del_rcu(&local_addr->address_list);
-				kfree_rcu(local_addr, rcu);
+				kmem_cache_free(mpdccp_pm_addr_cache, local_addr);
 			}
 		}
 	}
