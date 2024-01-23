@@ -1,9 +1,7 @@
 name: Compile and Package Kernel v4.14
 
 on:
-  pull_request:
-    types:
-      - closed
+  push:
     branches:
       - mpdccp_v03_k4.14
   workflow_dispatch:
@@ -37,7 +35,7 @@ jobs:
           '
 
       - name: Upload .deb files to repository
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Kernel-deb-files
           path: ${{ github.workspace }}/pkgs
@@ -51,7 +49,7 @@ jobs:
         with:
           ref: release_4
       - name: Receive debian files
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: "Kernel-deb-files"
       - name: Deploy to Release Branch
