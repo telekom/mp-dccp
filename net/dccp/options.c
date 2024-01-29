@@ -1297,7 +1297,7 @@ int dccp_insert_options_rsk_mp(const struct sock *sk, struct dccp_request_sock *
 		struct mpdccp_cb *mpcb = get_mpcb(dreq->meta_sk);
 		int loc_id = 0;
 
-		if (!mpcb) {
+		if (!mpcb || mpcb->to_be_closed) {
 			dccp_pr_debug("(%s) invalid MPCB", dccp_role(sk));
 			return -1;
 		}
