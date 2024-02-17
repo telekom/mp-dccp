@@ -24,7 +24,6 @@
 
 
 
-#include <linux/random.h>
 #include <linux/kernel.h>
 #include <linux/workqueue.h>
 #include <linux/dccp.h>
@@ -56,11 +55,6 @@ static int do_mpdccp_write_xmit (struct sock*, struct sk_buff*);
 int mpdccp_setsockopt(struct sock *sk, int level, int optname, char __user *optval, unsigned int optlen);
 int mpdccp_getsockopt(struct sock *sk, int level, int optname, char __user *optval, int __user *optlen);
 
-u32 mpdccp_generate_ci()
-{
-    /*TODO, assure that CI's are unique*/
-    return get_random_u32();
-}
 
 static
 int
@@ -397,7 +391,7 @@ _mpdccp_connect (
 
 	mpcb->glob_lfor_seqno = GLOB_SEQNO_INIT;
 	mpcb->mp_oall_seqno = GLOB_SEQNO_INIT;
-	mpcb->mpdccp_loc_cix = mpdccp_generate_ci();
+	mpcb->mpdccp_loc_cix = mpdccp_link_generate_cid();
 	
 	mpdccp_get_default_path_manager(pm_name);
 	pm = mpdccp_pm_find(pm_name);
@@ -466,7 +460,7 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 		memcpy(dreq->mpdccp_rem_key.value, opt_recv->dccpor_mp_keys[0].value,
 			   dreq->mpdccp_rem_key.size);
 
-		dreq->mpdccp_loc_cix = mpdccp_generate_ci();
+		dreq->mpdccp_loc_cix = mpdccp_link_generate_cid();
 		dreq->mpdccp_rem_cix = opt_recv->dccpor_mp_cix;
 	} else if (opt_recv->saw_mpjoin) {
 		/* No MP_KEY: this is a join */
@@ -475,7 +469,7 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 		int ret;
 
 		if ((opt_recv->dccpor_mp_cix == 0) || (opt_recv->dccpor_mp_nonce == 0)) {
-			mpdccp_pr_debug("invalid CI or nonce received");
+			mpdccp_pr_debug("invalid CID or nonce received");
 			return -1;
 		}
 		dreq->mpdccp_rem_nonce = opt_recv->dccpor_mp_nonce;
@@ -484,13 +478,13 @@ static int _mpdccp_conn_request(struct sock *sk, struct dccp_request_sock *dreq)
 		mpdccp_for_each_conn(pconnection_list, mpcb) {
 			if (mpcb->mpdccp_loc_cix == opt_recv->dccpor_mp_cix) {
 				meta_sk = mpcb->meta_sk;
-				mpdccp_pr_debug("found CI in mpcb %p\n", mpcb);
+				mpdccp_pr_debug("found CID in mpcb %p\n", mpcb);
 				break;
 			}
 		}
 
 		if (meta_sk == NULL) {
-			mpdccp_pr_debug("no CI found for join");
+			mpdccp_pr_debug("no CID found for join");
 			return -1;
 		}
 
@@ -604,13 +598,13 @@ static int _mpdccp_rcv_request_sent_state_process(struct sock *sk, const struct 
 		}
 
 		if ((opt_recv->dccpor_mp_cix == 0) || (opt_recv->dccpor_mp_nonce == 0)) {
-			mpdccp_pr_debug("invalid CI or nonce received");
+			mpdccp_pr_debug("invalid CID or nonce received");
 			return -1;
 		}
 		dccp_sk(sk)->mpdccp_rem_nonce = opt_recv->dccpor_mp_nonce;
 
 		if (opt_recv->dccpor_mp_cix != mpcb->mpdccp_loc_cix){
-			mpdccp_pr_debug("error unknown CI");
+			mpdccp_pr_debug("error unknown CID");
 			return -1;
 		}
 
@@ -853,6 +847,9 @@ _mpdccp_create_master(
 	mpcb->mpdccp_rem_key = dreq->mpdccp_rem_key;
 	mpcb->role = MPDCCP_SERVER;
 	mpcb->master_addr_id = 0;
+
+	//prevent cid entry deletion triggered by freeing dreq  
+	dreq->mpdccp_loc_cix = 0;
 
 	addr.ip = inet->inet_saddr;
 	if(mpcb->pm_ops->claim_local_addr)

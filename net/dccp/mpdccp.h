@@ -386,7 +386,6 @@ int mpdccp_deinit_funcs (void);
 int mpdccp_report_new_subflow (struct sock*);
 int mpdccp_report_destroy (struct sock*);
 int mpdccp_report_alldown (struct sock*);
-u32 mpdccp_generate_ci(void);
 
 
 int mpdccp_add_client_conn (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx, struct sockaddr *rem, int rlen);

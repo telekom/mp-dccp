@@ -379,6 +379,7 @@ int mpdccp_destroy_mpcb(struct mpdccp_cb *mpcb)
 	mpdccp_cleanup_path_manager(mpcb);
 
 	/* release and eventually free mpcb */   
+    mpdccp_link_free_cid(mpcb->mpdccp_loc_cix);
 	mpdccp_cb_put (mpcb);
 	
 	return 0;

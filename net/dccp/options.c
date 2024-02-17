@@ -361,7 +361,7 @@ int dccp_parse_options(struct sock *sk, struct dccp_request_sock *dreq,
 				opt_recv->dccpor_mp_nonce = get_unaligned_be32(value);
 
 				dccp_pr_debug("%s rx opt: DCCPO_MP_JOIN = addrID %u on %pI4:%u from " \
-								"%pI4:%u, CI %x nonce %x, sk %p",
+								"%pI4:%u, CID %u nonce %x, sk %p",
 								dccp_role(sk), opt_recv->dccpor_join_id,
 								&ip_hdr(skb)->daddr, htons(dccp_hdr(skb)->dccph_dport),
 								&ip_hdr(skb)->saddr, htons(dccp_hdr(skb)->dccph_sport),
@@ -1183,7 +1183,7 @@ void dccp_insert_options_mp(struct sock *sk, struct sk_buff *skb)
 		}
 		break;
 	case DCCP_PKT_ACK:
-		if (!dccp_sk(sk)->auth_done) {
+		if (!dccp_sk(sk)->auth_done && !dccp_sk(sk)->is_kex_sk) {
 			dccp_pr_debug("(%s) ACK insert opt MP_HMAC %llx", dccp_role(sk),be64_to_cpu(*((u64*)dccp_sk(sk)->mpdccp_loc_hmac)));
 			dccp_insert_option_mp_hmac(skb, dccp_sk(sk)->mpdccp_loc_hmac);
 		}
