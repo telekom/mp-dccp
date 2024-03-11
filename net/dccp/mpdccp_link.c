@@ -946,6 +946,66 @@ call_mpdccp_link_notifiers (
 }
 EXPORT_SYMBOL(call_mpdccp_link_notifiers);
 
+/*
+* Connection ID implementation. 
+* Here uniqueness is guaranteed by keeping track of all assigned CIDs in memory.
+* When a new CID is generated, we loop the list to make sure it's unique.
+* There are other, more performant ways to do this.
+*/
+
+struct mpdccp_link_cidb {
+	/* List of local MPDCCP connection IDs */
+	struct list_head list;
+	u32 cid;
+};
+
+struct list_head __rcu cid_list;
+spinlock_t cid_list_lock;
+
+u32 mpdccp_link_generate_cid()
+{
+    bool unique = false;
+    struct mpdccp_link_cidb *mcid, *ptr;
+    mcid = kmalloc(sizeof(struct mpdccp_link_cidb), GFP_ATOMIC);
+    if (!mcid)
+        return 0;
+
+    spin_lock_bh(&cid_list_lock);
+    while (!unique || !mcid->cid) {
+        mcid->cid = get_random_u32();
+        unique = true;
+
+        list_for_each_entry(ptr, &cid_list, list) {
+            if (ptr->cid == mcid->cid) {
+                unique = false;
+                break;
+            }
+        }
+    }
+    
+    list_add_tail_rcu(&mcid->list, &cid_list);
+    spin_unlock_bh(&cid_list_lock);
+	mpdccp_pr_debug("generated new CID: %u", mcid->cid);
+    return mcid->cid;
+}
+EXPORT_SYMBOL(mpdccp_link_generate_cid);
+
+void mpdccp_link_free_cid(u32 cid){
+    struct mpdccp_link_cidb *ptr;
+	if(!cid) return;
+    spin_lock_bh(&cid_list_lock);
+    list_for_each_entry(ptr, &cid_list, list) {
+        if (ptr->cid == cid) {
+            list_del_rcu(&ptr->list);
+            INIT_LIST_HEAD(&ptr->list);
+            kfree(ptr);
+            break;
+        }
+    }
+    spin_unlock_bh(&cid_list_lock);
+	mpdccp_pr_debug("freed CID: %u", cid);
+}
+EXPORT_SYMBOL(mpdccp_link_free_cid);
 
 static
 int
@@ -1056,6 +1116,10 @@ mpdccp_link_module_init (void)
 		mpdccp_pr_error ("mpdccp_link: error in register_netdevice_notifier(): %d\n", ret);
 		return ret;
 	}
+
+    INIT_LIST_HEAD(&cid_list);
+    spin_lock_init(&cid_list_lock);
+
 	mpdccp_pr_info ("mpdccp_link_module_init() - done\n");
 	return 0;
 }

@@ -575,6 +575,10 @@ static void dccp_v4_reqsk_destructor(struct request_sock *req)
 		sock_put(dreq->meta_sk);
 		dreq->meta_sk = NULL;
 	}
+	if (dreq->mpdccp_loc_cix) {
+		mpdccp_link_free_cid(dreq->mpdccp_loc_cix);
+		dreq->mpdccp_loc_cix = 0;
+	}
 #endif
 
 	dccp_feat_list_purge(&dccp_rsk(req)->dreq_featneg);

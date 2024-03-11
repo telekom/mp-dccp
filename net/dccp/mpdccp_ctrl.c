@@ -379,6 +379,7 @@ int mpdccp_destroy_mpcb(struct mpdccp_cb *mpcb)
 	mpdccp_cleanup_path_manager(mpcb);
 
 	/* release and eventually free mpcb */   
+    mpdccp_link_free_cid(mpcb->mpdccp_loc_cix);
 	mpdccp_cb_put (mpcb);
 	
 	return 0;
@@ -836,32 +837,12 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	if (dccp_sk(sk)->is_kex_sk && mpcb->kex_done) {
 		struct inet_sock *inet_meta = inet_sk(mpcb->meta_sk);
 		struct inet_sock *inet_sub = inet_sk(sk);
-		u32 token;
 
 		/* MP_KEY sockets can be authorized now. MP_JOIN sockets need to wait one more more ack */
 		dccp_sk(sk)->auth_done = 1;
 
 		/* Reset the flag to avoid inserting MP_KEY options in subsenquent ACKs */
 		dccp_sk(sk)->is_kex_sk = 0;
-
-		/* Create local token */
-		ret = mpdccp_hash_key(mpcb->dkeyA, mpcb->dkeylen, &token);
-		if (ret) {
-			mpdccp_pr_debug("error hashing dkeyA, err %d", ret);
-			sock_release(sock);
-			goto out;
-		}
-		mpcb->mpdccp_loc_token = token;
-
-		/* Create remote token */
-		ret = mpdccp_hash_key(mpcb->dkeyB, mpcb->dkeylen, &token);
-		if (ret) {
-			mpdccp_pr_debug("error hashing dkeyB, err %d", ret);
-			sock_release(sock);
-			goto out;
-		}
-		mpcb->mpdccp_rem_token = token;
-		mpdccp_pr_debug("client: kex done lt: %x rt: %x", mpcb->mpdccp_loc_token, mpcb->mpdccp_rem_token);
 
 		/* Update the state and MSS of meta socket */
 		dccp_sk(mpcb->meta_sk)->dccps_mss_cache = dccp_sk(sk)->dccps_mss_cache;
@@ -1267,23 +1248,6 @@ void mpdccp_init_announce_prio(struct sock *sk)
     mpdccp_my_sock(sk)->announce_prio = mpdccp_get_prio(sk) + 1;        //adding +1 so we can check also for sending zero
     dccp_send_keepalive(sk);
 }
-
-int mpdccp_hash_key(const u8 *key, u8 keylen, u32 *token)
-{
-        SHASH_DESC_ON_STACK(desc, tfm_hash);
-        int ret;
-        u32 buf[8];
-
-        desc->tfm = tfm_hash;
-        desc->flags = 0;
-        ret = crypto_shash_digest(desc, key, keylen, (u8*)buf);
-
-        if (token)
-            *token = buf[0];
-
-        return ret;
-}
-EXPORT_SYMBOL(mpdccp_hash_key);
 
 int mpdccp_generate_key(struct mpdccp_key *key, int key_type)
 {
