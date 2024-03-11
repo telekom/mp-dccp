@@ -408,7 +408,7 @@ static int mpdccp_reset_path_cb(struct mpdccp_reorder_path_cb *pcb)
 
 	pcb->mrtt = 0; pcb->krtt = 0; pcb->drtt = 0;
 	pcb->oall_seqno = 0; pcb->path_seqno = 0; pcb->not_rcv = 0;
-	pcb->last_path_seqno = 0;
+	pcb->exp_path_seqno = 0;
 
 	for(i = 0; i < DWINDOW_SIZE; i++){
 		pcb->wnd[i] = 0;

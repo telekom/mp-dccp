@@ -163,6 +163,9 @@
 #define __is2n(n)																			  \
 	((n & (n - 1)) == 0)  // check if n = 2^x, x in {0, 1, 2, 3, 4, ...}
 	
+#define __rbuf_pseq(cb, seqno)                                                                \
+    (u64)atomic64_read(&__rbuf_entry(cb, seqno).path_seqno)
+
 /* slab cache */
 struct kmem_cache *active_cb_cache __read_mostly;
 
@@ -190,6 +193,8 @@ struct mpdccp_rbuf_entry{
 	struct sk_buff *skb;
 	ktime_t abs_to;                                 // timeout (absolute)
 	atomic64_t oall_seqno;
+    atomic64_t path_seqno;
+    struct mpdccp_reorder_path_cb *pcb;
 };
 
 /*
@@ -233,7 +238,7 @@ struct active_cb {
  *************************************************/
 /* function pointer */
 u64 (*get_to)(struct active_cb *acb, u64 latency);
-void (*detect_loss)(struct active_cb *acb, struct mpdccp_reorder_path_cb *pcb);
+int (*detect_loss)(struct active_cb *acb);
 
 /* functions */
 // reordering functions
@@ -245,8 +250,7 @@ int fast_check(struct active_cb *acb, struct sk_buff *skb, struct mpdccp_cb *mpc
 void rbuf_init(struct mpdccp_rbuf *rbuf, struct active_cb *acb);
 void rbuf_insert(struct active_cb *acb, struct rcv_buff *rb, struct mpdccp_reorder_path_cb *pcb);	
 void rbuf_flush(struct active_cb *acb, u64 exp);
-void rbuf_find_next(struct active_cb *acb, u64 exp);
-void __rbuf_find_next(struct active_cb *acb, u64 exp);
+void rbuf_update_next(struct active_cb *acb, u64 exp);
 
 // timer functions
 void exp_timer_cb(unsigned long arg);
@@ -256,10 +260,10 @@ u64 get_fixed_to(struct active_cb *acb, u64 latency);
 u64 get_adaptive_to(struct active_cb *acb, u64 latency);
 u64 get_equalized_adatptive_to(struct active_cb *acb, u64 latency);
 char* set_adaptive(void);
-void detect_no_loss(struct active_cb *acb, struct mpdccp_reorder_path_cb *pcb);
-void detect_fast_loss_oall(struct active_cb *acb, struct mpdccp_reorder_path_cb *pcb);
-void detect_fast_loss_path(struct active_cb *acb, struct mpdccp_reorder_path_cb *pcb);
-void detect_fast_loss_combined(struct active_cb *acb, struct mpdccp_reorder_path_cb *pcb);
+int detect_no_loss(struct active_cb *acb);
+int detect_fast_loss_oall(struct active_cb *acb);
+int detect_fast_loss_path(struct active_cb *acb);
+int detect_fast_loss_combined(struct active_cb *acb);
 char* set_loss_detection(void);
 
 // active cb management functions
@@ -352,8 +356,8 @@ void do_reorder_active_mod(struct rcv_buff *rb){
     if(!pcb){
         pcb = mpdccp_init_reorder_path_cb(rb->sk);
         my_sk->pcb = pcb;
-        pcb->last_path_seqno = DCCP_SKB_CB(rb->skb)->dccpd_seq;
-        pcb->last_oall_seqno = rb->oall_seqno;
+        pcb->buffed_pkts = 0;
+        pcb->exp_path_seqno = DCCP_SKB_CB(rb->skb)->dccpd_seq;
         ro_dbug1("RO-DEBUG: new pcb 0x%p", pcb);
     }
     /* update path properties */
@@ -434,9 +438,6 @@ void do_reorder_active_mod(struct rcv_buff *rb){
      * ### LOSS DETECTION:
      */
     spin_lock_bh(&acb->adaptive_cb_lock);
-    detect_loss(acb, pcb);
-    pcb->last_oall_seqno = rb->oall_seqno;
-    //pcb->last_path_seqno = pcb->path_seqno;
     exp = __exp(acb);
     /*
     * ### REORDERING DECISION:
@@ -447,8 +448,8 @@ void do_reorder_active_mod(struct rcv_buff *rb){
     else if(rb->oall_seqno < exp) {
         if (sysctl_drop_lost) {
             ro_dbug3("RO-DEBUG: dropping outdated packet seq: %llu pcb %p\n", (u64)rb->oall_seqno, pcb);
-  	    kfree_skb (rb->skb);
-   	    rb->skb = NULL;
+            kfree_skb (rb->skb);
+            rb->skb = NULL;
             goto finished;
         } else {
             ro_dbug3("RO-DEBUG: forwarding outdated packet seq: %llu pcb %p\n", (u64)rb->oall_seqno, pcb);
@@ -458,10 +459,10 @@ void do_reorder_active_mod(struct rcv_buff *rb){
     }
     else goto buffer;
 
-/* irreversible out-of-order */
 forward:
     mpdccp_forward_skb(rb->skb, rb->mpcb);
     __exp_set(acb, (exp + 1));
+    pcb->exp_path_seqno = pcb->path_seqno + 1;
     acb->mpcb->glob_lfor_seqno = exp;
 
     goto finished;
@@ -480,9 +481,10 @@ exit:
 }
 
 void do_update_pseq(struct my_sock *my_sk, struct sk_buff *skb){
-	struct mpdccp_reorder_path_cb *pcb = my_sk->pcb;
-	if(pcb && DCCP_SKB_CB(skb)->dccpd_seq > pcb->last_path_seqno)
-        pcb->last_path_seqno = DCCP_SKB_CB(skb)->dccpd_seq;
+    struct mpdccp_reorder_path_cb *pcb = my_sk->pcb;
+    if(pcb && !pcb->buffed_pkts && DCCP_SKB_CB(skb)->dccpd_seq == pcb->exp_path_seqno){
+        pcb->exp_path_seqno++;
+    }
 }
 
 /************************************************* 
@@ -523,27 +525,22 @@ void rbuf_insert(struct active_cb *acb, struct rcv_buff *rb, struct mpdccp_reord
 retry:
 	if(!__rbuf_entry(acb, rb->oall_seqno).skb){
 		__rbuf_entry(acb, rb->oall_seqno).skb = rb->skb;
-        	__rbuf_entry(acb, rb->oall_seqno).abs_to = ktime_add_ms(mpdccp_get_now(), get_to(acb, mpdccp_get_lat(pcb))); 
-        	ro_dbug3("RO-DEBUG: insert acb: %p pcb: %p to %llu", acb, pcb, get_to(acb, mpdccp_get_lat(pcb)));
+		__rbuf_entry(acb, rb->oall_seqno).abs_to = ktime_add_ms(mpdccp_get_now(), get_to(acb, mpdccp_get_lat(pcb)));
+		ro_dbug3("RO-DEBUG: insert acb: %p pcb: %p to %llu", acb, pcb, get_to(acb, mpdccp_get_lat(pcb)));
 		__rbuf_size_inc(acb);
 		atomic64_set (&__rbuf_entry(acb, rb->oall_seqno).oall_seqno, rb->oall_seqno);
+        atomic64_set (&__rbuf_entry(acb, rb->oall_seqno).path_seqno, pcb->path_seqno);
+        __rbuf_entry(acb, rb->oall_seqno).pcb = pcb;
 
 		/* determine start and end of buffer */
 		if(__rbuf_last(acb) < rb->oall_seqno) __rbuf_last_set(acb, rb->oall_seqno);
 		if(__rbuf_next(acb) > rb->oall_seqno) __rbuf_next_set(acb, rb->oall_seqno);
-	}
-	else if (sysctl_drop_dup && rb->oall_seqno == (u64)atomic64_read (&__rbuf_entry(acb, rb->oall_seqno).oall_seqno)) {
+        pcb->buffed_pkts++;
+	} else if (sysctl_drop_dup && rb->oall_seqno == (u64)atomic64_read (&__rbuf_entry(acb, rb->oall_seqno).oall_seqno)) {
 		/* drop duplicated packets */
 		kfree_skb (rb->skb);
 		rb->skb = NULL;
-	}
-#if 0
-	else if (rb->oall_seqno <= (u64)atomic64_read (&__rbuf_entry(acb, rb->oall_seqno).oall_seqno)) {
-		ro_warn("RO-WARN: overwriting packets"); 
-            	mpdccp_forward_skb(rb->skb, rb->mpcb);
-	}
-#endif
-	else{
+	} else {
 		ro_warn("RO-WARN: overwriting packets"); 
 		forward(acb, rb->oall_seqno);
 		goto retry;
@@ -556,13 +553,12 @@ retry:
 void rbuf_flush(struct active_cb *acb, u64 exp){
     int ret;
 	u8 cnt = 0;
-    u64 next;
+    u64 next = 0;
 
 	/* rbuf is emtpy */
-	if(__rbuf_size(acb) == 0) goto empty; 
+	if(__rbuf_size(acb) == 0) goto finished; 
 
-	
-	//ro_dbug3("RO-DEBUG: flushing buffer (size : %u, exp. : %llu)", __rbuf_size(acb), exp);
+retry:
 	while(__rbuf_entry(acb, exp).skb){
         if (__snd(acb)!=exp){
             __snd_set(acb, exp);
@@ -578,17 +574,11 @@ void rbuf_flush(struct active_cb *acb, u64 exp){
 		cnt++;
 	}
 
-	goto success;
-
-empty:
-	ro_dbug3("RO-DEBUG: flushing skipped due to empty buffer");
-	goto finished;
-success:
-	ro_dbug3("RO-DEBUG: flushed %u packets (new size : %u)", cnt, __rbuf_size(acb));
-
-	/* find new next (if packets were forwarded) */
-	if(__rbuf_size(acb) > 0) rbuf_find_next(acb, exp);
-    else __rbuf_last_set(acb, U64_MAX);  
+    rbuf_update_next(acb, exp);
+    if(__rbuf_size(acb) && detect_loss(acb)){
+        exp = __rbuf_next(acb);
+        goto retry;
+    }
 
     /* check for timeout */
     next = __rbuf_next(acb);
@@ -613,27 +603,21 @@ finished:
 }
 
 /**
- * Find the first availble buffer entry. Set timer accordingly.
- */
-void rbuf_find_next(struct active_cb *acb, u64 exp){
-    u64 new_low;
-
-    /* find new low */
-	__rbuf_find_next(acb, exp);
-    new_low = __rbuf_next(acb);
-
-    if(new_low == U64_MAX) return;
-}
-
-/**
  * Find the first available buffer entry.
  */
-void __rbuf_find_next(struct active_cb *acb, u64 exp){
-    u64 i;
-//    for(i = exp; i < __rbuf_last(acb); i++){ if(__rbuf_entry(acb, i).skb) return __rbuf_next_set(acb, i); }
-    for(i = exp; i < __rbuf_last(acb); i++){ if(__rbuf_entry(acb, i).skb) {__rbuf_next_set(acb, i); return;} }
-//    return __rbuf_next_set(acb, U64_MAX);
-    __rbuf_next_set(acb, U64_MAX);
+void rbuf_update_next(struct active_cb *acb, u64 exp){
+    if(__rbuf_size(acb)){
+        u64 i;
+        for(i = exp; i <= __rbuf_last(acb); i++) {
+            if(__rbuf_entry(acb, i).skb) {
+                __rbuf_next_set(acb, i);
+                return;
+            }
+        }
+    } else {
+        __rbuf_next_set(acb, U64_MAX);
+        __rbuf_last_set(acb, 0);
+    }
 }
 
 /************************************************* 
@@ -642,8 +626,8 @@ void __rbuf_find_next(struct active_cb *acb, u64 exp){
 void exp_timer_cb(unsigned long arg){
     struct mpdccp_rbuf *rbuf = (struct mpdccp_rbuf *) arg;
     struct active_cb *acb = NULL;
-    u64 last;
-    int i = 0, cnt = 0;
+    u64 next;
+    int cnt = 0;
 
     if(!rbuf) {
         ro_err("RO-ERROR: could not determine container rbuf of t");
@@ -655,14 +639,10 @@ void exp_timer_cb(unsigned long arg){
     ro_dbug1("RO-DEBUG: timer (0x%p) elapsed, exp %llu", &rbuf->exp_timer, (u64)__exp(acb));
 
     /* forward all packets that are buffered */
-    last = __rbuf_last(acb);
-    //TODO force flush from next to last (does not work somehow)
-    //for(next = __rbuf_next(acb); next <  (last == U64_MAX ? (next + sysctl_rbuf_size) : last); next++){ if(__rbuf_entry(acb, next).skb) forward(acb, next); }
-    for(i = 0; i < sysctl_rbuf_size; i++){ 
-        if(__rbuf_entry(acb, i).skb){
-            forward_inorder(acb, i); 
-            cnt++;
-        } 
+    for(next = __rbuf_next(acb); next < __rbuf_last(acb); next++){
+        if(__rbuf_entry(acb, next).skb) forward(acb, next);
+        cnt++;
+        if(__rbuf_size(acb) == 0) break;
     }
     spin_unlock_bh(&acb->adaptive_cb_lock);
     ro_dbug1("RO-DEBUG: %u packets expired", cnt);
@@ -714,52 +694,43 @@ fixed:
  * 4) fast loss detection by overall and path sequencing
  * mechanisms.
  */
-void detect_no_loss(struct active_cb *acb, struct mpdccp_reorder_path_cb *pcb){ return; }
 
-void detect_fast_loss_oall(struct active_cb *acb, struct mpdccp_reorder_path_cb *pcb)
+int detect_no_loss(struct active_cb *acb){ return 0; }
+
+int detect_fast_loss_oall(struct active_cb *acb)
 {
     struct my_sock *my_itr = NULL;
-    u64 min = U64_MAX;                          // latest received packet with lowest oaverall sequence number (tunnel-level)
-    u64 oall_gap;
-
+    int loss_detected = 1;
     spin_lock_bh(&((acb->mpcb)->psubflow_list_lock));
-	list_for_each_entry(my_itr, &((acb->mpcb)->psubflow_list), sk_list) {
-        if(!my_itr->pcb) continue;                                                  // skip not initialized links
-        if(!my_itr->pcb->active) continue;                                          // skip inactive links
-        min = (min > my_itr->pcb->oall_seqno) ? my_itr->pcb->oall_seqno : min;
+    list_for_each_entry(my_itr, &((acb->mpcb)->psubflow_list), sk_list) {
+        if(!my_itr->pcb || !my_itr->pcb->active) continue;                          // skip not initialized links
+        if(!my_itr->pcb->buffed_pkts){
+            loss_detected = 0;
+            break;
+        }
     }
     spin_unlock_bh(&((acb->mpcb)->psubflow_list_lock));
-
-    oall_gap = (__exp(acb) < min) ? (min - __exp(acb)) : 0;
-    if (oall_gap) {
-        ro_dbug1("RO-DEBUG: detect_fast_loss_oall lost %llu packets\n", oall_gap);
-        __exp_set(acb, __exp(acb) + oall_gap);
-    }
+    return loss_detected;
 }
 
-void detect_fast_loss_path(struct active_cb *acb, struct mpdccp_reorder_path_cb *pcb)
+int detect_fast_loss_path(struct active_cb *acb)
 {
-    u64 path_gap;
+    u64 next_pseq, path_gap, oall_gap;
+    u64 next = __rbuf_next(acb);
+    u64 exp = __exp(acb);
+    struct mpdccp_reorder_path_cb *pcb = __rbuf_entry(acb, next).pcb;
 
-    path_gap = (pcb->path_seqno > pcb->last_path_seqno) ? (pcb->path_seqno - pcb->last_path_seqno - 1) : 0;
-    if (path_gap) {
-        ro_dbug1("RO-DEBUG: detect_fast_loss_path lost %llu packets on pcb %p\n", path_gap, pcb);
-        __exp_set(acb, __exp(acb) + path_gap);
-    }
+    if(!pcb) return 0;
+    next_pseq = __rbuf_pseq(acb, next);
+    path_gap = (next_pseq > pcb->exp_path_seqno) ? (next_pseq - pcb->exp_path_seqno) : 0;
+    oall_gap = (next > exp) ? (next - exp) : 0;
+    if(path_gap == oall_gap) return 1;
+    return 0;
 }
 
-void detect_fast_loss_combined(struct active_cb *acb, struct mpdccp_reorder_path_cb *pcb)
+int detect_fast_loss_combined(struct active_cb *acb)
 {
-    u64 oall_gap;
-    u64 path_gap;
-
-    oall_gap = (pcb->oall_seqno > pcb->last_oall_seqno) ? (pcb->oall_seqno - pcb->last_oall_seqno - 1) : 0;
-    path_gap = (pcb->path_seqno > pcb->last_path_seqno) ? (pcb->path_seqno - pcb->last_path_seqno - 1) : 0;
-
-    if (oall_gap && (oall_gap == path_gap)) {
-        ro_dbug1("RO-DEBUG: detect_fast_loss_combined lost %llu packets on pcb %p\n", path_gap, pcb);
-        __exp_set(acb, pcb->oall_seqno);
-    }
+    return detect_fast_loss_oall(acb) + detect_fast_loss_path(acb);
 }
 
 char* set_loss_detection(void){
@@ -776,7 +747,7 @@ no_loss:
 		return "FAST loss detection by PATH-SEQUENCING";
 	case 3:
 		detect_loss = detect_fast_loss_combined;
-		return "FAST loss detection by OVERALL- and PATH-SEQUENCING";
+		return "FAST loss detection by COMBINED-SEQUENCING";
 	default:
 		goto no_loss;
 	}
@@ -842,15 +813,23 @@ void forward_inorder(struct active_cb *acb, u64 i){
  */
 void forward(struct active_cb *acb, u64 i){
     struct sk_buff *skb_t;
+    struct mpdccp_reorder_path_cb *pcb;
     if(!acb) goto fail0;
     if(!__rbuf_entry(acb, i).skb) goto fail1;
 
     skb_t = __rbuf_entry(acb, i).skb;
     __rbuf_entry(acb, i).skb = NULL;
     mpdccp_forward_skb(skb_t, acb->mpcb);
-    //__rbuf_entry(acb, i).skb = NULL;
+    pcb = __rbuf_entry(acb, i).pcb;
+    if(pcb) {
+        u64 pseq = __rbuf_pseq(acb, i);
+        if (pcb->exp_path_seqno <= pseq)
+            pcb->exp_path_seqno = pseq+1;
+        if (pcb->buffed_pkts)
+            pcb->buffed_pkts--;
+    }
+    __rbuf_entry(acb, i).pcb = NULL;
     __rbuf_entry(acb, i).abs_to = ktime_set(0, 0);
-
     __rbuf_size_dec(acb);
     return;
 
