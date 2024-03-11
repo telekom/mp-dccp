@@ -969,6 +969,7 @@ static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_cb *mpcb
 	int ret, i;
 	int optlen = 5;
 
+	buf[0] = 0;
 	switch (DCCP_SKB_CB(skb)->dccpd_type) {
 		case DCCP_PKT_REQUEST:
 			put_unaligned_be32(mpcb->mpdccp_loc_cix, &buf[1]);
@@ -993,32 +994,12 @@ static int dccp_insert_option_mp_key(struct sk_buff *skb, struct mpdccp_cb *mpcb
 				ret = -1;
 			}
 			break;
-/*		case DCCP_PKT_ACK:
-			if (mpcb && (mpcb->cur_key_idx < MPDCCP_MAX_KEYS)) {
-				struct mpdccp_key *key1, *key2;
-				key1 = &mpcb->mpdccp_loc_keys[mpcb->cur_key_idx];
-				key2 = &mpcb->mpdccp_rem_key;
-				if (mpdccp_is_validkey(key1) && mpdccp_is_validkey(key2)) {
-					buf[0] = key1->type;
-					memcpy(&buf[1], key1->value, key1->size);
-					buf[key1->size + 1] = key2->type;
-					memcpy(&buf[key1->size + 2], key2->value, key2->size);
-					optlen = key1->size + key2->size + 2;
-				} else {
-					DCCP_WARN("MP_KEY: invalid input key(s) for DCCP_PKT_ACK\n");
-					ret = -1;
-				}
-			} else {
-				DCCP_WARN("MP_KEY: invalid mpcb for DCCP_PKT_ACK\n");
-				ret = -1;
-			}
-			break;*/
 		default:
 			DCCP_WARN("MP_KEY: unsupported packet type %d\n", DCCP_SKB_CB(skb)->dccpd_type);
 			ret = -1;
 			break;
 	}
-	if (optlen) {
+	if (optlen > 5) {
 		ret = dccp_insert_option_multipath(skb, DCCPO_MP_KEY, &buf, optlen);
 	}
 	return ret;
