@@ -35,11 +35,9 @@ struct sock *sched_default (struct mpdccp_cb *mpcb)
 
     rcu_read_lock();
     mpdccp_for_each_sk(mpcb, sk) {
-        if(!mpdccp_sk_can_send(sk)) continue;
-        if(!mpdccp_packet_fits_in_cwnd(sk) && !dccp_ack_pending(sk)) continue;
-
-	rcu_read_unlock();
-	return sk;
+        if(!mpdccp_sk_can_send(sk) || !mpdccp_packet_fits_in_cwnd(sk)) continue;
+        rcu_read_unlock();
+        return sk;
     }
 
     rcu_read_unlock();

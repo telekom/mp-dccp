@@ -96,7 +96,9 @@ static inline int dev_change_mpdccp_resetstat(struct net_device *dev)
 	return mpdccp_link_change_mpdccp_resetstat(MPDCCP_LINK_FROM_DEV(dev));
 }
 
-
+/* Connection ID functions  */
+u32 mpdccp_link_generate_cid(void);
+void mpdccp_link_free_cid(u32 cid);
 /* 
  * find functions
  */

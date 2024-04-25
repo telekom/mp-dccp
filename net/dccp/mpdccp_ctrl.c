@@ -167,10 +167,11 @@ static int mpdccp_read_from_subflow (struct sock *sk)
             break;
         case DCCP_PKT_CLOSE:
         case DCCP_PKT_CLOSEREQ:
-            if (!mpdccp_my_sock(sk)->closing) {
-                mpdccp_my_sock(sk)->closing = 1;
-                schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, 0);
+            if (!my_sk->closing) {
+                my_sk->closing = 1;
+                schedule_delayed_work(&my_sk->close_work, 0);
             }
+        case DCCP_PKT_RESET:
             __kfree_skb(skb);
             break;
         default:
@@ -379,11 +380,11 @@ int mpdccp_destroy_mpcb(struct mpdccp_cb *mpcb)
 	mpdccp_cleanup_path_manager(mpcb);
 
 	/* release and eventually free mpcb */   
+    mpdccp_link_free_cid(mpcb->mpdccp_loc_cix);
 	mpdccp_cb_put (mpcb);
 	
 	return 0;
 }
-
 
 
 /******************************************************
@@ -468,15 +469,14 @@ void my_sock_final_destruct (struct sock *sk, struct mpdccp_cb *mpcb, int found)
 {
     if (!sk) return;
     if (found && mpcb && (mpcb->meta_sk->sk_state != DCCP_CLOSED) && mpcb->cnt_subflows == 0) {
-	struct sock	*msk = mpcb->meta_sk;
+        struct sock	*msk = mpcb->meta_sk;
         mpdccp_pr_debug ("closing meta %p\n", msk);
-	sock_hold (msk);
+        sock_hold (msk);
         dccp_done(msk);
-	mpdccp_report_alldown (msk);
-	sock_put (msk);
+        mpdccp_report_alldown (msk);
+        sock_put (msk);
     }
-    if (mpcb)
-	mpdccp_cb_put (mpcb);
+    if (mpcb) mpdccp_cb_put (mpcb);
 }
 
 void my_sock_destruct (struct sock *sk)
@@ -513,7 +513,10 @@ static void mpdccp_close_worker(struct work_struct *work)
                     sk->sk_send_head = NULL;
                 }
             }
-            dccp_finish_passive_close(sk);
+            if(my_sk->mpcb->close_fast)
+                dccp_set_state(sk, DCCP_CLOSED);
+            else
+                dccp_finish_passive_close(sk);
     }
 
     rcu_read_lock();
@@ -524,8 +527,7 @@ static void mpdccp_close_worker(struct work_struct *work)
     if (skwq_has_sleeper(wq))
         schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, msecs_to_jiffies(200));
     else{
-        if(my_sk->closing == 2)
-            dccp_disconnect(sk, 0);
+        dccp_sk(sk)->is_fast_close = my_sk->mpcb->close_fast;
         dccp_close(sk, 0);
     }
 }
@@ -836,32 +838,12 @@ int mpdccp_add_client_conn (	struct mpdccp_cb *mpcb,
 	if (dccp_sk(sk)->is_kex_sk && mpcb->kex_done) {
 		struct inet_sock *inet_meta = inet_sk(mpcb->meta_sk);
 		struct inet_sock *inet_sub = inet_sk(sk);
-		u32 token;
 
 		/* MP_KEY sockets can be authorized now. MP_JOIN sockets need to wait one more more ack */
 		dccp_sk(sk)->auth_done = 1;
 
 		/* Reset the flag to avoid inserting MP_KEY options in subsenquent ACKs */
 		dccp_sk(sk)->is_kex_sk = 0;
-
-		/* Create local token */
-		ret = mpdccp_hash_key(mpcb->dkeyA, mpcb->dkeylen, &token);
-		if (ret) {
-			mpdccp_pr_debug("error hashing dkeyA, err %d", ret);
-			sock_release(sock);
-			goto out;
-		}
-		mpcb->mpdccp_loc_token = token;
-
-		/* Create remote token */
-		ret = mpdccp_hash_key(mpcb->dkeyB, mpcb->dkeylen, &token);
-		if (ret) {
-			mpdccp_pr_debug("error hashing dkeyB, err %d", ret);
-			sock_release(sock);
-			goto out;
-		}
-		mpcb->mpdccp_rem_token = token;
-		mpdccp_pr_debug("client: kex done lt: %x rt: %x", mpcb->mpdccp_loc_token, mpcb->mpdccp_rem_token);
 
 		/* Update the state and MSS of meta socket */
 		dccp_sk(mpcb->meta_sk)->dccps_mss_cache = dccp_sk(sk)->dccps_mss_cache;
@@ -1019,10 +1001,14 @@ int mpdccp_close_subflow (struct mpdccp_cb *mpcb, struct sock *sk, int destroy)
     if(mpcb->pm_ops->del_retrans)
         mpcb->pm_ops->del_retrans(sock_net(mpcb->meta_sk), sk);
 
+    if(mpcb->close_fast == 2 && sk->sk_state == DCCP_OPEN){
+        dccp_set_state(sk, DCCP_PASSIVE_CLOSE);
+    }
+
     /* This will call dccp_close() in process context (only once per socket) */
     if (!mpdccp_my_sock(sk)->closing) {
         mpdccp_my_sock(sk)->closing = destroy;
-        mpdccp_pr_debug("Close socket(%p)", sk);
+        mpdccp_pr_debug("Close socket(%p) %u", sk, destroy);
         schedule_delayed_work(&mpdccp_my_sock(sk)->close_work, 0);
     }
     return 0;
@@ -1121,9 +1107,9 @@ EXPORT_SYMBOL_GPL(mpdccp_xmit_to_sk);
  * and accept the connection */
 int listen_backlog_rcv (struct sock *sk, struct sk_buff *skb)
 {
-    int ret = 0;    
+    int ret = 0;
     struct my_sock *my_sk = mpdccp_my_sock(sk);
-    //struct mpdccp_cb *mpcb  = my_sk->mpcb;
+    struct mpdccp_cb *mpcb  = my_sk->mpcb;
 
     mpdccp_pr_debug("Executing backlog_rcv callback. sk %p my_sk %p bklog %p \n", sk, my_sk, my_sk->sk_backlog_rcv);
 
@@ -1131,7 +1117,9 @@ int listen_backlog_rcv (struct sock *sk, struct sk_buff *skb)
 	mpdccp_pr_debug("There is sk_backlog_rcv");
         ret = my_sk->sk_backlog_rcv (sk, skb);
     }
-   
+
+    if(mpcb && mpcb->reorder_ops->update_pseq)
+        mpcb->reorder_ops->update_pseq(my_sk, skb);
 #if 0 
     /* If the queue was previously stopped because of a full cwnd,
     * a returning ACK will open the window again, so we should
@@ -1202,8 +1190,8 @@ void mp_state_change(struct sock *sk)
             if (sk == subsk) {
                 mpdccp_pr_debug("sk %p already in subflow_list, skipping\n", sk);
                 spin_unlock(&mpcb->psubflow_list_lock);
-		/* nevertheless report it */
-        	mpdccp_report_new_subflow(sk);
+                /* nevertheless report it */
+                mpdccp_report_new_subflow(sk);
                 goto out;
             }
         }
@@ -1215,10 +1203,10 @@ void mp_state_change(struct sock *sk)
         spin_unlock(&mpcb->psubflow_list_lock);
 
         if (mpcb->sched_ops->init_subflow) {
-	    rcu_read_lock ();
+            rcu_read_lock ();
             mpcb->sched_ops->init_subflow(sk);
-	    rcu_read_unlock ();
-	}
+            rcu_read_unlock ();
+        }
 
         mpdccp_report_new_subflow(sk);
         mpdccp_pr_debug("client connection established successfully. There are %d subflows now.\n", mpcb->cnt_subflows);
@@ -1261,23 +1249,6 @@ void mpdccp_init_announce_prio(struct sock *sk)
     mpdccp_my_sock(sk)->announce_prio = mpdccp_get_prio(sk) + 1;        //adding +1 so we can check also for sending zero
     dccp_send_keepalive(sk);
 }
-
-int mpdccp_hash_key(const u8 *key, u8 keylen, u32 *token)
-{
-        SHASH_DESC_ON_STACK(desc, tfm_hash);
-        int ret;
-        u32 buf[8];
-
-        desc->tfm = tfm_hash;
-        //desc->flags = 0;
-        ret = crypto_shash_digest(desc, key, keylen, (u8*)buf);
-
-        if (token)
-            *token = buf[0];
-
-        return ret;
-}
-EXPORT_SYMBOL(mpdccp_hash_key);
 
 int mpdccp_generate_key(struct mpdccp_key *key, int key_type)
 {

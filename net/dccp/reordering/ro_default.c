@@ -61,12 +61,15 @@ static void do_reorder_default(struct rcv_buff *rb)
 	return; 
 }
 
+void do_update_pseq(struct my_sock *my_sk, struct sk_buff *skb){}
+
 /**
  * Initialize active reordering operations.
  */
 struct mpdccp_reorder_ops mpdccp_reorder_default = {
 	.init		= init_reorder_default,
 	.do_reorder	= do_reorder_default,
+	.update_pseq = do_update_pseq,
 	.name		= "default",
 	.owner		= THIS_MODULE,
 };

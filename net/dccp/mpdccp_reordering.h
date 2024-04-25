@@ -108,10 +108,10 @@ struct mpdccp_reorder_path_cb {
 	u32		wnd_raw[DWINDOW_SIZE];
 	
 	/* receive vector */
+	u64		buffed_pkts;
+	u64		exp_path_seqno:48;
 	u64		oall_seqno:48;	// current received overall sequence number on socket sk
 	u64		path_seqno:48;	// current received path sequence number on socket sk
-	u64		last_path_seqno:48;	// last received path sequence number on socket sk
-	u64		last_oall_seqno:48;	// last received overall sequence number on socket sk
 	u8		not_rcv;	// counter to monitor inactivity of socket
 };
 
@@ -145,6 +145,7 @@ struct mpdccp_reorder_ops {
 	
 	void			(*init) (struct mpdccp_cb *mpcb);
 	void			(*do_reorder) (struct rcv_buff *w);
+	void			(*update_pseq) (struct my_sock *, struct sk_buff *);
 	
 	char			name[MPDCCP_REORDER_NAME_MAX];
 	struct module		*owner;

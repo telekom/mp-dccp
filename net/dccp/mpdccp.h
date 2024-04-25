@@ -285,13 +285,14 @@ struct mpdccp_cb {
 	u8			dkeyA[MPDCCP_MAX_KEY_SIZE * 2];
 	u8			dkeyB[MPDCCP_MAX_KEY_SIZE * 2];
 	int			dkeylen;
-	u32			mpdccp_loc_token;
-	u32			mpdccp_rem_token;
+	u32			mpdccp_loc_cix;
+	u32			mpdccp_rem_cix;
 	int			kex_done;
 	u8			mpdccp_suppkeys;
 	int			cur_key_idx;
 	int			fallback_sp;
 
+	int			close_fast;
 	/* First subflow socket */
 	struct sock*		master_sk;
 
@@ -384,7 +385,6 @@ int mpdccp_deinit_funcs (void);
 int mpdccp_report_new_subflow (struct sock*);
 int mpdccp_report_destroy (struct sock*);
 int mpdccp_report_alldown (struct sock*);
-
 
 
 int mpdccp_add_client_conn (struct mpdccp_cb *, struct sockaddr *local, int llen, int if_idx, struct sockaddr *rem, int rlen);
