@@ -51,7 +51,7 @@
 #include "mpdccp_pm.h"
 
 static int do_mpdccp_write_xmit (struct sock*, struct sk_buff*);
-int mpdccp_setsockopt(struct sock *sk, int level, int optname, char __user *optval, unsigned int optlen);
+int mpdccp_setsockopt(struct sock *sk, int level, int optname, sockptr_t optval, unsigned int optlen);
 int mpdccp_getsockopt(struct sock *sk, int level, int optname, char __user *optval, int __user *optlen);
 
 
@@ -264,7 +264,7 @@ static int do_mpdccp_setsockopt(struct sock *sk, int level, int optname,
 				sched->init_conn(mpcb);
 			goto out_release;
 		case DCCP_SOCKOPT_MP_FAST_CLOSE:
-			intval = memdup_user(optval, optlen);
+			intval = memdup_sockptr(optval, optlen);
 			if (IS_ERR(intval)) {
 				err = PTR_ERR(intval);
 				goto out_release;
