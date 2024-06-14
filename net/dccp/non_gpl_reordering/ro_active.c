@@ -126,10 +126,10 @@
 	atomic_inc(&cb->rbuf.size)
 #define __rbuf_size_dec(cb)                                                                   \
 	atomic_dec(&cb->rbuf.size)
-#define __rbuf_next(cb)                                                                       \
-    (u64)atomic64_read(&cb->rbuf.next)
-#define __rbuf_next_set(cb, seqno)                                                            \
-    atomic64_set(&cb->rbuf.next, seqno)
+#define __rbuf_first(cb)                                                                       \
+    (u64)atomic64_read(&cb->rbuf.first)
+#define __rbuf_first_set(cb, seqno)                                                            \
+    atomic64_set(&cb->rbuf.first, seqno)
 #define __rbuf_last(cb)                                                                       \
     (u64)atomic64_read(&cb->rbuf.last)
 #define __rbuf_last_set(cb, seqno)                                                            \
@@ -205,7 +205,7 @@ struct mpdccp_rbuf {
 	// reordering buffer
     struct mpdccp_rbuf_entry *buf;					 // reordering buffer -> array of skb's
     atomic_t size;   								 // current fill level
-    atomic64_t next;								 // buffer entry with lowest oall_seqno
+    atomic64_t first;								 // buffer entry with lowest oall_seqno
     atomic64_t last;								 // buffer entry with highest oall_seqno
 
     struct mpdccp_cb *mpcb;							 // mpdccp control block -> tunnel level information
@@ -250,7 +250,7 @@ int fast_check(struct active_cb *acb, struct sk_buff *skb, struct mpdccp_cb *mpc
 void rbuf_init(struct mpdccp_rbuf *rbuf, struct active_cb *acb);
 void rbuf_insert(struct active_cb *acb, struct rcv_buff *rb, struct mpdccp_reorder_path_cb *pcb);	
 void rbuf_flush(struct active_cb *acb, u64 exp);
-void rbuf_update_next(struct active_cb *acb, u64 exp);
+void rbuf_update_first(struct active_cb *acb, u64 exp);
 
 // timer functions
 void exp_timer_cb(unsigned long arg);
@@ -505,7 +505,7 @@ void rbuf_init(struct mpdccp_rbuf *rbuf, struct active_cb *acb){
 	/* reordering buffer */ 
 	rbuf->buf = kmalloc(sizeof(struct mpdccp_rbuf_entry) * sysctl_rbuf_size, GFP_ATOMIC);
 	atomic_set(&rbuf->size, 0);
-	__rbuf_next_set(acb, U64_MAX);
+	__rbuf_first_set(acb, U64_MAX);
 	__rbuf_last_set(acb, 0);
 
 	for(i = 0; i < sysctl_rbuf_size; i++){
@@ -536,7 +536,7 @@ retry:
 
 		/* determine start and end of buffer */
 		if(__rbuf_last(acb) < rb->oall_seqno) __rbuf_last_set(acb, rb->oall_seqno);
-		if(__rbuf_next(acb) > rb->oall_seqno) __rbuf_next_set(acb, rb->oall_seqno);
+		if(__rbuf_first(acb) > rb->oall_seqno) __rbuf_first_set(acb, rb->oall_seqno);
         pcb->buffed_pkts++;
 	} else if (sysctl_drop_dup && rb->oall_seqno == (u64)atomic64_read (&__rbuf_entry(acb, rb->oall_seqno).oall_seqno)) {
 		/* drop duplicated packets */
@@ -555,7 +555,7 @@ retry:
 void rbuf_flush(struct active_cb *acb, u64 exp){
     int ret;
 	u8 cnt = 0;
-    u64 next = 0;
+    u64 first = 0;
 
 	/* rbuf is emtpy */
 	if(__rbuf_size(acb) == 0) goto finished; 
@@ -576,26 +576,26 @@ retry:
 		cnt++;
 	}
 
-    rbuf_update_next(acb, exp);
+    rbuf_update_first(acb, exp);
     if(__rbuf_size(acb) && detect_loss(acb)){
-        exp = __rbuf_next(acb);
+        exp = __rbuf_first(acb);
         goto retry;
     }
 
     /* check for timeout */
-    next = __rbuf_next(acb);
-    if(next != U64_MAX){
-        if(!__rbuf_entry(acb, next).skb) goto finished;
-        ret = ktime_compare(__rbuf_entry(acb, next).abs_to, mpdccp_get_now());                     // packet has timedout
+    first = __rbuf_first(acb);
+    if(first != U64_MAX){
+        if(!__rbuf_entry(acb, first).skb) goto finished;
+        ret = ktime_compare(__rbuf_entry(acb, first).abs_to, mpdccp_get_now());                     // packet has timedout
         if(ret <= 0) {
-            if (__snd(acb)!=next) {
-                __snd_set(acb, next);
+            if (__snd(acb)!=first) {
+                __snd_set(acb, first);
             } else {
-                printk(KERN_INFO "att sk twice %llu", next);
+                printk(KERN_INFO "att sk twice %llu", first);
                 return;
             }
-            ro_dbug2("RO-DEBUG: timeout detected for packet [%llu]", next);
-            forward_inorder(acb, next);
+            ro_dbug2("RO-DEBUG: timeout detected for packet [%llu]", first);
+            forward_inorder(acb, first);
         }
     }
 
@@ -607,17 +607,17 @@ finished:
 /**
  * Find the first available buffer entry.
  */
-void rbuf_update_next(struct active_cb *acb, u64 exp){
+void rbuf_update_first(struct active_cb *acb, u64 exp){
     if(__rbuf_size(acb)){
         u64 i;
         for(i = exp; i <= __rbuf_last(acb); i++) {
             if(__rbuf_entry(acb, i).skb) {
-                __rbuf_next_set(acb, i);
+                __rbuf_first_set(acb, i);
                 return;
             }
         }
     } else {
-        __rbuf_next_set(acb, U64_MAX);
+        __rbuf_first_set(acb, U64_MAX);
         __rbuf_last_set(acb, 0);
     }
 }
@@ -628,7 +628,7 @@ void rbuf_update_next(struct active_cb *acb, u64 exp){
 void exp_timer_cb(unsigned long arg){
     struct mpdccp_rbuf *rbuf = (struct mpdccp_rbuf *) arg;
     struct active_cb *acb = NULL;
-    u64 next;
+    u64 first;
     int cnt = 0;
 
     if(!rbuf) {
@@ -641,8 +641,8 @@ void exp_timer_cb(unsigned long arg){
     ro_dbug1("RO-DEBUG: timer (0x%p) elapsed, exp %llu", &rbuf->exp_timer, (u64)__exp(acb));
 
     /* forward all packets that are buffered */
-    for(next = __rbuf_next(acb); next < __rbuf_last(acb); next++){
-        if(__rbuf_entry(acb, next).skb) forward(acb, next);
+    for(first = __rbuf_first(acb); first < __rbuf_last(acb); first++){
+        if(__rbuf_entry(acb, first).skb) forward(acb, first);
         cnt++;
         if(__rbuf_size(acb) == 0) break;
     }
@@ -717,15 +717,15 @@ int detect_fast_loss_oall(struct active_cb *acb)
 
 int detect_fast_loss_path(struct active_cb *acb)
 {
-    u64 next_pseq, path_gap, oall_gap;
-    u64 next = __rbuf_next(acb);
+    u64 first_pseq, path_gap, oall_gap;
+    u64 first = __rbuf_first(acb);
     u64 exp = __exp(acb);
-    struct mpdccp_reorder_path_cb *pcb = __rbuf_entry(acb, next).pcb;
+    struct mpdccp_reorder_path_cb *pcb = __rbuf_entry(acb, first).pcb;
 
     if(!pcb) return 0;
-    next_pseq = __rbuf_pseq(acb, next);
-    path_gap = (next_pseq > pcb->exp_path_seqno) ? (next_pseq - pcb->exp_path_seqno) : 0;
-    oall_gap = (next > exp) ? (next - exp) : 0;
+    first_pseq = __rbuf_pseq(acb, first);
+    path_gap = (first_pseq > pcb->exp_path_seqno) ? (first_pseq - pcb->exp_path_seqno) : 0;
+    oall_gap = (first > exp) ? (first - exp) : 0;
     if(path_gap == oall_gap) return 1;
     return 0;
 }
