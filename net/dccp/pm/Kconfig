@@ -1,5 +1,0 @@
-
-config DEFAULT_MPDCCP_PM
-	string
-	depends on IP_MPDCCP
-	default "default"
