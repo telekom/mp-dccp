@@ -358,7 +358,7 @@ static void pm_handle_rcv_prio(struct sock *sk, u8 prio, u64 seq)
 		if(!mpdccp_accept_prio)
 			mpdccp_pr_debug("mpdccp configured to ignore incoming mp_prio options");
 		if(seq < mpdccp_my_sock(sk)->last_prio_seq)
-			mpdccp_pr_debug("outdated mp_prio option detected");
+			mpdccp_pr_debug("outdated mp_prio option detected on sk (%p)", sk);
 
 		mpdccp_link_put(link);
 		rcu_read_unlock();
@@ -425,7 +425,7 @@ next_event:
 	if (!event)
 		return;
 
-	if(event->sk->sk_state != DCCPF_OPEN){
+	if(event->sk->sk_state != DCCP_OPEN){
 		list_del_rcu(&event->list);
 		kfree(event);
 		return;
@@ -470,6 +470,11 @@ static void pm_add_insert_rt_event(struct sock *sk, struct mpdccp_confirm_opt *m
 	struct mpdccp_pm_ns *pm_ns = fm_get_ns(sock_net(mpcb->meta_sk));
 	struct pm_retransmit_event *event = kzalloc(sizeof(*event), GFP_KERNEL);
 
+	if (!event || !pm_ns){
+		DCCP_CRIT("Could not alloc retrans event");
+		return;
+	}
+
 	event->cnf_opt = my_opt;
 	event->sk = sk;
 	list_add_tail_rcu(&event->list, &pm_ns->retransmit);
@@ -486,33 +491,27 @@ static void pm_add_insert_rt_event(struct sock *sk, struct mpdccp_confirm_opt *m
 	if we remove the first option on the list we also cancel the delayed work */
 static void pm_remove_rt_event(struct net *net, struct sock *sk, struct mpdccp_confirm_opt *my_opt){
 	struct mpdccp_pm_ns *pm_ns = fm_get_ns(net);
-	struct pm_retransmit_event *event;
+	struct pm_retransmit_event *event, *n;
 	bool first = true;
 
-next_event:
-
-	event = list_first_entry_or_null(&pm_ns->retransmit, struct pm_retransmit_event, list);
-	if(!event)
-		return;
-
-	if(event->cnf_opt == my_opt || event->sk == sk){
-		list_del_rcu(&event->list);
-		kfree(event);
-
-		if (first && delayed_work_pending(&pm_ns->retransmit_worker))
-			cancel_delayed_work(&pm_ns->retransmit_worker);
-
+	list_for_each_entry_safe(event, n, &pm_ns->retransmit, list){
+		if(event->cnf_opt == my_opt || event->sk == sk){
+			list_del(&event->list);
+			kfree(event);
+			mpdccp_pr_debug("Removed retransmission event");
+			if (first && delayed_work_pending(&pm_ns->retransmit_worker))
+				cancel_delayed_work(&pm_ns->retransmit_worker);	
+		}
 		first = false;
-		mpdccp_pr_debug("Removed retransmission event");
 	}
-	goto next_event;
 }
 
 static void pm_del_retrans(struct net *net, struct sock *sk){
 	pm_remove_rt_event(net, sk, NULL);
 }
 
-/* returns pointer to right memory that stores info for option confirmation */
+/* returns pointer to right memory that stores info for option confirmation 
+	options for confirmation are stored with the according addresses */
 static struct mpdccp_confirm_opt* get_cnf_mem(struct mpdccp_cb *mpcb, u8 id, u8 type)
 {
 	struct mpdccp_addr *mp_addr;
@@ -535,7 +534,7 @@ static struct mpdccp_confirm_opt* get_cnf_mem(struct mpdccp_cb *mpcb, u8 id, u8 
 	return NULL;
 }
 
-/* Function is called when sending either mp_addaddr, mp_remoeaddr or mp_prio to store a copy */
+/* Function is called when sending either mp_addaddr, mp_removeaddr or mp_prio to store a copy */
 static void pm_store_confirm_opt(struct sock *sk, u8 *buf, u8 id, u8 type, u8 len)
 {
 	struct mpdccp_cb *mpcb = get_mpcb(sk);
@@ -544,7 +543,6 @@ static void pm_store_confirm_opt(struct sock *sk, u8 *buf, u8 id, u8 type, u8 le
 
 	if (new_opt) {
 		__be64 seq = cpu_to_be64((mpcb->mp_oall_seqno << 16));
-		rcu_read_lock();
 		new_opt->opt[0] = DCCPO_MULTIPATH;
 		new_opt->opt[1] = 9;
 		new_opt->opt[2] = DCCPO_MP_SEQ;
@@ -557,7 +555,6 @@ static void pm_store_confirm_opt(struct sock *sk, u8 *buf, u8 id, u8 type, u8 le
 		new_opt->t_init = pm_jiffies32;
 		new_opt->t_timeout = new_opt->t_init + MPDCCP_CONFIRM_RETRANSMIT_TIMEOUT;
 		new_opt->resent_cnt = 0;
-		rcu_read_unlock();
 
 		pm_add_insert_rt_event(sk, new_opt);
 	}
