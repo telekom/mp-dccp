@@ -216,6 +216,10 @@ static int proc_mpdccp_delay_config(struct ctl_table *table, int write,
 			mpdccp_pr_debug("Switched to SRTT\n");
 			set_srtt_as_delayn();
 			break;
+		case MPDCCP_REORDERING_DELAY_TIMESTAMP:
+			mpdccp_pr_debug("Switched to timestamp mode\n");
+			set_ts_as_delayn();
+			break;
 		default:
 			mpdccp_pr_debug("Parameter %d unknown, switched to SRTT\n", sysctl_mpdccp_delay_config);
 			set_srtt_as_delayn();

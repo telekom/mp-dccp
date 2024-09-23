@@ -327,7 +327,7 @@ void do_reorder_active_mod(struct rcv_buff *rb){
 	struct mpdccp_reorder_path_cb *pcb = NULL;
 	struct sock *itr;
 	struct my_sock *my_sk = NULL, *my_itr = NULL;
-	u64 exp;
+	u64 exp, max_owd = 0;
 
     if(!rb) {
         ro_err("RO-ERROR: NULL rb");
@@ -368,6 +368,7 @@ void do_reorder_active_mod(struct rcv_buff *rb){
      * ### LATENCY ESTIMATION:
      */
     mpdccp_path_est(pcb, rb->latency);
+    mpdccp_owdd_update(pcb, rb->timestamp);
 
     /* 
      * ### RESET EXPIRY-TIMER:
@@ -403,7 +404,7 @@ void do_reorder_active_mod(struct rcv_buff *rb){
                     __max_lat_set(acb, 0);
                     __max_sk_set(acb, NULL);
                 }
-                if(my_itr->pcb->sk == __max_sk(acb)){
+                if(my_itr->pcb->sk == __min_sk(acb)){
                     __min_lat_set(acb, U64_MAX);
                     __min_sk_set(acb, NULL);
                 }
@@ -414,12 +415,13 @@ void do_reorder_active_mod(struct rcv_buff *rb){
         /* find max. and min. delay from all active links (which are active) */
         if(my_itr->pcb->active){
             /* update max. delay */
+            if (my_itr->pcb->onewayd > max_owd) max_owd = my_itr->pcb->onewayd;
             if(__max_sk(acb) == my_itr->pcb->sk) __max_lat_set(acb, mpdccp_get_lat(my_itr->pcb));
             /* new slowest link */
             else if(__max_lat(acb) < mpdccp_get_lat(my_itr->pcb)){
                 __max_lat_set(acb, mpdccp_get_lat(my_itr->pcb));
                 __max_sk_set(acb, my_itr->pcb->sk);
-                 ro_dbug3("RO-DEBUG: slowest acb: %p pcb: %p sk: %p lat: %u", acb, pcb, my_itr->pcb->sk, mpdccp_get_lat(my_itr->pcb));
+                ro_dbug3("RO-DEBUG: slowest acb: %p pcb: %p sk: %p lat: %u", acb, pcb, my_itr->pcb->sk, mpdccp_get_lat(my_itr->pcb));
             } 
 
             /* update min. delay */
@@ -429,7 +431,7 @@ void do_reorder_active_mod(struct rcv_buff *rb){
                 __min_lat_set(acb, mpdccp_get_lat(my_itr->pcb));
                 __min_sk_set(acb, my_itr->pcb->sk);
                 ro_dbug3("RO-DEBUG: fastest acb: %p pcb: %p sk: %p lat: %u", acb, pcb, my_itr->pcb->sk, mpdccp_get_lat(my_itr->pcb));
-            } 
+            }
         }
     }
     spin_unlock_bh(&((acb->mpcb)->psubflow_list_lock));
@@ -1046,9 +1048,8 @@ static int proc_rbuf_size(struct ctl_table *table, int write,
 /**
  * Set rtt-type according to the chosen delay estimation.
  * 0	= mrtt - measured rtt i.e. raw values
- * 1 	= min_rtt
- * 2  	= max_rtt
- * 3    = srtt
+ * 1 	= krtt - kalman filter
+ * 2  	= drtt - directional rtt filter
  */
 static int proc_rtt_type(struct ctl_table *table, int write,
                 void __user *buffer, size_t *lenp,

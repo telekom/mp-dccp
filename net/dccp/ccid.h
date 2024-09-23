@@ -323,6 +323,18 @@ static inline u32 max_rtt_as_delayn(struct sock *sk, struct tcp_info *info, u8 *
     else{ return 0; }
 }
 
+/**
+ * Write timestamp.
+ */
+static inline u32 ts_as_delayn(struct sock *sk, struct tcp_info *info, u8 *type){
+    if(dccp_sk(sk)->dccps_hc_tx_ccid != NULL) { 
+		*type = 4;
+    	ccid_hc_tx_get_info(dccp_sk(sk)->dccps_hc_tx_ccid, sk, info);
+		info->tcpi_last_ack_recv = jiffies;
+    	return jiffies_to_msecs(info->tcpi_rttvar); }
+    else{ return 0; }
+}
+
 extern u32 (*get_delay_valn)(struct sock *sk, struct tcp_info *info, u8 *type);
 
 static inline void set_srtt_as_delayn(void){
@@ -339,6 +351,10 @@ static inline void set_min_rtt_as_delayn(void){
 
 static inline void set_max_rtt_as_delayn(void){
     get_delay_valn = max_rtt_as_delayn;
+}
+
+static inline void set_ts_as_delayn(void){
+    get_delay_valn = ts_as_delayn;
 }
 
 /*
