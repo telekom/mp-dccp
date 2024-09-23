@@ -78,6 +78,7 @@ enum {
 	MPDCCP_REORDERING_DELAY_MIN_RTT,	// min_rtt	= 1
 	MPDCCP_REORDERING_DELAY_MAX_RTT,	// max_rtt	= 2
 	MPDCCP_REORDERING_DELAY_SRTT,		// srtt		= 3
+	MPDCCP_REORDERING_DELAY_TIMESTAMP,	// timestamp= 4
     MPDCCP_REORDERING_DELAY_KRTT     
 };
 
@@ -92,6 +93,7 @@ struct mpdccp_reorder_path_cb {
 	bool		active;		// activity status of subflow
 	
 	/* delay vector */
+	u32		onewayd;	// one way delay
 	/* Raw values as obtained from the CCID */
 	u32		mrtt; 		/// current mrtt value
 	
@@ -128,6 +130,7 @@ struct rcv_buff
 	
 	u64			oall_seqno:48;
 	u32			latency;
+	u32			timestamp;
 	void 			*mpdccp_reorder_cb;
 };
 
@@ -180,6 +183,7 @@ struct rcv_buff *mpdccp_init_rcv_buff(struct sock *sk, struct sk_buff *skb, stru
 struct mpdccp_reorder_path_cb *mpdccp_init_reorder_path_cb(struct sock *sk);
 void mpdccp_free_reorder_path_cb(struct mpdccp_reorder_path_cb *pcb);
 int mpdccp_path_est(struct mpdccp_reorder_path_cb* pcb, u32 mrtt);
+void mpdccp_owdd_update(struct mpdccp_reorder_path_cb* pcb, u32 timestamp);
 
 
 u32 mpdccp_get_lat(struct mpdccp_reorder_path_cb *pcb);
