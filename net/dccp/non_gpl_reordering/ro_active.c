@@ -110,6 +110,7 @@
 #define NOT_RCV_MAX 	250
 #define RTT_TYPE        0
 #define EXP_TO          50       
+#define DEQ_MAX_DELAY   200
 
 /* macros */
 // handle buffer
@@ -126,10 +127,10 @@
 	atomic_inc(&cb->rbuf.size)
 #define __rbuf_size_dec(cb)                                                                   \
 	atomic_dec(&cb->rbuf.size)
-#define __rbuf_next(cb)                                                                       \
-    (u64)atomic64_read(&cb->rbuf.next)
-#define __rbuf_next_set(cb, seqno)                                                            \
-    atomic64_set(&cb->rbuf.next, seqno)
+#define __rbuf_first(cb)                                                                       \
+    (u64)atomic64_read(&cb->rbuf.first)
+#define __rbuf_first_set(cb, seqno)                                                            \
+    atomic64_set(&cb->rbuf.first, seqno)
 #define __rbuf_last(cb)                                                                       \
     (u64)atomic64_read(&cb->rbuf.last)
 #define __rbuf_last_set(cb, seqno)                                                            \
@@ -166,6 +167,22 @@
 #define __rbuf_pseq(cb, seqno)                                                                \
     (u64)atomic64_read(&__rbuf_entry(cb, seqno).path_seqno)
 
+
+#define __q_prev(cb, seqno)                                                                   \
+    (u64)atomic64_read(&__rbuf_entry(cb, seqno).prev)
+#define __q_prev_set(cb, seqno, val)                                                          \
+    atomic64_set(&__rbuf_entry(cb, seqno).prev, val)
+#define __q_next(cb, seqno)                                                                   \
+    (u64)atomic64_read(&__rbuf_entry(cb, seqno).next)
+#define __q_next_set(cb, seqno, val)                                                          \
+    atomic64_set(&__rbuf_entry(cb, seqno).next, val)
+#define __q_first(cb)                                                                         \
+    (u64)atomic64_read(&cb->rbuf.q_first)
+#define __q_last(cb)                                                                          \
+    (u64)atomic64_read(&cb->rbuf.q_last)
+#define __q_get_to(cb, seqno)                                                                 \
+    __rbuf_entry(cb, seqno).q_to
+
 /* slab cache */
 struct kmem_cache *active_cb_cache __read_mostly;
 
@@ -185,6 +202,7 @@ int sysctl_rtt_type 		= RTT_TYPE;				// selection of rtt type
 int sysctl_exp_to           = EXP_TO;               // expiry timeout
 int sysctl_drop_lost		= 0;					// drop of lost packets
 int sysctl_drop_dup		= 0;					// drop of duplicated packets
+int sysctl_delay_eq         = 0;                    // equalize delay of faster paths
 
 /************************************************* 
  *     structures
@@ -194,6 +212,11 @@ struct mpdccp_rbuf_entry{
 	ktime_t abs_to;                                 // timeout (absolute)
 	atomic64_t oall_seqno;
     atomic64_t path_seqno;
+    atomic64_t next;
+    atomic64_t prev;
+    ktime_t q_to;
+    bool queued;
+
     struct mpdccp_reorder_path_cb *pcb;
 };
 
@@ -205,12 +228,16 @@ struct mpdccp_rbuf {
 	// reordering buffer
     struct mpdccp_rbuf_entry *buf;					 // reordering buffer -> array of skb's
     atomic_t size;   								 // current fill level
-    atomic64_t next;								 // buffer entry with lowest oall_seqno
+    atomic64_t first;								 // buffer entry with lowest oall_seqno
     atomic64_t last;								 // buffer entry with highest oall_seqno
 
     struct mpdccp_cb *mpcb;							 // mpdccp control block -> tunnel level information
     struct active_cb *acb;							 // active control block -> link level information
     struct timer_list exp_timer;						 // expiry timer
+
+    atomic64_t q_first;								 // delayed entry with lowest timeout
+    atomic64_t q_last;								 // delayed entry with highest timeout
+    struct timer_list q_timer;
 };
 
 /* structure declarations */
@@ -250,7 +277,7 @@ int fast_check(struct active_cb *acb, struct sk_buff *skb, struct mpdccp_cb *mpc
 void rbuf_init(struct mpdccp_rbuf *rbuf, struct active_cb *acb);
 void rbuf_insert(struct active_cb *acb, struct rcv_buff *rb, struct mpdccp_reorder_path_cb *pcb);	
 void rbuf_flush(struct active_cb *acb, u64 exp);
-void rbuf_update_next(struct active_cb *acb, u64 exp);
+void rbuf_update_first(struct active_cb *acb, u64 exp);
 
 // timer functions
 void exp_timer_cb(unsigned long arg);
@@ -286,6 +313,10 @@ void cleanup_active_mod(void);
 static int __init mpdccp_reorder_active_register(void);
 static void mpdccp_reorder_active_unregister(void);
 
+void q_insert(struct active_cb *acb, u64 seqno, u64 delay);
+void q_process(unsigned long arg);
+void q_flush(struct active_cb *acb);
+void q_remove(struct active_cb *acb, u64 i);
 
 /************************************************* 
  *     reordering
@@ -327,7 +358,7 @@ void do_reorder_active_mod(struct rcv_buff *rb){
 	struct mpdccp_reorder_path_cb *pcb = NULL;
 	struct sock *itr;
 	struct my_sock *my_sk = NULL, *my_itr = NULL;
-	u64 exp;
+	u64 exp, max_owd = 0;
 
     if(!rb) {
         ro_err("RO-ERROR: NULL rb");
@@ -368,6 +399,7 @@ void do_reorder_active_mod(struct rcv_buff *rb){
      * ### LATENCY ESTIMATION:
      */
     mpdccp_path_est(pcb, rb->latency);
+    mpdccp_owdd_update(pcb, rb->timestamp);
 
     /* 
      * ### RESET EXPIRY-TIMER:
@@ -403,7 +435,7 @@ void do_reorder_active_mod(struct rcv_buff *rb){
                     __max_lat_set(acb, 0);
                     __max_sk_set(acb, NULL);
                 }
-                if(my_itr->pcb->sk == __max_sk(acb)){
+                if(my_itr->pcb->sk == __min_sk(acb)){
                     __min_lat_set(acb, U64_MAX);
                     __min_sk_set(acb, NULL);
                 }
@@ -414,12 +446,13 @@ void do_reorder_active_mod(struct rcv_buff *rb){
         /* find max. and min. delay from all active links (which are active) */
         if(my_itr->pcb->active){
             /* update max. delay */
+            if (my_itr->pcb->onewayd > max_owd) max_owd = my_itr->pcb->onewayd;
             if(__max_sk(acb) == my_itr->pcb->sk) __max_lat_set(acb, mpdccp_get_lat(my_itr->pcb));
             /* new slowest link */
             else if(__max_lat(acb) < mpdccp_get_lat(my_itr->pcb)){
                 __max_lat_set(acb, mpdccp_get_lat(my_itr->pcb));
                 __max_sk_set(acb, my_itr->pcb->sk);
-                 ro_dbug3("RO-DEBUG: slowest acb: %p pcb: %p sk: %p lat: %u", acb, pcb, my_itr->pcb->sk, mpdccp_get_lat(my_itr->pcb));
+                ro_dbug3("RO-DEBUG: slowest acb: %p pcb: %p sk: %p lat: %u", acb, pcb, my_itr->pcb->sk, mpdccp_get_lat(my_itr->pcb));
             } 
 
             /* update min. delay */
@@ -429,16 +462,35 @@ void do_reorder_active_mod(struct rcv_buff *rb){
                 __min_lat_set(acb, mpdccp_get_lat(my_itr->pcb));
                 __min_sk_set(acb, my_itr->pcb->sk);
                 ro_dbug3("RO-DEBUG: fastest acb: %p pcb: %p sk: %p lat: %u", acb, pcb, my_itr->pcb->sk, mpdccp_get_lat(my_itr->pcb));
-            } 
+            }
         }
     }
     spin_unlock_bh(&((acb->mpcb)->psubflow_list_lock));
-
-    /* 
-     * ### LOSS DETECTION:
-     */
     spin_lock_bh(&acb->adaptive_cb_lock);
     exp = __exp(acb);
+
+    /*
+     * ### DELAY EQUALIZATION:
+     */
+
+    if(sysctl_delay_eq){
+        u64 delay; 
+        if(max_owd && pcb->onewayd)
+            delay = (max_owd - pcb->onewayd)/1000;
+        else 
+            delay = __max_lat(acb) - mpdccp_get_lat(pcb);
+        // if we are on any other path than the slowest, use delay equalization
+        if(delay && delay <= DEQ_MAX_DELAY){
+            rbuf_insert(acb, rb, pcb);
+            q_insert(acb, (u64)rb->oall_seqno, delay);
+            goto finished;
+        }
+        if(sysctl_delay_eq == 1){
+            mpdccp_forward_skb(rb->skb, rb->mpcb);
+            goto finished;
+        }
+    }
+
     /*
     * ### REORDERING DECISION:
     * forward expected, drop/forward outdated, buffer others
@@ -471,7 +523,11 @@ buffer:
 	rbuf_insert(acb, rb, pcb);
 finished:
 	if (__snd(acb)==0) {
-		rbuf_flush(acb, __exp(acb));
+        if(!sysctl_delay_eq){
+            rbuf_flush(acb, __exp(acb));
+        } else {
+            q_flush(acb);
+        }
 	}
 
     spin_unlock_bh(&acb->adaptive_cb_lock);
@@ -486,6 +542,81 @@ void do_update_pseq(struct my_sock *my_sk, struct sk_buff *skb){
         pcb->exp_path_seqno++;
     }
 }
+
+/*  look for the right position in the queue based on the timeout.
+ *  it is assumed that new entries have higher timeout, so we start
+ *  looking from the end first.
+ */
+void q_insert(struct active_cb *acb, u64 seqno, u64 delay){
+    ktime_t to = ktime_add_ms(mpdccp_get_now(), delay);
+    u64 next, prev = __q_last(acb);
+
+    while(prev && ktime_after(__q_get_to(acb, prev), to)){
+        prev = __q_prev(acb, prev);
+    }
+
+    if (prev) {
+        next = __q_next(acb, prev);
+        __q_prev_set(acb, seqno, prev);
+        __q_next_set(acb, prev, seqno);
+    } else {
+        next = __q_first(acb);
+        atomic64_set(&acb->rbuf.q_first, seqno);
+        mod_timer(&acb->rbuf.q_timer, jiffies + msecs_to_jiffies(delay));
+    }
+
+    if (next) {
+        __q_next_set(acb, seqno, next);
+        __q_prev_set(acb, next, seqno);
+    } else {
+        atomic64_set(&acb->rbuf.q_last, seqno);
+    }
+    __rbuf_entry(acb, seqno).q_to = to;
+    __rbuf_entry(acb, seqno).queued = true;
+}
+
+void q_process(unsigned long arg){
+    struct mpdccp_rbuf *rbuf = (struct mpdccp_rbuf *) arg;
+    if(!rbuf) {
+        ro_err("RO-ERROR: could not determine container rbuf of t");
+        return;
+    }
+    q_flush(rbuf->acb);
+}
+
+void q_flush(struct active_cb *acb){
+    bool update;
+    u64 head;
+    ktime_t now = mpdccp_get_now();
+
+retry:
+    head = __q_first(acb);
+
+    if(!head) goto finished;
+    if(ktime_after(now, __q_get_to(acb, head))){
+        if(__snd(acb)==head){
+            printk(KERN_INFO "att sk twice %llu", head);
+            return;
+        }
+        q_remove(acb, head);
+        if(sysctl_delay_eq == 1){
+            __snd_set(acb, head);
+            forward(acb, head);
+        }
+        update = true;
+        goto retry;
+    }
+
+    if (update) {   //update timer if packets were forwarded
+        u64 timeout = ktime_to_ms(ktime_sub(__q_get_to(acb, head), now));
+        mod_timer(&acb->rbuf.q_timer, jiffies + msecs_to_jiffies(timeout));
+    }
+finished:
+    __snd_set(acb, 0);
+    if(sysctl_delay_eq > 1)
+        rbuf_flush(acb, __exp(acb));
+}
+
 
 /************************************************* 
  *     buffer handling
@@ -503,14 +634,19 @@ void rbuf_init(struct mpdccp_rbuf *rbuf, struct active_cb *acb){
 	/* reordering buffer */ 
 	rbuf->buf = kmalloc(sizeof(struct mpdccp_rbuf_entry) * sysctl_rbuf_size, GFP_ATOMIC);
 	atomic_set(&rbuf->size, 0);
-	__rbuf_next_set(acb, U64_MAX);
+	__rbuf_first_set(acb, U64_MAX);
 	__rbuf_last_set(acb, 0);
 
 	for(i = 0; i < sysctl_rbuf_size; i++){
 		__rbuf_entry(acb, i).skb = NULL;
         __rbuf_entry(acb, i).abs_to = ktime_set(0, 0);
+        __rbuf_entry(acb, i).q_to = ktime_set(0, 0);
+        __rbuf_entry(acb, i).queued = false;
+        atomic64_set(&__rbuf_entry(acb, i).next, 0);
+        atomic64_set(&__rbuf_entry(acb, i).prev, 0);
 	}
 
+    setup_timer(&rbuf->q_timer, q_process, (unsigned long) rbuf);
 	setup_timer(&rbuf->exp_timer, exp_timer_cb, (unsigned long) rbuf);
 
 	rbuf->acb = acb;
@@ -534,7 +670,7 @@ retry:
 
 		/* determine start and end of buffer */
 		if(__rbuf_last(acb) < rb->oall_seqno) __rbuf_last_set(acb, rb->oall_seqno);
-		if(__rbuf_next(acb) > rb->oall_seqno) __rbuf_next_set(acb, rb->oall_seqno);
+		if(__rbuf_first(acb) > rb->oall_seqno) __rbuf_first_set(acb, rb->oall_seqno);
         pcb->buffed_pkts++;
 	} else if (sysctl_drop_dup && rb->oall_seqno == (u64)atomic64_read (&__rbuf_entry(acb, rb->oall_seqno).oall_seqno)) {
 		/* drop duplicated packets */
@@ -553,17 +689,17 @@ retry:
 void rbuf_flush(struct active_cb *acb, u64 exp){
     int ret;
 	u8 cnt = 0;
-    u64 next = 0;
+    u64 first = 0;
 
 	/* rbuf is emtpy */
-	if(__rbuf_size(acb) == 0) goto finished; 
+	if(__rbuf_size(acb) == 0) goto finished;
 
 retry:
 	while(__rbuf_entry(acb, exp).skb){
+        if (__rbuf_entry(acb, exp).queued) goto finished;
         if (__snd(acb)!=exp){
             __snd_set(acb, exp);
-        }
-        else {
+        } else {
             printk(KERN_INFO "att sk twice %llu", exp);
             return;
         }
@@ -574,26 +710,26 @@ retry:
 		cnt++;
 	}
 
-    rbuf_update_next(acb, exp);
+    rbuf_update_first(acb, exp);
     if(__rbuf_size(acb) && detect_loss(acb)){
-        exp = __rbuf_next(acb);
+        exp = __rbuf_first(acb);
         goto retry;
     }
 
     /* check for timeout */
-    next = __rbuf_next(acb);
-    if(next != U64_MAX){
-        if(!__rbuf_entry(acb, next).skb) goto finished;
-        ret = ktime_compare(__rbuf_entry(acb, next).abs_to, mpdccp_get_now());                     // packet has timedout
+    first = __rbuf_first(acb);
+    if(first != U64_MAX){
+        if(!__rbuf_entry(acb, first).skb) goto finished;
+        ret = ktime_compare(__rbuf_entry(acb, first).abs_to, mpdccp_get_now());                     // packet has timedout
         if(ret <= 0) {
-            if (__snd(acb)!=next) {
-                __snd_set(acb, next);
+            if (__snd(acb)!=first) {
+                __snd_set(acb, first);
             } else {
-                printk(KERN_INFO "att sk twice %llu", next);
+                printk(KERN_INFO "att sk twice %llu", first);
                 return;
             }
-            ro_dbug2("RO-DEBUG: timeout detected for packet [%llu]", next);
-            forward_inorder(acb, next);
+            ro_dbug2("RO-DEBUG: timeout detected for packet [%llu]", first);
+            forward_inorder(acb, first);
         }
     }
 
@@ -605,17 +741,17 @@ finished:
 /**
  * Find the first available buffer entry.
  */
-void rbuf_update_next(struct active_cb *acb, u64 exp){
+void rbuf_update_first(struct active_cb *acb, u64 exp){
     if(__rbuf_size(acb)){
         u64 i;
         for(i = exp; i <= __rbuf_last(acb); i++) {
             if(__rbuf_entry(acb, i).skb) {
-                __rbuf_next_set(acb, i);
+                __rbuf_first_set(acb, i);
                 return;
             }
         }
     } else {
-        __rbuf_next_set(acb, U64_MAX);
+        __rbuf_first_set(acb, U64_MAX);
         __rbuf_last_set(acb, 0);
     }
 }
@@ -626,7 +762,7 @@ void rbuf_update_next(struct active_cb *acb, u64 exp){
 void exp_timer_cb(unsigned long arg){
     struct mpdccp_rbuf *rbuf = (struct mpdccp_rbuf *) arg;
     struct active_cb *acb = NULL;
-    u64 next;
+    u64 first;
     int cnt = 0;
 
     if(!rbuf) {
@@ -639,8 +775,8 @@ void exp_timer_cb(unsigned long arg){
     ro_dbug1("RO-DEBUG: timer (0x%p) elapsed, exp %llu", &rbuf->exp_timer, (u64)__exp(acb));
 
     /* forward all packets that are buffered */
-    for(next = __rbuf_next(acb); next < __rbuf_last(acb); next++){
-        if(__rbuf_entry(acb, next).skb) forward(acb, next);
+    for(first = __rbuf_first(acb); first < __rbuf_last(acb); first++){
+        if(__rbuf_entry(acb, first).skb) forward(acb, first);
         cnt++;
         if(__rbuf_size(acb) == 0) break;
     }
@@ -715,15 +851,15 @@ int detect_fast_loss_oall(struct active_cb *acb)
 
 int detect_fast_loss_path(struct active_cb *acb)
 {
-    u64 next_pseq, path_gap, oall_gap;
-    u64 next = __rbuf_next(acb);
+    u64 first_pseq, path_gap, oall_gap;
+    u64 first = __rbuf_first(acb);
     u64 exp = __exp(acb);
-    struct mpdccp_reorder_path_cb *pcb = __rbuf_entry(acb, next).pcb;
+    struct mpdccp_reorder_path_cb *pcb = __rbuf_entry(acb, first).pcb;
 
     if(!pcb) return 0;
-    next_pseq = __rbuf_pseq(acb, next);
-    path_gap = (next_pseq > pcb->exp_path_seqno) ? (next_pseq - pcb->exp_path_seqno) : 0;
-    oall_gap = (next > exp) ? (next - exp) : 0;
+    first_pseq = __rbuf_pseq(acb, first);
+    path_gap = (first_pseq > pcb->exp_path_seqno) ? (first_pseq - pcb->exp_path_seqno) : 0;
+    oall_gap = (first > exp) ? (first - exp) : 0;
     if(path_gap == oall_gap) return 1;
     return 0;
 }
@@ -809,6 +945,23 @@ void forward_inorder(struct active_cb *acb, u64 i){
 }
 
 /**
+ * Update queue structure after forwarding.
+ */
+void q_remove(struct active_cb *acb, u64 i){
+    if (i == __q_first(acb)){
+        atomic64_set(&acb->rbuf.q_first, __q_next(acb, i));
+        __q_prev_set(acb, __q_next(acb, i), 0);
+    }
+    if (i == __q_last(acb)){
+        atomic64_set(&acb->rbuf.q_last, 0);
+    }
+    __q_prev_set(acb, i, 0);
+    __q_next_set(acb, i, 0);
+    __rbuf_entry(acb, i).q_to = ktime_set(0, 0);
+    __rbuf_entry(acb, i).queued = false;
+}
+
+/**
  * Forward skb and reset buffer element.
  */
 void forward(struct active_cb *acb, u64 i){
@@ -830,6 +983,7 @@ void forward(struct active_cb *acb, u64 i){
     }
     __rbuf_entry(acb, i).pcb = NULL;
     __rbuf_entry(acb, i).abs_to = ktime_set(0, 0);
+    if(sysctl_delay_eq) q_remove(acb, i);
     __rbuf_size_dec(acb);
     return;
 
@@ -1046,9 +1200,8 @@ static int proc_rbuf_size(struct ctl_table *table, int write,
 /**
  * Set rtt-type according to the chosen delay estimation.
  * 0	= mrtt - measured rtt i.e. raw values
- * 1 	= min_rtt
- * 2  	= max_rtt
- * 3    = srtt
+ * 1 	= krtt - kalman filter
+ * 2  	= drtt - directional rtt filter
  */
 static int proc_rtt_type(struct ctl_table *table, int write,
                 void __user *buffer, size_t *lenp,
@@ -1120,6 +1273,27 @@ static int proc_drop_dup(struct ctl_table *table, int write,
 			ro_info("RO-INFO: duplicated packets are DROPPED\n");
 		} else {
 			ro_info("RO-INFO: duplicated packets are FORWARDED\n");
+		}
+	}
+	return 0;
+}
+
+/**
+ * Configure delay equalization behaviour.
+ * 0   = disabled
+ * >0  = enabled
+ */
+static int proc_delay_eq(struct ctl_table *table, int write,
+                void __user *buffer, size_t *lenp,
+                loff_t *ppos){
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	if (write && ret == 0){
+		if (sysctl_delay_eq) {
+			ro_info("RO-INFO: delay equalization enabled\n");
+		} else {
+			ro_info("RO-INFO: delay equalization disabled\n");
 		}
 	}
 	return 0;
@@ -1206,6 +1380,13 @@ static struct ctl_table mpdccp_reorder_active_table[] = {
         .maxlen = sizeof(int),
         .proc_handler = proc_drop_dup,
     },
+    {
+        .procname = "equalize_delay",
+        .data = &sysctl_delay_eq,
+        .mode = 0644,
+        .maxlen = sizeof(int),
+        .proc_handler = proc_delay_eq,
+    },
     { }
 };
 
@@ -1227,6 +1408,7 @@ void cleanup_active_mod(void) {
         acb = list_entry(pos, struct active_cb, list);
         list_del(pos);
         del_timer_sync(&acb->rbuf.exp_timer);
+        del_timer_sync(&acb->rbuf.q_timer);
         if(acb->rbuf.buf) kfree(acb->rbuf.buf);
         kmem_cache_free(active_cb_cache, acb);
     }
@@ -1275,6 +1457,7 @@ module_exit(mpdccp_reorder_active_unregister);
 
 MODULE_AUTHOR("Maximilian Schuengel");
 MODULE_AUTHOR("Romeo Cane");
+MODULE_AUTHOR("Leonard Walter");
 MODULE_LICENSE("Proprietary");
 MODULE_DESCRIPTION("Multipath DCCP Active Reordering Module");
 MODULE_VERSION(MPDCCP_VERSION);
